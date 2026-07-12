@@ -12,7 +12,7 @@ description = "Coordinate system types: Cartesian, Spherical, Geographic, and an
 readme = "README.md"
 
 [dependencies]
-geometry-coords = { version = "0.0.4", path = "../geometry-coords", default-features = false }
+geometry-coords = { version = "0.0.5", path = "../geometry-coords", default-features = false }
 
 [features]
 default = ["std"]
