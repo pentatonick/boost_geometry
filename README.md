@@ -25,9 +25,8 @@ domain types participate directly, exactly like
 
 Add the dependency:
 
-```toml
-[dependencies]
-boost_geometry = "0.0.2"
+```sh
+cargo add boost_geometry
 ```
 
 Register your own ring and polygon types with one macro declaration
