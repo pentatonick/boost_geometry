@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/pentatonick/boost_geometry/compare/geometry-strategy-v0.0.4...geometry-strategy-v0.0.5) - 2026-07-12
+
+### Other
+
+- release v0.0.5
+
 ## [0.0.4](https://github.com/pentatonick/boost_geometry/compare/geometry-strategy-v0.0.3...geometry-strategy-v0.0.4) - 2026-07-12
 
 ### Other
