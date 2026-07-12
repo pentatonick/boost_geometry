@@ -6,3 +6,10 @@ publish = false
 git_tag_enable = false
 git_release_enable = false
 changelog_update = true
+
+# Tag the workspace release (one tag for the lockstep version, created on
+# the facade crate only). The tag push triggers publish.yml.
+[[package]]
+name = "boost_geometry"
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
