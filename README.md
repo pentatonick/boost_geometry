@@ -1,7 +1,11 @@
 # boost_geometry
 
 [![CI](https://github.com/pentatonick/boost_geometry/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pentatonick/boost_geometry/actions/workflows/ci.yml)
+[![Publish](https://github.com/pentatonick/boost_geometry/actions/workflows/publish.yml/badge.svg)](https://github.com/pentatonick/boost_geometry/actions/workflows/publish.yml)
 [![crates.io](https://img.shields.io/crates/v/boost_geometry.svg)](https://crates.io/crates/boost_geometry)
+[![docs.rs](https://img.shields.io/docsrs/boost_geometry)](https://docs.rs/boost_geometry)
+[![license](https://img.shields.io/crates/l/boost_geometry.svg)](https://github.com/pentatonick/boost_geometry/blob/main/README.md#license)
+[![MSRV](https://img.shields.io/crates/msrv/boost_geometry)](https://github.com/pentatonick/boost_geometry/blob/main/rust-toolchain.toml)
 
 A Rust port of [Boost.Geometry][boost-geometry] following its
 philosophy: dimension-agnostic, coordinate-system-agnostic,
