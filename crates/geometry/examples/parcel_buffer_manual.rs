@@ -1,19 +1,53 @@
-//! The README quick-start: bring your own point, ring, and polygon
-//! types, validate them, and buffer with round joins.
+//! The README quick-start, without the derive: implement the point
+//! traits by hand instead of `#[derive(Point)]`. Everything else is
+//! identical to `parcel_buffer.rs`.
 //!
-//! Run with `cargo run --example parcel_buffer`.
+//! Run with `cargo run --example parcel_buffer_manual`.
 
-use boost_geometry::Point;
 use boost_geometry::adapt::{register_polygon, register_ring};
+use boost_geometry::cs::Cartesian;
 use boost_geometry::overlay::{JoinStrategy, buffer_convex_polygon, is_valid_polygon};
 use boost_geometry::prelude::*;
+use boost_geometry::tag::PointTag;
+use boost_geometry::trait_::{Geometry, Point, PointMut};
 
-// Your own geometry types — no wrapper, no conversion trait, and no
-// library point type: the derive turns your struct into a Point.
-#[derive(Clone, Copy, Default, Point)]
+// Your own point type, registered by hand — the escape hatch for
+// computed coordinates, packed storage, or FFI structs the derive
+// cannot express.
+#[derive(Clone, Copy, Default)]
 struct Coord {
     x: f64,
     y: f64,
+}
+
+impl Geometry for Coord {
+    type Kind = PointTag;
+    type Point = Coord;
+}
+
+impl Point for Coord {
+    type Scalar = f64;
+    type Cs = Cartesian;
+    const DIM: usize = 2;
+
+    fn get<const D: usize>(&self) -> f64 {
+        match D {
+            0 => self.x,
+            1 => self.y,
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Only needed by algorithms that construct points (buffer, correct).
+impl PointMut for Coord {
+    fn set<const D: usize>(&mut self, v: f64) {
+        match D {
+            0 => self.x = v,
+            1 => self.y = v,
+            _ => unreachable!(),
+        }
+    }
 }
 
 struct Boundary {
@@ -25,7 +59,6 @@ struct Parcel {
     holes: Vec<Boundary>,
 }
 
-// One declaration each and the library's algorithms accept them.
 register_ring!(Boundary, Coord, |s| s.points.iter());
 register_polygon!(
     Parcel,
@@ -52,11 +85,8 @@ fn main() {
         holes: vec![],
     };
 
-    // Validate the user-owned type directly.
     println!("parcel valid: {:?}", is_valid_polygon(&parcel));
 
-    // Buffer it outward by 1.0 with round joins — directly on the
-    // user-owned type.
     let mut grown = buffer_convex_polygon(
         &parcel,
         1.0,
@@ -65,7 +95,6 @@ fn main() {
         },
     );
 
-    // Normalise ring orientation, then validate the result.
     correct(&mut grown);
     println!("buffered valid: {:?}", is_valid_polygon(&grown));
     println!("area {:.3} -> {:.3}", area(&parcel), area(&grown));
