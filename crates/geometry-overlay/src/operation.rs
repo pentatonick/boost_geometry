@@ -120,7 +120,7 @@ where
 
     let enriched = enrich(r1, r2, &turns);
     let rings = traverse(&enriched, &turns, OverlayOp::Intersection)?;
-    Ok(assemble_multipolygon(&rings))
+    Ok(assemble_multipolygon(rings))
 }
 
 /// Whether a polygon carries any interior ring (hole). v1 overlay
@@ -181,7 +181,7 @@ where
 
     let enriched = enrich(r1, r2, &turns);
     let rings = traverse(&enriched, &turns, OverlayOp::Union)?;
-    Ok(assemble_multipolygon(&rings))
+    Ok(assemble_multipolygon(rings))
 }
 
 /// Difference of two polygons — the region inside the first but outside
@@ -233,7 +233,7 @@ where
 
     let enriched = enrich(r1, r2, &turns);
     let rings = traverse(&enriched, &turns, OverlayOp::Difference)?;
-    Ok(assemble_multipolygon(&rings))
+    Ok(assemble_multipolygon(rings))
 }
 
 /// Symmetric difference of two polygons — the region inside exactly one
