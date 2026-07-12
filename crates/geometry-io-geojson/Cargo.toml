@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace      = true
 license-file.workspace = true
 repository.workspace   = true
+keywords.workspace     = true
+categories.workspace   = true
 description = "RFC 7946 GeoJSON reader and writer for the geometry model."
 readme = "README.md"
 

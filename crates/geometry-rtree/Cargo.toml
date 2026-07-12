@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace      = true
 license-file.workspace = true
 repository.workspace   = true
+keywords.workspace     = true
+categories.workspace   = true
 description = "R-tree spatial index over the geometry kernel — insert, spatial query, and nearest-neighbour search."
 readme = "README.md"
 

@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace      = true
 license-file.workspace = true
 repository.workspace   = true
+keywords.workspace     = true
+categories.workspace   = true
 description = "Concept traits (Point, Linestring, Ring, Polygon, multi-variants, …)."
 readme = "README.md"
 

@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace      = true
 license-file.workspace = true
 repository.workspace   = true
+keywords.workspace     = true
+categories.workspace   = true
 description = "Facade crate re-exporting the geometry workspace as a single API surface."
 readme = "../../README.md"
 
