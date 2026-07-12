@@ -36,9 +36,26 @@ jobs:
         # 10 min). Retry only on 429 until the whole workspace is through;
         # already-published crates are skipped on each retry.
         run: |
+          packages=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | "\(.name) \(.version)"')
+          total=$(echo "$packages" | wc -l)
           for attempt in $(seq 1 40); do
+            excludes=""
+            published=0
+            while read -r name version; do
+              if curl -fsSL -A "boost_geometry-ci (github.com/pentatonick/boost_geometry)" \
+                  "https://crates.io/api/v1/crates/${name}/${version}" >/dev/null 2>&1; then
+                excludes="$excludes --exclude $name"
+                published=$((published + 1))
+              fi
+            done <<< "$packages"
+            echo "${published}/${total} crates already published"
+            if [ "$published" -eq "$total" ]; then
+              echo "All crates published."
+              exit 0
+            fi
             set +e
-            output=$(cargo publish --workspace 2>&1)
+            output=$(cargo publish --workspace $excludes 2>&1)
             code=$?
             set -e
             echo "$output" | tail -n 40
