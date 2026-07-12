@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/pentatonick/boost_geometry/compare/geometry-adapt-nalgebra-v0.0.2...geometry-adapt-nalgebra-v0.0.3) - 2026-07-12
+
+### Other
+
+- add crates.io keywords and categories to every crate
+- regenerate sub-crate READMEs from their lib.rs doc comments
+
 ## [0.0.2](https://github.com/pentatonick/boost_geometry/compare/geometry-adapt-nalgebra-v0.0.1...geometry-adapt-nalgebra-v0.0.2) - 2026-07-12
 
 ### Other

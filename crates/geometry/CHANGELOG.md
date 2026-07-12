@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/pentatonick/boost_geometry/compare/boost_geometry-v0.0.2...boost_geometry-v0.0.3) - 2026-07-12
+
+### Other
+
+- make the crate publicly consumable end to end
+- add crates.io keywords and categories to every crate
+- use cargo add in the quick start so the version never goes stale
+- serve the workspace README on the boost_geometry crates.io page
+
 ## [0.0.2](https://github.com/pentatonick/boost_geometry/compare/boost_geometry-v0.0.1...boost_geometry-v0.0.2) - 2026-07-12
 
 ### Other
