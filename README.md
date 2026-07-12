@@ -1,5 +1,6 @@
 # boost_geometry
 
+[![CI](https://github.com/pentatonick/boost_geometry/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pentatonick/boost_geometry/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/boost_geometry.svg)](https://crates.io/crates/boost_geometry)
 
 A Rust port of [Boost.Geometry][boost-geometry] following its
