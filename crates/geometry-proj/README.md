@@ -1,22 +1,41 @@
 # geometry-proj
 
-Coordinate-reference-system reprojection for the geometry kernel,
-backed by the pure-Rust [`proj4rs`](https://crates.io/crates/proj4rs)
-engine — no C dependency.
+Part of the [boost_geometry](https://crates.io/crates/boost_geometry) workspace — a Rust port of [Boost.Geometry](https://www.boost.org/doc/libs/release/libs/geometry/). Most users should depend on the facade crate, which re-exports this one; depend on this crate directly only for a slimmer build.
 
-Boost.Geometry leaves projections to its unsupported
-`extensions/gis/projections/`; this crate provides them:
+Coordinate-reference-system reprojection for the geometry kernel.
+
+Boost.Geometry defers projections to its unsupported
+`extensions/gis/projections/`; this crate fills the gap with the
+pure-Rust [`proj4rs`] engine (no C dependency). Build a [`Crs`] from
+a proj4 string, an EPSG code, or a WKT definition, then
+[`reproject`](reproject()) a geometry from one CRS to another in
+place.
 
 ```rust
+use geometry_cs::Cartesian;
+use geometry_model::Point2D;
 use geometry_proj::{reproject, Crs};
+use geometry_trait::Point as _;
 
-let wgs84 = Crs::from_epsg(4326)?;      // lon/lat in radians
-let mercator = Crs::from_epsg(3857)?;   // metres
-reproject(&mut geometry, &wgs84, &mercator)?;
+let wgs84 = Crs::from_epsg(4326).unwrap();      // lon/lat, radians
+let mercator = Crs::from_epsg(3857).unwrap();   // metres
+let mut p = Point2D::<f64, Cartesian>::new(0.0, 0.0);
+reproject(&mut p, &wgs84, &mercator).unwrap();
+assert!(p.get::<0>().abs() < 1e-6);
 ```
 
-Build a `Crs` from a proj4 string, an EPSG code, or a WKT definition
-(parsed by `proj4wkt`). `reproject` transforms any point / linestring /
-ring / polygon / multipolygon in place.
+## Units
 
-Geographic coordinates are carried in **radians**, matching `proj4rs`.
+`proj4rs` carries geographic coordinates in **radians**; convert with
+[`f64::to_radians`] / [`f64::to_degrees`] at the boundary. See
+[`reproject`](reproject()) for detail.
+
+Module layout:
+
+* [`crs`] — the [`Crs`] type and its constructors.
+* [`reproject`](mod@reproject) — the [`ReprojectPoints`] hook and the
+  [`reproject`](reproject()) function.
+
+## License
+
+BSL-1.0 — see [LICENSE](https://github.com/pentatonick/boost_geometry/blob/main/LICENSE).
