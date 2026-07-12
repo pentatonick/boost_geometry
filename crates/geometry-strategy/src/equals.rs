@@ -29,7 +29,7 @@
 //! [`EqualsPairStrategy`] picker routes `(A::Kind, B::Kind)` to the right
 //! struct. Because it keys on the tags, a concept-adapted foreign type
 //! resolves through the same path as the equivalent `geometry-model`
-//! value (see `specs/open-tag-dispatch/`).
+//! value.
 
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};

@@ -20,8 +20,7 @@
 //! `comparable_distance` case below mirrors line 109 (comparable ==
 //! squared distance).
 //!
-//! M3 (this file's `area` / `within` / `length` cases) tracks
-//! `specs/tasks/T38-milestone_cartesian_full.md` and cites
+//! M3 (this file's `area` / `within` / `length` cases) cites
 //! `quick_start.cpp:121-129` plus `test/algorithms/area/area.cpp:45-49`
 //! and `test/algorithms/length/length.cpp:24-28`.
 

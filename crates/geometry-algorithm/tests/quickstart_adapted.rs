@@ -22,8 +22,7 @@
 //! header (`quick_start.cpp` lines 108-135 and
 //! `test/algorithms/distance/distance.cpp:69,78,109`). The M3
 //! additions lift the `area`, `within` and `length` assertions from
-//! `quickstart_cartesian.rs` onto adapted carriers — see
-//! `specs/tasks/T38-milestone_cartesian_full.md`.
+//! `quickstart_cartesian.rs` onto adapted carriers.
 
 use geometry_adapt::{Adapt, register_linestring, register_polygon, register_ring};
 use geometry_algorithm::{area, comparable_distance, distance, length, within};

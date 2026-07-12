@@ -39,7 +39,7 @@
 //! tag-keyed [`WithinStrategyForKind`] picker routes `G::Kind` to the
 //! right struct. Because the picker keys on the tag, any concept-adapted
 //! foreign type resolves through the same path as the equivalent
-//! `geometry-model` value (see `specs/open-tag-dispatch/`).
+//! `geometry-model` value.
 //!
 //! [`crate::intersects`] reaches point-in-polygon containment through
 //! the open [`WithinPoly`] strategy directly (not the algorithm-layer

@@ -33,8 +33,8 @@ type Family<G> = <<<G as Geometry>::Point as Point>::Cs as CoordinateSystem>::Fa
 /// # Behaviour on "wrong" kinds
 ///
 /// This *static* entry point deliberately compile-errors on a `Point`
-/// or `Polygon` argument — see `specs/FUTURE_ITERATIONS.md` §2.5 for
-/// the rationale (Boost returns 0 at runtime; when the kind is known
+/// or `Polygon` argument
+/// (Boost returns 0 at runtime; when the kind is known
 /// at compile time a type error is a clearer signal). The runtime
 /// contract — Boost's "length of a non-linear kind is 0"
 /// (`length.hpp:75-80`) — is honoured on the *dynamic* path instead:

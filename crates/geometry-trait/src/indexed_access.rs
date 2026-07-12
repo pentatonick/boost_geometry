@@ -6,7 +6,7 @@
 //! `min_corner` / `max_corner` constants declared in the same header
 //! at `boost/geometry/core/access.hpp:36-39`.
 //!
-//! Design notes (`specs/rust-port-proposal.md` §3.2):
+//! Design notes:
 //! * Both axes — the corner index `I` and the dimension `D` — are
 //!   const generics, matching Boost's `template <std::size_t Index,
 //!   std::size_t Dimension>` on `traits::indexed_access`. Out-of-range

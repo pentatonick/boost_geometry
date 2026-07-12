@@ -19,8 +19,7 @@
 //! (four side tests), matching Boost's use of `side_by_triangle` to
 //! decide the case before computing any coordinate. Only once a proper
 //! crossing is confirmed is the intersection point computed, by solving
-//! the two parametric line equations. Per
-//! `specs/overlay-robustness-decision.md` every endpoint is first
+//! the two parametric line equations. Every endpoint is first
 //! routed through [`coordinate_in_range`] so the
 //! sign tests are exact; an out-of-range endpoint yields
 //! [`SegmentIntersection::OutOfRange`].
@@ -39,7 +38,7 @@ use super::range_guard::coordinate_in_range;
 /// two points (`intersection.hpp`, the `segment_intersection_points`
 /// count of 0 / 1 / 2). A fourth variant records the robustness-gate
 /// rejection that the "no rescale" policy requires
-/// (`specs/overlay-robustness-decision.md`).
+///.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SegmentIntersection<P> {
     /// The segments do not meet.

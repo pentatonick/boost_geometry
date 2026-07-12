@@ -1,7 +1,7 @@
 //! OVL1.T4 — the coordinate-range robustness gate.
 //!
 //! The "exact input arithmetic, no rescale" policy
-//! (`specs/overlay-robustness-decision.md`) is only sound while the
+//! is only sound while the
 //! products the predicates form stay within the mantissa. The
 //! orientation determinant multiplies two coordinate *differences*;
 //! for `f64` the product of two values each below `2^26` fits exactly

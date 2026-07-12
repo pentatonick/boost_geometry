@@ -5,7 +5,7 @@
 //! free-function pair declared in
 //! `boost/geometry/core/access.hpp:270-313`.
 //!
-//! Design notes (`specs/rust-port-proposal.md` §3.2):
+//! Design notes:
 //! * The five C++ trait specialisations collapse to four associated
 //!   items on one trait plus the super-bound on [`Geometry`].
 //! * `get` and `set` take the dimension as a *const generic*, the

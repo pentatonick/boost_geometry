@@ -205,8 +205,7 @@ geometry-algorithm`, a cycle. They live in `geometry-overlay` instead, and
 The four foundation-through-model crates (`geometry-tag`, `geometry-coords`,
 `geometry-cs`, `geometry-trait`) plus most of the layers above build
 `#![no_std]` (`alloc`-only where they need heap containers). Only I/O and a
-few edge crates need `std`. See `specs/phase_00-overview.md` §7.2 for the
-audit status.
+few edge crates need `std`.
 
 ## `unsafe_code`
 

@@ -28,7 +28,7 @@ degree variant and a radian variant of the same family share one impl.
 * **`Cartesian`** — the default, no angle unit.
 * **`Spherical<U: AngleUnit>`** — unit sphere, **equatorial convention**
   (latitude measured from the equator — documented prominently on the type
-  itself per `specs/phase_00-overview.md` §1.6).
+  itself).
 * **`Geographic<U: AngleUnit>`** — ellipsoidal earth model, carries a
   `Spheroid`.
 * **`Polar<U: AngleUnit>`** — polar coordinates.

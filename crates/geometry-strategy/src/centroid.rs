@@ -23,8 +23,7 @@
 //! [`CentroidStrategyForKind`] picker then routes `G::Kind` (the tag
 //! [`Geometry::Kind`] already carries) to the right struct, disjoint on
 //! the tag. This opens every kind to any concept-adapted foreign type,
-//! not just the `geometry-model` structs (see
-//! `specs/open-tag-dispatch/`).
+//! not just the `geometry-model` structs.
 #![allow(
     clippy::similar_names,
     reason = "The centroid accumulators `sum_x`/`sum_y` are the natural, domain-standard names for the per-axis running sums."

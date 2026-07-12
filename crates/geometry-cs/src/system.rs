@@ -96,8 +96,7 @@ impl CoordinateSystem for Cartesian {
 ///
 /// Convert to latitude first: `latitude = 90° − colatitude`
 /// (degrees) or `π/2 − colatitude` (radians). The dedicated
-/// `SphericalPolar` / `SphericalEquatorial` split is deferred — see
-/// `specs/FUTURE_ITERATIONS.md` §1.2.
+/// `SphericalPolar` / `SphericalEquatorial` split is deferred to a future iteration.
 ///
 /// # Examples
 ///

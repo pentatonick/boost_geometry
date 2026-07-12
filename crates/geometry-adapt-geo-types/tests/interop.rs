@@ -8,7 +8,7 @@
 //! # All algorithms are now trait-generic
 //!
 //! Every v1 algorithm is **trait-generic**: its per-kind strategy is
-//! selected by a tag-keyed picker (see `specs/open-tag-dispatch/`), so it
+//! selected by a tag-keyed picker, so it
 //! runs *directly on the [`GeoPolygon`] wrapper* (and on `GeoRing`,
 //! `GeoLineString`, `GeoMultiPolygon`, …) and is compared against the
 //! equivalent `geometry_model` value.
@@ -275,7 +275,7 @@ fn centroid_matches() {
     );
 }
 
-/// Open tag-dispatch (`specs/open-tag-dispatch/`): `centroid` runs
+/// Open tag-dispatch: `centroid` runs
 /// *directly* on the foreign `GeoPolygon` — no rebuilt model value — and
 /// matches the native model's centroid coordinate-for-coordinate.
 #[test]

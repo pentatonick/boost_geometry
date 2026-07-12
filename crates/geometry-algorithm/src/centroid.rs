@@ -17,8 +17,8 @@
 //! [`geometry_strategy::CentroidStrategyForKind`], a tag-keyed picker
 //! that routes `G::Kind` to the right per-kind strategy struct. Because
 //! it keys on the tag, any concept-adapted foreign type resolves through
-//! the same path as the equivalent `geometry-model` value (see
-//! `specs/open-tag-dispatch/`). `centroid_with` takes an explicit
+//! the same path as the equivalent `geometry-model` value.
+//! `centroid_with` takes an explicit
 //! strategy.
 //!
 //! # Spherical / geographic centroid — deferred (LA8.T3)
