@@ -7,6 +7,13 @@ git_tag_enable = false
 git_release_enable = false
 changelog_update = true
 
+# Only commits that change what ships warrant a release PR. Without this
+# filter release-plz counts its own "chore: release vX.Y.Z" commit (and
+# bare merge commits) as unreleased changes, so every merged release PR
+# immediately spawns the next one — an empty-release feedback loop
+# (#14 → #15 → #16).
+release_commits = "^(feat|fix|perf|docs|refactor|build|deps)"
+
 # Tag the workspace release (one tag for the lockstep version, created on
 # the facade crate only). The tag push triggers publish.yml.
 [[package]]
