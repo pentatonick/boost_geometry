@@ -7,7 +7,7 @@ license.workspace      = true
 license-file.workspace = true
 repository.workspace   = true
 description = "Facade crate re-exporting the geometry workspace as a single API surface."
-readme = "README.md"
+readme = "../../README.md"
 
 [features]
 default = ["std"]

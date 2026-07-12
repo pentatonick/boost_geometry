@@ -18,7 +18,7 @@ domain types participate directly, exactly like
 
 - **Edition:** Rust 2024, MSRV 1.85
 - **Safety:** `unsafe_code = "forbid"` across the whole workspace
-- **Docs:** see [`docs/`](docs/) for the
+- **Docs:** see [`docs/`](https://github.com/pentatonick/boost_geometry/tree/main/docs) for the
   architecture, the tag-dispatch pattern, and the overlay engine
 
 ## Quick start — your own polygon type, buffered and validated
@@ -27,7 +27,7 @@ Add the dependency:
 
 ```toml
 [dependencies]
-boost_geometry = "0.0.1"
+boost_geometry = "0.0.2"
 ```
 
 Register your own ring and polygon types with one macro declaration
@@ -138,11 +138,11 @@ crates up through traits, models, strategies, and algorithms to the
 projections. `boost_geometry` re-exports everything; depend on it alone
 unless you need a slimmer build.
 
-See [`docs/01-architecture.md`](docs/01-architecture.md)
+See [`docs/01-architecture.md`](https://github.com/pentatonick/boost_geometry/blob/main/docs/01-architecture.md)
 for the full map.
 
 ## License
 
-BSL-1.0 — see [LICENSE](LICENSE).
+BSL-1.0 — see [LICENSE](https://github.com/pentatonick/boost_geometry/blob/main/LICENSE).
 
 [boost-geometry]: https://www.boost.org/doc/libs/release/libs/geometry/
