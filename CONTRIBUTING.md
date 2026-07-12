@@ -25,7 +25,7 @@ is spliced from `crates/geometry/examples/parcel_buffer.rs`. Never edit
 those blocks by hand — edit the rustdoc or the example, then run:
 
 ```sh
-python3 crate_readme.py
+python3 .github/scripts/crate_readme.py
 ```
 
 CI fails if the generated files are out of sync.

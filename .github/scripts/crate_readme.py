@@ -3,7 +3,7 @@
 and splice the facade crate's examples into the workspace-root README.md
 between `<!-- example:<name>:start/end -->` markers.
 
-Usage: python3 crate_readme.py
+Usage: python3 .github/scripts/crate_readme.py
 Run from the workspace root. The facade crate (crates/geometry) gets no
 generated README — it packages the workspace-root README.md instead.
 """
