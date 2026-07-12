@@ -4,7 +4,6 @@
 //! Run with `cargo run --example parcel_buffer`.
 
 use boost_geometry::adapt::{register_polygon, register_ring};
-use boost_geometry::model::{Polygon, Ring};
 use boost_geometry::overlay::{JoinStrategy, buffer_convex_polygon, is_valid_polygon};
 use boost_geometry::prelude::*;
 
@@ -48,11 +47,10 @@ fn main() {
     // Validate the user-owned type directly.
     println!("parcel valid: {:?}", is_valid_polygon(&parcel));
 
-    // Buffer it outward by 1.0 with round joins. The buffer kernel
-    // works on the library's model polygon, so lift the points over.
-    let model: Polygon<P> = Polygon::new(Ring::from_vec(parcel.outer.points.clone()));
+    // Buffer it outward by 1.0 with round joins — directly on the
+    // user-owned type.
     let mut grown = buffer_convex_polygon(
-        &model,
+        &parcel,
         1.0,
         JoinStrategy::Round {
             points_per_circle: 360,

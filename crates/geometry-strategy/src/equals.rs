@@ -238,12 +238,11 @@ where
     R: RingTrait,
     R::Point: PointTrait,
 {
-    let pts: alloc::vec::Vec<&R::Point> = r.points().collect();
+    let mut pts: alloc::vec::Vec<&R::Point> = r.points().collect();
     if pts.len() >= 2 && point_eq_2d(pts[0], pts[pts.len() - 1]) {
-        pts[..pts.len() - 1].to_vec()
-    } else {
-        pts
+        pts.pop();
     }
+    pts
 }
 
 /// Does `a` match `b` when `b` is read starting at `start` and

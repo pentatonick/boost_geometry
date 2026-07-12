@@ -23,8 +23,10 @@ use geometry_algorithm::{ring_area, within};
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{MultiPolygon, Polygon, Ring};
-use geometry_tag::SameAs;
-use geometry_trait::{PointMut, Ring as RingTrait};
+use geometry_tag::{PolygonTag, SameAs};
+use geometry_trait::{
+    Geometry, Point as PointTrait, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
+};
 
 use crate::surface_point::point_on_surface;
 
@@ -51,11 +53,17 @@ use crate::surface_point::point_on_surface;
 /// let outer: Ring<P> = Ring::from_vec(vec![
 ///     P::new(0.0, 0.0), P::new(2.0, 0.0), P::new(2.0, 2.0), P::new(0.0, 2.0), P::new(0.0, 0.0),
 /// ]);
-/// let mp = assemble_multipolygon(&[outer]);
+/// let mp = assemble_multipolygon(vec![outer]);
 /// assert_eq!(mp.polygons().count(), 1);
 /// ```
 #[must_use]
-pub fn assemble_multipolygon<P>(rings: &[Ring<P>]) -> MultiPolygon<Polygon<P>>
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "the take().unwrap()s cannot fire: each ring is either an \
+              outer (taken once in the outers pass) or a hole (taken once \
+              in the holes pass) — `container_of` assigns exactly one role"
+)]
+pub fn assemble_multipolygon<P>(rings: Vec<Ring<P>>) -> MultiPolygon<Polygon<P>>
 where
     P: PointMut + Default + Copy,
     P::Scalar: CoordinateScalar,
@@ -73,24 +81,28 @@ where
         let Some(rep) = representative_point(&rings[i]) else {
             continue;
         };
-        container_of[i] = smallest_ring_container(rings, i, &rep);
+        container_of[i] = smallest_ring_container(&rings, i, &rep);
     }
+
+    // Classification is done; extraction below moves each ring out of
+    // its slot exactly once instead of cloning it.
+    let mut slots: Vec<Option<Ring<P>>> = rings.into_iter().map(Some).collect();
 
     // Outers are rings with no container; each becomes a polygon.
     let mut outer_slot: Vec<Option<usize>> = alloc::vec![None; n];
     let mut polygons: Vec<Polygon<P>> = Vec::new();
-    for (i, ring) in rings.iter().enumerate() {
+    for i in 0..n {
         if container_of[i].is_none() {
             outer_slot[i] = Some(polygons.len());
-            polygons.push(Polygon::new(ring.clone()));
+            polygons.push(Polygon::new(slots[i].take().unwrap()));
         }
     }
 
     // Holes attach to their (outer) container.
-    for (i, ring) in rings.iter().enumerate() {
+    for i in 0..n {
         if let Some(parent_ring) = container_of[i] {
             if let Some(slot) = outer_slot[parent_ring] {
-                polygons[slot].inners.push(ring.clone());
+                polygons[slot].inners.push(slots[i].take().unwrap());
             }
         }
     }
@@ -128,8 +140,7 @@ where
         if a <= own_area {
             continue;
         }
-        let pg = Polygon::new(other.clone());
-        if within(rep, &pg) {
+        if within(rep, other) {
             match best {
                 Some((_, ba)) if ba <= a => {}
                 _ => best = Some((j, a)),
@@ -156,8 +167,29 @@ where
     P: PointMut + Default + Copy,
     P::Scalar: CoordinateScalar,
 {
-    let pg = Polygon::new(ring.clone());
-    point_on_surface(&pg).or_else(|| ring.points().next().copied())
+    point_on_surface(&RingPolygon(ring)).or_else(|| ring.points().next().copied())
+}
+
+/// A hole-less polygon view of a borrowed ring, so `point_on_surface`
+/// (which requires the `Polygon` interface for its hole-crossing sweep)
+/// can sample a bare ring without cloning it into a `model::Polygon`.
+struct RingPolygon<'a, P: PointTrait>(&'a Ring<P>);
+
+impl<P: PointTrait> Geometry for RingPolygon<'_, P> {
+    type Kind = PolygonTag;
+    type Point = P;
+}
+
+impl<P: PointTrait> PolygonTrait for RingPolygon<'_, P> {
+    type Ring = Ring<P>;
+
+    fn exterior(&self) -> &Ring<P> {
+        self.0
+    }
+
+    fn interiors(&self) -> impl ExactSizeIterator<Item = &Ring<P>> {
+        core::iter::empty()
+    }
 }
 
 #[cfg(test)]
@@ -192,7 +224,7 @@ mod tests {
 
     #[test]
     fn single_outer_no_holes() {
-        let mp = assemble_multipolygon(&[ccw_square(0.0, 0.0, 4.0)]);
+        let mp = assemble_multipolygon(vec![ccw_square(0.0, 0.0, 4.0)]);
         assert_eq!(mp.polygons().count(), 1);
         let pg = mp.polygons().next().unwrap();
         assert_eq!(pg.interiors().count(), 0);
@@ -200,7 +232,7 @@ mod tests {
 
     #[test]
     fn two_disjoint_outers() {
-        let mp = assemble_multipolygon(&[ccw_square(0.0, 0.0, 1.0), ccw_square(5.0, 5.0, 1.0)]);
+        let mp = assemble_multipolygon(vec![ccw_square(0.0, 0.0, 1.0), ccw_square(5.0, 5.0, 1.0)]);
         assert_eq!(mp.polygons().count(), 2);
     }
 
@@ -209,7 +241,7 @@ mod tests {
         // A large CCW outer with a small CW hole inside it.
         let outer = ccw_square(0.0, 0.0, 10.0);
         let hole = cw_square(3.0, 3.0, 2.0);
-        let mp = assemble_multipolygon(&[outer, hole]);
+        let mp = assemble_multipolygon(vec![outer, hole]);
         assert_eq!(mp.polygons().count(), 1);
         let pg = mp.polygons().next().unwrap();
         assert_eq!(pg.interiors().count(), 1);
@@ -230,7 +262,7 @@ mod tests {
         let outer = ccw_square(0.0, 0.0, 6.0); // area 36
         // A same-winding (CCW) inner square — area 4, well inside.
         let hole = ccw_square(2.0, 2.0, 2.0); // area 4, SAME winding
-        let mp = assemble_multipolygon(&[outer, hole]);
+        let mp = assemble_multipolygon(vec![outer, hole]);
         assert_eq!(mp.polygons().count(), 1, "must not drop the polygon");
         assert_eq!(mp.polygons().next().unwrap().interiors().count(), 1);
     }
@@ -249,7 +281,7 @@ mod tests {
             P::new(2.0, 4.0),
             P::new(0.0, 4.0),
         ]);
-        let mp = assemble_multipolygon(&[outer, hole]);
+        let mp = assemble_multipolygon(vec![outer, hole]);
         assert_eq!(
             mp.polygons().count(),
             1,

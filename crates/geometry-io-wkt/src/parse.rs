@@ -54,9 +54,12 @@ impl Parser {
         &self.tokens[self.pos]
     }
 
-    /// Consume and return the current token.
+    /// Consume and return the current token. The cursor is strictly
+    /// monotonic, so the vacated slot is never read again; `Eof` is the
+    /// placeholder because a stray re-read then fails exactly like
+    /// running off the end of the stream.
     fn next(&mut self) -> Token {
-        let t = self.tokens[self.pos].clone();
+        let t = core::mem::replace(&mut self.tokens[self.pos], Token::Eof);
         self.pos += 1;
         t
     }
