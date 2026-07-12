@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/pentatonick/boost_geometry/compare/v0.0.4...v0.0.5) - 2026-07-12
+
+### Other
+
+- add a derive-free variant of the quick-start
+- make the quick-start fully bring-your-own, including the point type
+
 ## [0.0.4](https://github.com/pentatonick/boost_geometry/compare/v0.0.3...v0.0.4) - 2026-07-12
 
 ### Other

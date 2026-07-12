@@ -17,9 +17,9 @@ std = ["geometry-coords/std", "geometry-cs/std"]
 libm = ["geometry-coords/libm"]
 
 [dependencies]
-geometry-tag    = { version = "0.0.4", path = "../geometry-tag" }
-geometry-coords = { version = "0.0.4", path = "../geometry-coords", default-features = false }
-geometry-cs     = { version = "0.0.4", path = "../geometry-cs",     default-features = false }
+geometry-tag    = { version = "0.0.5", path = "../geometry-tag" }
+geometry-coords = { version = "0.0.5", path = "../geometry-coords", default-features = false }
+geometry-cs     = { version = "0.0.5", path = "../geometry-cs",     default-features = false }
 
 [dev-dependencies]
 trybuild        = "1"
