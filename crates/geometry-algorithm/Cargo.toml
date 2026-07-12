@@ -25,22 +25,22 @@ libm = [
 ]
 
 [dependencies]
-geometry-coords   = { path = "../geometry-coords",   default-features = false }
-geometry-tag      = { path = "../geometry-tag",      default-features = false }
-geometry-cs       = { path = "../geometry-cs",       default-features = false }
-geometry-trait    = { path = "../geometry-trait",    default-features = false }
-geometry-strategy = { path = "../geometry-strategy", default-features = false }
-geometry-model    = { path = "../geometry-model",    default-features = false }
+geometry-coords   = { version = "0.0.1", path = "../geometry-coords",   default-features = false }
+geometry-tag      = { version = "0.0.1", path = "../geometry-tag",      default-features = false }
+geometry-cs       = { version = "0.0.1", path = "../geometry-cs",       default-features = false }
+geometry-trait    = { version = "0.0.1", path = "../geometry-trait",    default-features = false }
+geometry-strategy = { version = "0.0.1", path = "../geometry-strategy", default-features = false }
+geometry-model    = { version = "0.0.1", path = "../geometry-model",    default-features = false }
 
 [dev-dependencies]
-geometry-adapt    = { path = "../geometry-adapt" }
-geometry-coords   = { path = "../geometry-coords" }
-geometry-cs       = { path = "../geometry-cs" }
-geometry-derive   = { path = "../geometry-derive" }
-geometry-model    = { path = "../geometry-model" }
-geometry-strategy = { path = "../geometry-strategy" }
-geometry-tag      = { path = "../geometry-tag" }
-geometry-trait    = { path = "../geometry-trait" }
+geometry-adapt    = { version = "0.0.1", path = "../geometry-adapt" }
+geometry-coords   = { version = "0.0.1", path = "../geometry-coords" }
+geometry-cs       = { version = "0.0.1", path = "../geometry-cs" }
+geometry-derive   = { version = "0.0.1", path = "../geometry-derive" }
+geometry-model    = { version = "0.0.1", path = "../geometry-model" }
+geometry-strategy = { version = "0.0.1", path = "../geometry-strategy" }
+geometry-tag      = { version = "0.0.1", path = "../geometry-tag" }
+geometry-trait    = { version = "0.0.1", path = "../geometry-trait" }
 
 [lints]
 workspace = true

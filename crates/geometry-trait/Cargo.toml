@@ -14,15 +14,15 @@ std = ["geometry-coords/std", "geometry-cs/std"]
 libm = ["geometry-coords/libm"]
 
 [dependencies]
-geometry-tag    = { path = "../geometry-tag" }
-geometry-coords = { path = "../geometry-coords", default-features = false }
-geometry-cs     = { path = "../geometry-cs",     default-features = false }
+geometry-tag    = { version = "0.0.1", path = "../geometry-tag" }
+geometry-coords = { version = "0.0.1", path = "../geometry-coords", default-features = false }
+geometry-cs     = { version = "0.0.1", path = "../geometry-cs",     default-features = false }
 
 [dev-dependencies]
 trybuild        = "1"
-geometry-tag    = { path = "../geometry-tag" }      # for trybuild ui fixtures
-geometry-coords = { path = "../geometry-coords" }   # bring std for tests
-geometry-cs     = { path = "../geometry-cs" }       # bring std for tests
+geometry-tag    = { version = "0.0.1", path = "../geometry-tag" }      # for trybuild ui fixtures
+geometry-coords = { version = "0.0.1", path = "../geometry-coords" }   # bring std for tests
+geometry-cs     = { version = "0.0.1", path = "../geometry-cs" }       # bring std for tests
 
 [lints]
 workspace = true

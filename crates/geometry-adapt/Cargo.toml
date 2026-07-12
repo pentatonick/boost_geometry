@@ -21,16 +21,16 @@ libm = [
 ]
 
 [dependencies]
-geometry-tag    = { path = "../geometry-tag" }
-geometry-coords = { path = "../geometry-coords", default-features = false }
-geometry-cs     = { path = "../geometry-cs",     default-features = false }
-geometry-trait  = { path = "../geometry-trait",  default-features = false }
+geometry-tag    = { version = "0.0.1", path = "../geometry-tag" }
+geometry-coords = { version = "0.0.1", path = "../geometry-coords", default-features = false }
+geometry-cs     = { version = "0.0.1", path = "../geometry-cs",     default-features = false }
+geometry-trait  = { version = "0.0.1", path = "../geometry-trait",  default-features = false }
 
 [dev-dependencies]
-geometry-algorithm = { path = "../geometry-algorithm" }
-geometry-cs        = { path = "../geometry-cs" }    # bring std for tests
-geometry-model     = { path = "../geometry-model" }
-geometry-trait     = { path = "../geometry-trait" } # bring std for tests
+geometry-algorithm = { version = "0.0.1", path = "../geometry-algorithm" }
+geometry-cs        = { version = "0.0.1", path = "../geometry-cs" }    # bring std for tests
+geometry-model     = { version = "0.0.1", path = "../geometry-model" }
+geometry-trait     = { version = "0.0.1", path = "../geometry-trait" } # bring std for tests
 
 [lints]
 workspace = true
