@@ -1,17 +1,23 @@
-//! The README quick-start: register your own ring and polygon types,
-//! validate them, and buffer with round joins.
+//! The README quick-start: bring your own point, ring, and polygon
+//! types, validate them, and buffer with round joins.
 //!
 //! Run with `cargo run --example parcel_buffer`.
 
+use boost_geometry::Point;
 use boost_geometry::adapt::{register_polygon, register_ring};
 use boost_geometry::overlay::{JoinStrategy, buffer_convex_polygon, is_valid_polygon};
 use boost_geometry::prelude::*;
 
-type P = Point2D<f64, Cartesian>;
+// Your own geometry types — no wrapper, no conversion trait, and no
+// library point type: the derive turns your struct into a Point.
+#[derive(Clone, Copy, Default, Point)]
+struct Coord {
+    x: f64,
+    y: f64,
+}
 
-// Your own geometry types — no wrapper, no conversion trait.
 struct Boundary {
-    points: Vec<P>,
+    points: Vec<Coord>,
 }
 
 struct Parcel {
@@ -20,25 +26,27 @@ struct Parcel {
 }
 
 // One declaration each and the library's algorithms accept them.
-register_ring!(Boundary, P, |s| s.points.iter());
+register_ring!(Boundary, Coord, |s| s.points.iter());
 register_polygon!(
     Parcel,
-    P,
+    Coord,
     ring = Boundary,
     |s| outer = &s.outer,
     inners = s.holes.iter()
 );
 
 fn main() {
+    let c = |x, y| Coord { x, y };
+
     // A 2×2 square parcel (clockwise, closed — the default ring convention).
     let parcel = Parcel {
         outer: Boundary {
             points: vec![
-                P::new(0.0, 0.0),
-                P::new(0.0, 2.0),
-                P::new(2.0, 2.0),
-                P::new(2.0, 0.0),
-                P::new(0.0, 0.0),
+                c(0.0, 0.0),
+                c(0.0, 2.0),
+                c(2.0, 2.0),
+                c(2.0, 0.0),
+                c(0.0, 0.0),
             ],
         },
         holes: vec![],
