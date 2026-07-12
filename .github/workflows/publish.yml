@@ -65,8 +65,17 @@ jobs:
             if ! echo "$output" | grep -q "429 Too Many Requests"; then
               exit "$code"
             fi
-            echo "Rate limited (attempt ${attempt}); waiting 11 minutes..."
-            sleep 660
+            retry_at=$(echo "$output" | grep -o 'try again after [^,]*, [^G]*GMT' | head -n 1 | sed 's/try again after //')
+            wait_secs=660
+            if [ -n "$retry_at" ]; then
+              retry_epoch=$(date -u -d "$retry_at" +%s 2>/dev/null || echo "")
+              now_epoch=$(date -u +%s)
+              if [ -n "$retry_epoch" ] && [ "$retry_epoch" -gt "$now_epoch" ]; then
+                wait_secs=$((retry_epoch - now_epoch + 15))
+              fi
+            fi
+            echo "Rate limited (attempt ${attempt}); waiting ${wait_secs}s (until: ${retry_at:-unknown})..."
+            sleep "$wait_secs"
           done
           echo "Still rate limited after 40 attempts" >&2
           exit 1
