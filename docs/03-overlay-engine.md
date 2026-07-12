@@ -91,9 +91,8 @@ boundary between "raw coordinates" and "topological decisions."
 
 **Robustness policy (v1):** exact input arithmetic, no rescale. The
 predicates compute directly on `f64` inputs; `range_guard` refuses inputs
-outside the safe range rather than guessing. See
-`specs/overlay-robustness-decision.md` for the rationale and the slot left
-for a future rescale policy. This is a real, load-bearing decision — several
+outside the safe range rather than guessing, leaving a slot for a future
+rescale policy. This is a real, load-bearing decision — several
 regression tests exist specifically because early versions let
 out-of-range coordinates silently empty the turn graph, which then read as
 "disjoint" and produced a *confidently wrong* answer (e.g. reporting
@@ -140,8 +139,8 @@ input). Which arc that is at each turn is decided from the crossing's
 **Scope (v1):** the clean, non-degenerate areal case — simple polygons
 whose boundaries cross transversally. Clustered turns (three-or-more
 segments meeting at a point), self-intersections, and long collinear
-overlaps are deferred (`specs/overlay-reading-list.md` catalogues why —
-they are the two hardest sub-problems in Boost's own history). Inputs that
+overlaps are deferred (they are the two hardest sub-problems in Boost's
+own history). Inputs that
 hit them return `TraversalError::Unsupported` rather than a wrong ring —
 the same "refuse, don't guess" contract as OVL1's range guard.
 

@@ -32,8 +32,7 @@
 //! The clean, non-degenerate areal case: simple polygons whose
 //! boundaries cross transversally. Clustered turns (three-or-more
 //! segments meeting at a point), self-intersections, and long collinear
-//! overlaps are the two hardest Boost sub-problems and are deferred —
-//! see `specs/overlay-reading-list.md`. Inputs that hit them return
+//! overlaps are the two hardest Boost sub-problems and are deferred. Inputs that hit them return
 //! [`TraversalError::Unsupported`] rather than a wrong ring.
 
 pub mod enrich;

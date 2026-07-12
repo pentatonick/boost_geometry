@@ -8,7 +8,7 @@
 //! selected per geometry *kind* by the tag-keyed
 //! [`geometry_strategy::WithinStrategyForKind`] picker, so any
 //! concept-adapted foreign type resolves through the same path as the
-//! equivalent `geometry-model` value (see `specs/open-tag-dispatch/`).
+//! equivalent `geometry-model` value.
 //! Spherical / geographic variants arrive alongside the Haversine /
 //! Andoyer / Vincenty distance work in later tasks.
 

@@ -16,7 +16,7 @@
 //!
 //! Like [`orientation`](super::orientation) the determinant is exact
 //! only inside the safe-magnitude range
-//! (`specs/overlay-robustness-decision.md`); the products here are of
+//!; the products here are of
 //! *squared* coordinate differences, so the safe range is tighter than
 //! the orientation predicate's. Callers route inputs through
 //! [`range_guard`](super::range_guard) first.

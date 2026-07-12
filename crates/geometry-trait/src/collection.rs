@@ -13,8 +13,8 @@
 //! **Scope:** v1 only supplies the trait surface. Heterogeneous
 //! dynamic dispatch (a `dyn`/`enum`-based story that would let one
 //! collection mix Points, Linestrings, Polygons, …) is intentionally
-//! deferred — see `specs/FUTURE_ITERATIONS.md` §1.3 (`DynGeometry`
-//! variant) and §1.4 (heterogeneous `GeometryCollection`). The
+//! deferred to a future iteration (a `DynGeometry` variant and a
+//! heterogeneous `GeometryCollection`). The
 //! [`GeometryCollection::Item`] associated type is therefore bound on
 //! [`Geometry`] alone, so today's impls are expected to be
 //! homogeneous in practice (e.g. `Vec<Polygon<P>>`).
@@ -32,9 +32,8 @@ use geometry_tag::GeometryCollectionTag;
 /// In v1 the [`Item`](Self::Item) associated type is bound only on
 /// [`Geometry`] — every concrete impl is homogeneous (a single
 /// element type for the whole collection). Heterogeneous dispatch is
-/// intentionally deferred to a later iteration; see
-/// `specs/FUTURE_ITERATIONS.md` §1.3 (`DynGeometry` variant) and
-/// §1.4 (heterogeneous `GeometryCollection`).
+/// intentionally deferred to a later iteration (a `DynGeometry`
+/// variant and a heterogeneous `GeometryCollection`).
 ///
 /// # Examples
 ///

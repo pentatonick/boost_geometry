@@ -1,8 +1,8 @@
 //! Smoke tests for the `point!`, `linestring!`, and `polygon!`
 //! declarative literal macros.
 //!
-//! The polygon literal mirrors the §5 quickstart snippet in
-//! `specs/rust-port-proposal.md` — same outer-ring coordinates, same
+//! The polygon literal mirrors the quickstart snippet — same
+//! outer-ring coordinates, same
 //! point type. The linestring and point literals exercise the simpler
 //! arms.
 

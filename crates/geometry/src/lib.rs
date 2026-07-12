@@ -133,8 +133,6 @@
 //!
 //! ## See also
 //!
-//! * `specs/rust-port-proposal.md` — full design rationale.
-//! * `specs/rust-port-implementation-plan.md` — milestone breakdown.
 //! * [Boost.Geometry documentation][boost-geometry] — the original
 //!   design we are porting.
 //!

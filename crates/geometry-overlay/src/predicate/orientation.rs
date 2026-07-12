@@ -15,7 +15,7 @@
 //!
 //! # Robustness
 //!
-//! Per `specs/overlay-robustness-decision.md` the sign is computed on
+//! The sign is computed on
 //! the raw input coordinates (no rescale). It is exact only inside the
 //! safe-magnitude range; callers that need that guarantee route their
 //! inputs through [`range_guard`](super::range_guard) first. Boost's

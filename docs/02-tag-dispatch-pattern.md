@@ -17,8 +17,7 @@ specialisation picks the right implementation for that tag.
 Rust has no template specialisation. `impl<G: Ring> Foo for G` and
 `impl<G: Polygon> Foo for G` on the same trait conflict — the compiler
 cannot prove `Ring` and `Polygon` are disjoint (`error[E0119]`), even though
-they are. Two independently-refuted attempts documented in
-`specs/open-tag-dispatch/design.md` show why the obvious fixes don't work:
+they are. Two independently-refuted attempts show why the obvious fixes don't work:
 
 * **F-a.** Two concept blankets on the same trait+`Self` collide (`E0119`).
 * **F-b.** You cannot recover the concept from the tag alone —
@@ -83,9 +82,8 @@ That needs the second half of the pattern.
 
 ## The resolved pattern — distinct strategy struct per kind
 
-`specs/open-tag-dispatch/design.md` documents the proven design (v2; an
-earlier tag-dispatched-trait v1 was refuted by F-a/F-b above). Three pieces,
-per algorithm:
+The proven design (v2; an earlier tag-dispatched-trait v1 was refuted by
+F-a/F-b above) has three pieces, per algorithm:
 
 **1. One zero-sized strategy struct per kind, each the *sole* impl of the
 strategy trait for that struct** — distinct `Self` types sidestep F-a
@@ -134,10 +132,8 @@ graph LR
 
 This is **zero-cost**: every layer is a zero-sized type and a static trait
 resolution. At `-O`, the whole chain collapses to a single direct call —
-verified against the compiled proof-of-concept in
-`specs/open-tag-dispatch/pattern-per-kind-poc.rs` (unary) and
-`pattern-per-pair-poc.rs` (binary, for two-geometry algorithms like
-`intersects`).
+verified against compiled proofs-of-concept, unary and binary (the
+latter for two-geometry algorithms like `intersects`).
 
 ## Where you'll see it in the wild
 

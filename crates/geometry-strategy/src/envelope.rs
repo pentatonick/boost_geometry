@@ -40,8 +40,7 @@
 //! `G::Kind` to the right struct (disjoint on the tag). Because the
 //! picker keys on the tag [`geometry_trait::Geometry::Kind`] already
 //! carries, any concept-adapted foreign type resolves through the same
-//! path as the equivalent `geometry-model` value (see
-//! `specs/open-tag-dispatch/`).
+//! path as the equivalent `geometry-model` value.
 //!
 //! T35 lands the Cartesian implementation only — Boost's
 //! Spherical/Geographic envelope strategies arrive alongside the

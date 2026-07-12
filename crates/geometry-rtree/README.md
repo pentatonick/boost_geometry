@@ -15,7 +15,7 @@ The split strategy is a type parameter of [`Rtree`]:
 [`FromIterator`] uses Sort-Tile-Recursive packing for a balanced
 tree in one pass.
 
-Cartesian, 2D, `f64` for v1 — see `specs/rtree-split-decision.md`.
+Cartesian, 2D, `f64` for v1.
 
 Module layout:
 

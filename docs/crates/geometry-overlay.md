@@ -32,7 +32,7 @@ functions (`intersection`, `union`, `difference`, `sym_difference`), plus
 
 Exact `f64` arithmetic, no coordinate rescaling. `range_guard::SAFE_ABS_MAX`
 bounds the safe magnitude; out-of-range coordinates are **refused**, not
-silently miscomputed. See `specs/overlay-robustness-decision.md`.
+silently miscomputed.
 
 ## Scope (v1)
 

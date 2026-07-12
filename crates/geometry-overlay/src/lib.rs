@@ -9,8 +9,7 @@
 //! directory; the port gives it its own crate because the algorithmic
 //! surface is too dense to share a crate with anything else.
 //!
-//! The build order is strict (see
-//! `specs/phase_03-rust-port-implementation-plan-overlay.md`):
+//! The build order is strict:
 //!
 //! * [`predicate`] — OVL1: the robust predicate layer every overlay
 //!   operation eventually calls (orientation, in-circle,
@@ -24,9 +23,8 @@
 //! v1 uses **exact input arithmetic with no rescale** — the predicates
 //! compute directly on the `f64` inputs and the
 //! [`predicate::range_guard`] refuses inputs outside the safe
-//! arithmetic range rather than silently returning a wrong sign. See
-//! `specs/overlay-robustness-decision.md` for the rationale and the
-//! slot left for a future rescale policy.
+//! arithmetic range rather than silently returning a wrong sign,
+//! leaving a slot for a future rescale policy.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
