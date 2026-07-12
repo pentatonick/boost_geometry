@@ -14,13 +14,13 @@ default = ["std"]
 std = []
 
 [dependencies]
-geometry-tag       = { version = "0.0.1", path = "../geometry-tag" }
-geometry-coords    = { version = "0.0.1", path = "../geometry-coords" }
-geometry-cs        = { version = "0.0.1", path = "../geometry-cs" }
-geometry-trait     = { version = "0.0.1", path = "../geometry-trait" }
-geometry-model     = { version = "0.0.1", path = "../geometry-model" }
-geometry-strategy  = { version = "0.0.1", path = "../geometry-strategy" }
-geometry-algorithm = { version = "0.0.1", path = "../geometry-algorithm" }
+geometry-tag       = { version = "0.0.2", path = "../geometry-tag" }
+geometry-coords    = { version = "0.0.2", path = "../geometry-coords" }
+geometry-cs        = { version = "0.0.2", path = "../geometry-cs" }
+geometry-trait     = { version = "0.0.2", path = "../geometry-trait" }
+geometry-model     = { version = "0.0.2", path = "../geometry-model" }
+geometry-strategy  = { version = "0.0.2", path = "../geometry-strategy" }
+geometry-algorithm = { version = "0.0.2", path = "../geometry-algorithm" }
 
 [lints]
 workspace = true
