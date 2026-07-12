@@ -1,0 +1,4 @@
+#!/bin/sh
+# Regenerate READMEs from rustdoc + examples; stage anything that changed.
+python3 .github/scripts/crate_readme.py >/dev/null || exit 1
+git add README.md crates/*/README.md

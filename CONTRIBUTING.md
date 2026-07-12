@@ -28,6 +28,12 @@ those blocks by hand — edit the rustdoc or the example, then run:
 python3 .github/scripts/crate_readme.py
 ```
 
+Or let the pre-commit hook do it automatically:
+
+```sh
+git config core.hooksPath .githooks
+```
+
 CI fails if the generated files are out of sync.
 
 ## Design ground rules
