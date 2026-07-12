@@ -8,7 +8,7 @@ license-file.workspace = true
 repository.workspace   = true
 keywords.workspace     = true
 categories.workspace   = true
-description = "Pluggable per-coordinate-system strategies (Pythagoras, Haversine, Vincenty, …)."
+description = "Pluggable per-coordinate-system strategies (Pythagoras, Haversine, Vincenty, …), Boost.Geometry style."
 readme = "README.md"
 
 [features]

@@ -9,6 +9,7 @@ repository.workspace   = true
 keywords.workspace     = true
 categories.workspace   = true
 description = "Adapt nalgebra points and vectors to the geometry-trait concept surface."
+readme = "README.md"
 
 [dependencies]
 geometry-tag    = { version = "0.0.5", path = "../geometry-tag" }

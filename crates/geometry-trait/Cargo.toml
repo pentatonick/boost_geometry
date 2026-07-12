@@ -8,7 +8,7 @@ license-file.workspace = true
 repository.workspace   = true
 keywords.workspace     = true
 categories.workspace   = true
-description = "Concept traits (Point, Linestring, Ring, Polygon, multi-variants, …)."
+description = "Concept traits (Point, Linestring, Ring, Polygon, multi-variants, …) for the Boost.Geometry Rust port — implement them for your own types."
 readme = "README.md"
 
 [features]
