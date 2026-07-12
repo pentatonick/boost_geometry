@@ -33,14 +33,14 @@ geometry-strategy = { version = "0.0.1", path = "../geometry-strategy", default-
 geometry-model    = { version = "0.0.1", path = "../geometry-model",    default-features = false }
 
 [dev-dependencies]
-geometry-adapt    = { version = "0.0.1", path = "../geometry-adapt" }
-geometry-coords   = { version = "0.0.1", path = "../geometry-coords" }
-geometry-cs       = { version = "0.0.1", path = "../geometry-cs" }
-geometry-derive   = { version = "0.0.1", path = "../geometry-derive" }
-geometry-model    = { version = "0.0.1", path = "../geometry-model" }
-geometry-strategy = { version = "0.0.1", path = "../geometry-strategy" }
-geometry-tag      = { version = "0.0.1", path = "../geometry-tag" }
-geometry-trait    = { version = "0.0.1", path = "../geometry-trait" }
+geometry-adapt    = { path = "../geometry-adapt" }
+geometry-coords   = { path = "../geometry-coords" }
+geometry-cs       = { path = "../geometry-cs" }
+geometry-derive   = { path = "../geometry-derive" }
+geometry-model    = { path = "../geometry-model" }
+geometry-strategy = { path = "../geometry-strategy" }
+geometry-tag      = { path = "../geometry-tag" }
+geometry-trait    = { path = "../geometry-trait" }
 
 [lints]
 workspace = true

@@ -15,7 +15,7 @@ geometry-trait  = { version = "0.0.1", path = "../geometry-trait" }
 nalgebra        = "0.32"
 
 [dev-dependencies]
-geometry-algorithm = { version = "0.0.1", path = "../geometry-algorithm" }
+geometry-algorithm = { path = "../geometry-algorithm" }
 
 [lints]
 workspace = true

@@ -17,11 +17,11 @@ quote       = "1"
 proc-macro2 = "1"
 
 [dev-dependencies]
-geometry-tag       = { version = "0.0.1", path = "../geometry-tag" }
-geometry-coords    = { version = "0.0.1", path = "../geometry-coords" }
-geometry-cs        = { version = "0.0.1", path = "../geometry-cs" }
-geometry-trait     = { version = "0.0.1", path = "../geometry-trait" }
-geometry-algorithm = { version = "0.0.1", path = "../geometry-algorithm" }
+geometry-tag       = { path = "../geometry-tag" }
+geometry-coords    = { path = "../geometry-coords" }
+geometry-cs        = { path = "../geometry-cs" }
+geometry-trait     = { path = "../geometry-trait" }
+geometry-algorithm = { path = "../geometry-algorithm" }
 trybuild           = "1"
 
 [lints]
