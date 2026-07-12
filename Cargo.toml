@@ -29,7 +29,7 @@ rust-version = "1.85"
 license      = "BSL-1.0"
 license-file = "LICENSE"
 repository   = "https://github.com/pentatonick/boost_geometry"
-keywords     = ["geometry", "gis", "spatial", "boost", "computational-geometry"]
+keywords     = ["geometry", "gis", "spatial", "boost", "computation"]
 categories   = ["science::geo", "algorithms", "mathematics", "no-std"]
 
 [workspace.lints.rust]
