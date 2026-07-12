@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace      = true
 license-file.workspace = true
 repository.workspace   = true
+keywords.workspace     = true
+categories.workspace   = true
 description = "Adapters and registration macros for foreign point/linestring/polygon types."
 readme = "README.md"
 

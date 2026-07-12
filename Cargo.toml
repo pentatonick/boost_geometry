@@ -29,6 +29,8 @@ rust-version = "1.85"
 license      = "BSL-1.0"
 license-file = "LICENSE"
 repository   = "https://github.com/pentatonick/boost_geometry"
+keywords     = ["geometry", "gis", "spatial", "boost", "computational-geometry"]
+categories   = ["science::geo", "algorithms", "mathematics", "no-std"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"  # kernel crates re-allow with explicit justification

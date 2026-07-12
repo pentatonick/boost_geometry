@@ -30,6 +30,10 @@ jobs:
         run: cargo build --workspace --all-targets
       - name: Test
         run: cargo test --workspace
+      - name: Check READMEs are in sync with rustdoc and examples
+        run: |
+          python3 .github/scripts/crate_readme.py
+          git diff --exit-code
 
   release-build:
     name: Release build

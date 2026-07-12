@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace      = true
 license-file.workspace = true
 repository.workspace   = true
+keywords.workspace     = true
+categories.workspace   = true
 description = "Free-function algorithms (distance, length, area, within, intersects, …)."
 readme = "README.md"
 

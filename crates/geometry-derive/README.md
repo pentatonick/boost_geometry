@@ -1,39 +1,37 @@
 # geometry-derive
 
-Procedural derive macros (e.g. `#[derive(Point)]`).
+Part of the [boost_geometry](https://crates.io/crates/boost_geometry) workspace — a Rust port of [Boost.Geometry](https://www.boost.org/doc/libs/release/libs/geometry/). Most users should depend on the facade crate, which re-exports this one; depend on this crate directly only for a slimmer build.
 
-Companion to `geometry-adapt`'s declarative `register_*!` macros — provides
-the derive-based path for types you own.
+`#[derive(Point)]` for structs whose named fields are dimensions in
+declaration order.
 
-## `#[derive(Point)]`
+Rust analogue of the `BOOST_GEOMETRY_REGISTER_POINT_2D` family of
+macros declared at `boost/geometry/geometries/register/point.hpp:81-87`.
+Where the C++ macro injects template specialisations in the
+`boost::geometry::traits` namespace, this proc-macro emits an
+`impl Geometry` + `impl Point` block on the annotated struct.
 
-Generates an `impl Geometry` + `impl Point` block for a struct whose named
-fields are the dimensions of a point, in declaration order. Rust counterpart
-of `BOOST_GEOMETRY_REGISTER_POINT_2D` (and the 3D variant) declared at
-`geometry/include/boost/geometry/geometries/register/point.hpp:81-87`.
+The derive accepts an optional `#[geometry(...)]` attribute:
 
-```rust
-use geometry_derive::Point;
-
-#[derive(Point)]
-#[geometry(cs = "Cartesian", scalar = "f64")]
+```text
+##[derive(Point)]
+##[geometry(cs = "Cartesian", scalar = "f64")]
 struct MyPoint { x: f64, y: f64 }
 ```
 
-The `#[geometry(...)]` attribute is optional. Defaults: `cs = "Cartesian"`,
-`scalar = "f64"`.
+Both keys are optional. `cs` defaults to `Cartesian` and `scalar`
+to `f64`. Field order in the struct becomes dimension order in the
+emitted `Point::get::<D>` / `Point::set::<D>` match arms.
 
-### Required dependencies on the calling crate
+## Crate dependencies (pragmatic approach)
 
-The generated code refers to the kernel via absolute paths
-(`::geometry_trait::Point`, `::geometry_tag::PointTag`,
-`::geometry_cs::Cartesian`, …). Until the `geometry` facade crate (T47)
-lands, downstream callers must depend on those crates directly:
+The generated code uses absolute paths into the kernel crates —
+`::geometry_trait::Point`, `::geometry_tag::PointTag`,
+`::geometry_cs::Cartesian`, etc. Downstream callers must therefore
+depend on `geometry-trait`, `geometry-tag`, and `geometry-cs`
+(directly, or transitively via the `geometry` facade crate landing
+in T47).
 
-```toml
-[dependencies]
-geometry-derive = { path = "…/geometry-derive" }
-geometry-trait  = { path = "…/geometry-trait" }
-geometry-tag    = { path = "…/geometry-tag" }
-geometry-cs     = { path = "…/geometry-cs" }
-```
+## License
+
+BSL-1.0 — see [LICENSE](https://github.com/pentatonick/boost_geometry/blob/main/LICENSE).

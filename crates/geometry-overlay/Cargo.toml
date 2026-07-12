@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace      = true
 license-file.workspace = true
 repository.workspace   = true
+keywords.workspace     = true
+categories.workspace   = true
 description = "Segment-intersection kernel, turn graph, and boolean overlay (intersection/union/difference) for the geometry port."
 readme = "README.md"
 

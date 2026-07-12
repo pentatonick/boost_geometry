@@ -1,9 +1,17 @@
 # geometry-io-wkt
 
-OGC Well-Known Text (WKT) reader and writer for the geometry model.
+Part of the [boost_geometry](https://crates.io/crates/boost_geometry) workspace — a Rust port of [Boost.Geometry](https://www.boost.org/doc/libs/release/libs/geometry/). Most users should depend on the facade crate, which re-exports this one; depend on this crate directly only for a slimmer build.
 
-Mirrors `boost/geometry/io/wkt`. `from_wkt` parses a WKT string into a
-`DynGeometry`; `to_wkt` / `write_wkt` serialise any concrete model
-geometry back to WKT. Typed-parse convenience functions
-(`parse_point`, `parse_polygon`, …) are provided for callers who know
-the expected kind.
+OGC Well-Known Text (WKT) reader and writer.
+
+Mirrors `boost/geometry/io/wkt/{read,write,wkt}.hpp`. The parser
+emits a [`geometry_model::DynGeometry`] because WKT is heterogeneous
+by construction (a `GEOMETRYCOLLECTION` mixes kinds); the writer
+accepts any concrete geometry that implements the model traits.
+
+Reference: OGC Simple Feature Access Part 1 (SFA-1) §7 for the WKT
+grammar.
+
+## License
+
+BSL-1.0 — see [LICENSE](https://github.com/pentatonick/boost_geometry/blob/main/LICENSE).

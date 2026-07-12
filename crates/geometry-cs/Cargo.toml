@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace      = true
 license-file.workspace = true
 repository.workspace   = true
+keywords.workspace     = true
+categories.workspace   = true
 description = "Coordinate system types: Cartesian, Spherical, Geographic, and angle units."
 readme = "README.md"
 
