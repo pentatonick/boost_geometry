@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Regenerate each sub-crate's README.md from its lib.rs `//!` doc comment.
+"""Regenerate each sub-crate's README.md from its lib.rs `//!` doc comment,
+and splice the facade crate's examples into the workspace-root README.md
+between `<!-- example:<name>:start/end -->` markers.
 
 Usage: python3 crate_readme.py
-Run from the workspace root. The facade crate (crates/geometry) is skipped —
-it packages the workspace-root README.md instead.
+Run from the workspace root. The facade crate (crates/geometry) gets no
+generated README — it packages the workspace-root README.md instead.
 """
 
 import re
@@ -66,6 +68,28 @@ def to_markdown(doc: str) -> str:
     )
 
 
+def splice_examples() -> None:
+    """Replace each marked block in the root README with the example's source
+    (file-level //! comment stripped)."""
+    readme = Path("README.md")
+    text = readme.read_text()
+    for example in sorted((Path("crates") / FACADE_DIR / "examples").glob("*.rs")):
+        source = "\n".join(
+            l for l in example.read_text().splitlines() if not l.startswith("//!")
+        ).strip()
+        block = f"<!-- example:{example.stem}:start -->\n```rust\n{source}\n```\n<!-- example:{example.stem}:end -->"
+        pattern = re.compile(
+            rf"<!-- example:{example.stem}:start -->.*?<!-- example:{example.stem}:end -->",
+            re.S,
+        )
+        if not pattern.search(text):
+            print(f"SKIP example {example.stem}: no markers in README.md")
+            continue
+        text = pattern.sub(lambda _: block, text)
+        print(f"spliced {example.name} into README.md")
+    readme.write_text(text)
+
+
 def main() -> None:
     for crate in sorted(Path("crates").iterdir()):
         if not crate.is_dir() or crate.name == FACADE_DIR:
@@ -88,3 +112,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    splice_examples()

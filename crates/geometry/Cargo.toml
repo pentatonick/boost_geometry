@@ -11,6 +11,9 @@ categories.workspace   = true
 description = "Facade crate re-exporting the geometry workspace as a single API surface."
 readme = "../../README.md"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = ["std"]
 std = [

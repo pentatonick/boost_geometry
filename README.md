@@ -30,8 +30,10 @@ cargo add boost_geometry
 ```
 
 Register your own ring and polygon types with one macro declaration
-each, run `is_valid_polygon` on them directly, and buffer:
+each, run `is_valid_polygon` on them directly, and buffer
+(runnable as `cargo run --example parcel_buffer`):
 
+<!-- example:parcel_buffer:start -->
 ```rust
 use boost_geometry::adapt::{register_polygon, register_ring};
 use boost_geometry::model::{Polygon, Ring};
@@ -56,7 +58,8 @@ register_polygon!(
     Parcel,
     P,
     ring = Boundary,
-    |s| outer = &s.outer, inners = s.holes.iter()
+    |s| outer = &s.outer,
+    inners = s.holes.iter()
 );
 
 fn main() {
@@ -79,9 +82,7 @@ fn main() {
 
     // Buffer it outward by 1.0 with round joins. The buffer kernel
     // works on the library's model polygon, so lift the points over.
-    let model: Polygon<P> = Polygon::new(Ring::from_vec(
-        parcel.outer.points.clone(),
-    ));
+    let model: Polygon<P> = Polygon::new(Ring::from_vec(parcel.outer.points.clone()));
     let mut grown = buffer_convex_polygon(
         &model,
         1.0,
@@ -96,6 +97,7 @@ fn main() {
     println!("area {:.3} -> {:.3}", area(&parcel), area(&grown));
 }
 ```
+<!-- example:parcel_buffer:end -->
 
 Output:
 
