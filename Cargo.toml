@@ -27,6 +27,7 @@ version      = "0.0.1"
 edition      = "2024"
 rust-version = "1.85"
 license      = "BSL-1.0"
+license-file = "LICENSE"
 repository   = "https://github.com/pentatonick/boost_geometry"
 
 [workspace.lints.rust]

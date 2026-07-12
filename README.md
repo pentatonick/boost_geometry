@@ -30,9 +30,6 @@ Add the dependency:
 boost_geometry = "0.0.1"
 ```
 
-(Until the first crates.io release, use
-`boost_geometry = { git = "https://github.com/pentatonick/boost_geometry" }`.)
-
 Register your own ring and polygon types with one macro declaration
 each, run `is_valid_polygon` on them directly, and buffer:
 
@@ -146,6 +143,6 @@ for the full map.
 
 ## License
 
-BSL-1.0
+BSL-1.0 — see [LICENSE](LICENSE).
 
 [boost-geometry]: https://www.boost.org/doc/libs/release/libs/geometry/

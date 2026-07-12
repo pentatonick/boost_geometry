@@ -4,6 +4,7 @@ version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
+license-file.workspace = true
 repository.workspace   = true
 description = "Coordinate-reference-system reprojection for the geometry kernel, backed by the pure-Rust proj4rs engine."
 readme = "README.md"
