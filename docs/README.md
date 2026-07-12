@@ -1,4 +1,4 @@
-# geometry — documentation
+# boost_geometry — documentation
 
 A Rust port of [Boost.Geometry](https://www.boost.org/doc/libs/release/libs/geometry/):
 dimension-agnostic, coordinate-system-agnostic, bring-your-own-type,
