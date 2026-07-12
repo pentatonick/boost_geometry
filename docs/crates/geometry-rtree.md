@@ -11,7 +11,7 @@ axis-aligned bounding box). Answers spatial queries — intersects / within /
 contains — and k-nearest-neighbour search, pruning the tree with each
 node's bounding box.
 
-**v1 scope:** Cartesian, 2D, `f64` (`specs/rtree-split-decision.md`).
+**v1 scope:** Cartesian, 2D, `f64`.
 
 ## Files
 

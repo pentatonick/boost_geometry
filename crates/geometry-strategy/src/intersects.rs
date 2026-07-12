@@ -24,8 +24,8 @@
 //! no overlap — and the tag-keyed [`IntersectsPairStrategy`] picker
 //! routes `(A::Kind, B::Kind)` to the right struct. Because it keys on
 //! the tags, a concept-adapted foreign type resolves through the same
-//! path as the equivalent `geometry-model` value (see
-//! `specs/open-tag-dispatch/`). [`CartesianIntersects`] remains as a thin
+//! path as the equivalent `geometry-model` value.
+//! [`CartesianIntersects`] remains as a thin
 //! facade that routes through the picker, so `disjoint` / `is_simple` and
 //! the `Reversed` symmetry adapter keep resolving unchanged.
 //!

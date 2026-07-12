@@ -66,19 +66,16 @@ depends on it. Ordered by dependency layer (foundation first):
 | Spatially index a set of geometries | [`geometry-rtree`](crates/geometry-rtree.md) |
 | Reproject between coordinate systems | [`geometry-proj`](crates/geometry-proj.md) |
 | See the full crate dependency graph | [Architecture](01-architecture.md) |
-| Find the porting/task history | `specs/` at the repo root (not part of this documentation set — see below) |
 
 ## What this documentation set is *not*
 
 * **Not API documentation.** Run `cargo doc --workspace --open` for that —
   every public item already has a `///` comment with a Boost header
   reference and, for non-trivial functions, a runnable example.
-* **Not the porting history.** `specs/` at the repo root holds the phased
-  implementation plans, task files, and design decisions (including the
-  currently in-progress `specs/open-tag-dispatch/` work this documentation
-  set describes the *result* of, not the process). This documentation set
-  is a snapshot of the code as it exists now, oriented at someone exploring
-  the codebase rather than someone tracking what's left to build.
+* **Not the porting history.** This documentation set is a snapshot of the
+  code as it exists now, oriented at someone exploring the codebase rather
+  than someone tracking what's left to build; the phased porting history
+  lives in the git log.
 
 ## Conventions used across these pages
 

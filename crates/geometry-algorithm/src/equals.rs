@@ -4,8 +4,7 @@
 //! Cartesian-only in v1. The per-pair strategy is selected by the
 //! tag-keyed [`geometry_strategy::EqualsPairStrategy`] picker on
 //! `(A::Kind, B::Kind)`, so any concept-adapted foreign type resolves
-//! through the same path as the equivalent `geometry-model` value (see
-//! `specs/open-tag-dispatch/`).
+//! through the same path as the equivalent `geometry-model` value.
 
 use geometry_strategy::{EqualsPairStrategy, EqualsStrategy};
 use geometry_trait::Geometry;

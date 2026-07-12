@@ -1,8 +1,7 @@
 //! Declarative literal macros for `model::Point`, `model::Linestring`,
 //! and `model::Polygon`.
 //!
-//! These mirror the literal-style polygon construction shown in
-//! `specs/rust-port-proposal.md` §5 — they give callers a compact way
+//! These give callers a compact way
 //! to write geometry values from nested tuple syntax, without standing
 //! up a builder type.
 //!

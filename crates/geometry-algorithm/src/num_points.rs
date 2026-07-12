@@ -32,7 +32,7 @@ use geometry_trait::{
 /// `boost/geometry/algorithms/num_points.hpp`. The per-kind body is
 /// selected by the tag-keyed [`NumPointsStrategyForKind`] picker, so any
 /// concept-adapted foreign type resolves through the same path as the
-/// equivalent `geometry-model` value (see `specs/open-tag-dispatch/`).
+/// equivalent `geometry-model` value.
 #[inline]
 #[must_use]
 pub fn num_points<G>(g: &G) -> usize
@@ -46,8 +46,7 @@ where
 
 /// A strategy for counting the points of `G`. Each per-kind struct below
 /// carries a single concept-bounded impl, so distinct structs never
-/// overlap (the distinct-struct-per-kind pattern of
-/// `specs/open-tag-dispatch/`); users call [`num_points`], not this
+/// overlap (the distinct-struct-per-kind pattern); users call [`num_points`], not this
 /// trait.
 #[doc(hidden)]
 pub trait NumPointsStrategy<G> {

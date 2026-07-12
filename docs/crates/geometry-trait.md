@@ -40,7 +40,7 @@ needs only one `use geometry_trait::*;` line to reach both the concept and
 the tag machinery.
 
 The **`PointMut: Point` split** is a deliberate design point
-(`specs/phase_00-overview.md` §1.1, mirroring
+(mirroring
 `geometries/concepts/point_concept.hpp`'s `ro_point`/`rw_point`): algorithms
 that only *read* coordinates (`distance`, `area`, `length`, `within`,
 `intersects`, `equals`) bound on `Point`; only materialising algorithms
