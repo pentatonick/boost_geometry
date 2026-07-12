@@ -12,11 +12,11 @@ description = "Adapt geo-types geometries to the geometry-trait concept surface.
 readme = "README.md"
 
 [dependencies]
-geometry-tag    = { version = "0.0.3", path = "../geometry-tag" }
-geometry-coords = { version = "0.0.3", path = "../geometry-coords" }
-geometry-cs     = { version = "0.0.3", path = "../geometry-cs" }
-geometry-trait  = { version = "0.0.3", path = "../geometry-trait" }
-geometry-model  = { version = "0.0.3", path = "../geometry-model" }
+geometry-tag    = { version = "0.0.4", path = "../geometry-tag" }
+geometry-coords = { version = "0.0.4", path = "../geometry-coords" }
+geometry-cs     = { version = "0.0.4", path = "../geometry-cs" }
+geometry-trait  = { version = "0.0.4", path = "../geometry-trait" }
+geometry-model  = { version = "0.0.4", path = "../geometry-model" }
 geo-types       = "0.7"
 
 [dev-dependencies]
