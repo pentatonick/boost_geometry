@@ -24,11 +24,11 @@ libm = [
 ]
 
 [dependencies]
-geometry-tag    = { version = "0.0.1", path = "../geometry-tag" }
-geometry-coords = { version = "0.0.1", path = "../geometry-coords", default-features = false }
-geometry-cs     = { version = "0.0.1", path = "../geometry-cs",     default-features = false }
-geometry-trait  = { version = "0.0.1", path = "../geometry-trait",  default-features = false }
-geometry-model  = { version = "0.0.1", path = "../geometry-model",  default-features = false }
+geometry-tag    = { version = "0.0.2", path = "../geometry-tag" }
+geometry-coords = { version = "0.0.2", path = "../geometry-coords", default-features = false }
+geometry-cs     = { version = "0.0.2", path = "../geometry-cs",     default-features = false }
+geometry-trait  = { version = "0.0.2", path = "../geometry-trait",  default-features = false }
+geometry-model  = { version = "0.0.2", path = "../geometry-model",  default-features = false }
 
 [dev-dependencies]
 geometry-adapt = { path = "../geometry-adapt" }

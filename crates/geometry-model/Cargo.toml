@@ -20,10 +20,10 @@ libm = ["geometry-coords/libm", "geometry-trait/libm"]
 serde = ["dep:serde"]
 
 [dependencies]
-geometry-tag    = { version = "0.0.1", path = "../geometry-tag" }
-geometry-coords = { version = "0.0.1", path = "../geometry-coords", default-features = false }
-geometry-cs     = { version = "0.0.1", path = "../geometry-cs",     default-features = false }
-geometry-trait  = { version = "0.0.1", path = "../geometry-trait",  default-features = false }
+geometry-tag    = { version = "0.0.2", path = "../geometry-tag" }
+geometry-coords = { version = "0.0.2", path = "../geometry-coords", default-features = false }
+geometry-cs     = { version = "0.0.2", path = "../geometry-cs",     default-features = false }
+geometry-trait  = { version = "0.0.2", path = "../geometry-trait",  default-features = false }
 serde           = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
 
 [dev-dependencies]

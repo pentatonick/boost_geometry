@@ -9,10 +9,10 @@ repository.workspace   = true
 description = "Adapt nalgebra points and vectors to the geometry-trait concept surface."
 
 [dependencies]
-geometry-tag    = { version = "0.0.1", path = "../geometry-tag" }
-geometry-coords = { version = "0.0.1", path = "../geometry-coords" }
-geometry-cs     = { version = "0.0.1", path = "../geometry-cs" }
-geometry-trait  = { version = "0.0.1", path = "../geometry-trait" }
+geometry-tag    = { version = "0.0.2", path = "../geometry-tag" }
+geometry-coords = { version = "0.0.2", path = "../geometry-coords" }
+geometry-cs     = { version = "0.0.2", path = "../geometry-cs" }
+geometry-trait  = { version = "0.0.2", path = "../geometry-trait" }
 nalgebra        = "0.32"
 
 [dev-dependencies]
