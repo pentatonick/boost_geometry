@@ -1,0 +1,28 @@
+[package]
+name = "geometry-trait"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Concept traits (Point, Linestring, Ring, Polygon, multi-variants, …)."
+readme = "README.md"
+
+[features]
+default = ["std"]
+std = ["geometry-coords/std", "geometry-cs/std"]
+libm = ["geometry-coords/libm"]
+
+[dependencies]
+geometry-tag    = { path = "../geometry-tag" }
+geometry-coords = { path = "../geometry-coords", default-features = false }
+geometry-cs     = { path = "../geometry-cs",     default-features = false }
+
+[dev-dependencies]
+trybuild        = "1"
+geometry-tag    = { path = "../geometry-tag" }      # for trybuild ui fixtures
+geometry-coords = { path = "../geometry-coords" }   # bring std for tests
+geometry-cs     = { path = "../geometry-cs" }       # bring std for tests
+
+[lints]
+workspace = true

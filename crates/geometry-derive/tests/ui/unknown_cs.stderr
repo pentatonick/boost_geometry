@@ -1,0 +1,7 @@
+error[E0425]: cannot find type `NoSuchCs` in crate `::geometry_cs`
+  --> tests/ui/unknown_cs.rs:11:10
+   |
+11 | #[derive(Point)]
+   |          ^^^^^ not found in `::geometry_cs`
+   |
+   = note: this error originates in the derive macro `Point` (in Nightly builds, run with -Z macro-backtrace for more info)

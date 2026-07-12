@@ -1,0 +1,12 @@
+[package]
+name = "geometry-tag"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Geometry kind tags and the tag-hierarchy marker traits."
+readme = "README.md"
+
+[lints]
+workspace = true

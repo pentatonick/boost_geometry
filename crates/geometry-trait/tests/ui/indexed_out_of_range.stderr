@@ -1,0 +1,17 @@
+error[E0080]: evaluation panicked: IndexedAccess::get_indexed: index out of range
+  --> tests/ui/indexed_out_of_range.rs:54:17
+   |
+54 |         const { assert!(I < 2, "IndexedAccess::get_indexed: index out of range"); }
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<B as geometry_trait::IndexedAccess>::get_indexed::<2, 0>::{constant#0}` failed here
+
+note: erroneous constant encountered
+  --> tests/ui/indexed_out_of_range.rs:54:9
+   |
+54 |         const { assert!(I < 2, "IndexedAccess::get_indexed: index out of range"); }
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: the above error was encountered while instantiating `fn <B as IndexedAccess>::get_indexed::<2, 0>`
+  --> tests/ui/indexed_out_of_range.rs:69:13
+   |
+69 |     let _ = b.get_indexed::<2, 0>();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^

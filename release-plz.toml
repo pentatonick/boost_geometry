@@ -1,0 +1,8 @@
+[workspace]
+# All crates inherit version from [workspace.package] — bumped in lockstep
+# via the release-plz release PR. Publishing, tagging, and the GitHub
+# release are handled by .github/workflows/publish.yml on `v*` tag push.
+publish = false
+git_tag_enable = false
+git_release_enable = false
+changelog_update = true

@@ -1,0 +1,21 @@
+[package]
+name = "geometry-adapt-nalgebra"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Adapt nalgebra points and vectors to the geometry-trait concept surface."
+
+[dependencies]
+geometry-tag    = { path = "../geometry-tag" }
+geometry-coords = { path = "../geometry-coords" }
+geometry-cs     = { path = "../geometry-cs" }
+geometry-trait  = { path = "../geometry-trait" }
+nalgebra        = "0.32"
+
+[dev-dependencies]
+geometry-algorithm = { path = "../geometry-algorithm" }
+
+[lints]
+workspace = true

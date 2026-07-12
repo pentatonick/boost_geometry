@@ -1,0 +1,21 @@
+[package]
+name = "geometry-proj"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Coordinate-reference-system reprojection for the geometry kernel, backed by the pure-Rust proj4rs engine."
+readme = "README.md"
+
+[dependencies]
+geometry-tag    = { path = "../geometry-tag" }
+geometry-coords = { path = "../geometry-coords" }
+geometry-cs     = { path = "../geometry-cs" }
+geometry-trait  = { path = "../geometry-trait" }
+geometry-model  = { path = "../geometry-model" }
+proj4rs         = { version = "0.1", features = ["crs-definitions"] }
+proj4wkt        = "0.1"
+
+[lints]
+workspace = true

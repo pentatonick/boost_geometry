@@ -1,0 +1,28 @@
+[package]
+name = "geometry-derive"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Procedural derive macros (e.g. #[derive(Point)])."
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn         = { version = "2", features = ["full"] }
+quote       = "1"
+proc-macro2 = "1"
+
+[dev-dependencies]
+geometry-tag       = { path = "../geometry-tag" }
+geometry-coords    = { path = "../geometry-coords" }
+geometry-cs        = { path = "../geometry-cs" }
+geometry-trait     = { path = "../geometry-trait" }
+geometry-algorithm = { path = "../geometry-algorithm" }
+trybuild           = "1"
+
+[lints]
+workspace = true

@@ -1,0 +1,59 @@
+[package]
+name = "boost_geometry"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Facade crate re-exporting the geometry workspace as a single API surface."
+readme = "README.md"
+
+[features]
+default = ["std"]
+std = [
+    "geometry-coords/std",
+    "geometry-cs/std",
+    "geometry-trait/std",
+    "geometry-model/std",
+    "geometry-strategy/std",
+    "geometry-algorithm/std",
+    "geometry-adapt/std",
+    "geometry-overlay/std",
+    "geometry-rtree/std",
+]
+libm = [
+    "geometry-coords/libm",
+    "geometry-cs/libm",
+]
+
+[dependencies]
+geometry-tag       = { path = "../geometry-tag" }
+geometry-coords    = { path = "../geometry-coords",    default-features = false }
+geometry-cs        = { path = "../geometry-cs",        default-features = false }
+geometry-trait     = { path = "../geometry-trait",     default-features = false }
+geometry-model     = { path = "../geometry-model",     default-features = false }
+geometry-strategy  = { path = "../geometry-strategy",  default-features = false }
+geometry-algorithm = { path = "../geometry-algorithm", default-features = false }
+geometry-adapt     = { path = "../geometry-adapt",     default-features = false }
+geometry-overlay   = { path = "../geometry-overlay",   default-features = false }
+geometry-rtree     = { path = "../geometry-rtree",     default-features = false }
+geometry-derive    = { path = "../geometry-derive" }
+
+[dev-dependencies]
+trybuild = "1"
+criterion = "0.5"
+
+[[bench]]
+name = "distance"
+harness = false
+
+[[bench]]
+name = "measures"
+harness = false
+
+[[bench]]
+name = "predicates"
+harness = false
+
+[lints]
+workspace = true

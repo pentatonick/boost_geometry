@@ -1,0 +1,3 @@
+# Allow a handful of pedantic lints that produce more noise than signal
+# in a generic geometry library.
+avoid-breaking-exported-api = false

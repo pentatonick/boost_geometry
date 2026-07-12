@@ -1,0 +1,17 @@
+error[E0080]: evaluation panicked: Point::get: dimension out of range
+  --> tests/ui/get_out_of_range.rs:36:17
+   |
+36 |         const { assert!(D < <Xy as Point>::DIM, "Point::get: dimension out of range"); }
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<Xy as geometry_trait::Point>::get::<2>::{constant#0}` failed here
+
+note: erroneous constant encountered
+  --> tests/ui/get_out_of_range.rs:36:9
+   |
+36 |         const { assert!(D < <Xy as Point>::DIM, "Point::get: dimension out of range"); }
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: the above error was encountered while instantiating `fn <Xy as Point>::get::<2>`
+  --> tests/ui/get_out_of_range.rs:52:13
+   |
+52 |     let _ = p.get::<2>();
+   |             ^^^^^^^^^^^^

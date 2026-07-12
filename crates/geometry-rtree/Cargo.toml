@@ -1,0 +1,24 @@
+[package]
+name = "geometry-rtree"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "R-tree spatial index over the geometry kernel — insert, spatial query, and nearest-neighbour search."
+readme = "README.md"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+geometry-tag       = { path = "../geometry-tag" }
+geometry-coords    = { path = "../geometry-coords" }
+geometry-cs        = { path = "../geometry-cs" }
+geometry-trait     = { path = "../geometry-trait" }
+geometry-model     = { path = "../geometry-model" }
+geometry-algorithm = { path = "../geometry-algorithm" }
+
+[lints]
+workspace = true

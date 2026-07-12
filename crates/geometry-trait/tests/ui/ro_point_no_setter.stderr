@@ -1,0 +1,22 @@
+error[E0277]: `RoPoint` implements `Point` but not `PointMut`, and this algorithm needs to construct a point
+  --> tests/ui/ro_point_no_setter.rs:51:27
+   |
+51 |     let _ = segment_start(&s);
+   |             ------------- ^^ implement `PointMut` for this type, or feed the algorithm a mutable point type instead
+   |             |
+   |             required by a bound introduced by this call
+   |
+help: the trait `PointMut` is not implemented for `RoPoint`
+  --> tests/ui/ro_point_no_setter.rs:11:1
+   |
+11 | struct RoPoint(f64, f64);
+   | ^^^^^^^^^^^^^^
+   = note: see `geometry_trait::PointMut` — adds `set::<D>` next to the inherited `get::<D>`. Algorithms that only read coordinates (distance, length, area, within, intersects, equals, comparable_distance) require `Point` only — this bound is reached when the algorithm needs to *output* a Point (envelope, segment_start, box_min, …).
+note: required by a bound in `segment_start`
+  --> src/segment.rs
+   |
+   | pub fn segment_start<S: Segment>(s: &S) -> S::Point
+   |        ------------- required by a bound in this function
+   | where
+   |     S::Point: Default + PointMut,
+   |                         ^^^^^^^^ required by this bound in `segment_start`

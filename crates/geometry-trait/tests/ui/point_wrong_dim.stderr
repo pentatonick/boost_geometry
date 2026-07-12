@@ -1,0 +1,51 @@
+error[E0080]: evaluation panicked: Point::DIM exceeds the backing array length
+  --> tests/ui/point_wrong_dim.rs:31:13
+   |
+31 | /             assert!(
+32 | |                 <WrongDim as Point>::DIM as usize <= 2,
+33 | |                 "Point::DIM exceeds the backing array length"
+34 | |             );
+   | |_____________^ evaluation of `<WrongDim as geometry_trait::Point>::get::<0>::{constant#0}` failed here
+
+note: erroneous constant encountered
+  --> tests/ui/point_wrong_dim.rs:30:9
+   |
+30 | /         const {
+31 | |             assert!(
+32 | |                 <WrongDim as Point>::DIM as usize <= 2,
+33 | |                 "Point::DIM exceeds the backing array length"
+34 | |             );
+35 | |         }
+   | |_________^
+
+note: the above error was encountered while instantiating `fn <WrongDim as Point>::get::<0>`
+  --> tests/ui/point_wrong_dim.rs:56:13
+   |
+56 |     let _ = p.get::<0>();
+   |             ^^^^^^^^^^^^
+
+error[E0080]: evaluation panicked: Point::DIM exceeds the backing array length
+  --> tests/ui/point_wrong_dim.rs:43:13
+   |
+43 | /             assert!(
+44 | |                 <WrongDim as Point>::DIM as usize <= 2,
+45 | |                 "Point::DIM exceeds the backing array length"
+46 | |             );
+   | |_____________^ evaluation of `<WrongDim as geometry_trait::PointMut>::set::<0>::{constant#0}` failed here
+
+note: erroneous constant encountered
+  --> tests/ui/point_wrong_dim.rs:42:9
+   |
+42 | /         const {
+43 | |             assert!(
+44 | |                 <WrongDim as Point>::DIM as usize <= 2,
+45 | |                 "Point::DIM exceeds the backing array length"
+46 | |             );
+47 | |         }
+   | |_________^
+
+note: the above error was encountered while instantiating `fn <WrongDim as PointMut>::set::<0>`
+  --> tests/ui/point_wrong_dim.rs:57:5
+   |
+57 |     p.set::<0>(1.0);
+   |     ^^^^^^^^^^^^^^^

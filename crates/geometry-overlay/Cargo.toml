@@ -1,0 +1,25 @@
+[package]
+name = "geometry-overlay"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Segment-intersection kernel, turn graph, and boolean overlay (intersection/union/difference) for the geometry port."
+readme = "README.md"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+geometry-tag       = { path = "../geometry-tag" }
+geometry-coords    = { path = "../geometry-coords" }
+geometry-cs        = { path = "../geometry-cs" }
+geometry-trait     = { path = "../geometry-trait" }
+geometry-model     = { path = "../geometry-model" }
+geometry-strategy  = { path = "../geometry-strategy" }
+geometry-algorithm = { path = "../geometry-algorithm" }
+
+[lints]
+workspace = true

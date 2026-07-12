@@ -1,8 +1,36 @@
-[package]
-name = "boost_geometry"
-version = "0.0.0"
-edition = "2024"
-description = "A Rust port of Boost.Geometry"
-license = "BSL-1.0"
+[workspace]
+resolver = "3"
+members = [
+    "crates/geometry-tag",
+    "crates/geometry-coords",
+    "crates/geometry-cs",
+    "crates/geometry-trait",
+    "crates/geometry-model",
+    "crates/geometry-strategy",
+    "crates/geometry-algorithm",
+    "crates/geometry-adapt",
+    "crates/geometry-adapt-nalgebra",
+    "crates/geometry-adapt-geo-types",
+    "crates/geometry-derive",
+    "crates/geometry-io-wkt",
+    "crates/geometry-io-wkb",
+    "crates/geometry-io-geojson",
+    "crates/geometry-io-svg",
+    "crates/geometry-overlay",
+    "crates/geometry-rtree",
+    "crates/geometry-proj",
+    "crates/geometry",
+]
 
-[dependencies]
+[workspace.package]
+version      = "0.0.1"
+edition      = "2024"
+rust-version = "1.85"
+license      = "BSL-1.0"
+repository   = "https://github.com/pentatonick/boost_geometry"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"  # kernel crates re-allow with explicit justification
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }

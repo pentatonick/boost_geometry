@@ -1,0 +1,23 @@
+[package]
+name = "geometry-adapt-geo-types"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Adapt geo-types geometries to the geometry-trait concept surface."
+readme = "README.md"
+
+[dependencies]
+geometry-tag    = { path = "../geometry-tag" }
+geometry-coords = { path = "../geometry-coords" }
+geometry-cs     = { path = "../geometry-cs" }
+geometry-trait  = { path = "../geometry-trait" }
+geometry-model  = { path = "../geometry-model" }
+geo-types       = "0.7"
+
+[dev-dependencies]
+geometry-algorithm = { path = "../geometry-algorithm" }
+
+[lints]
+workspace = true

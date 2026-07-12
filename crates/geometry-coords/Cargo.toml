@@ -1,0 +1,20 @@
+[package]
+name = "geometry-coords"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Coordinate scalar trait, type promotion, and comparable-form wrappers."
+readme = "README.md"
+
+[features]
+default = ["std"]
+std  = []
+libm = ["dep:libm"]
+
+[dependencies]
+libm = { version = "0.2", optional = true }
+
+[lints]
+workspace = true

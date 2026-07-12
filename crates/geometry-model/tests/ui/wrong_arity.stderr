@@ -1,0 +1,16 @@
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+  --> tests/ui/wrong_arity.rs:11:13
+   |
+11 |     let _ = Point2D::<f64, Cartesian>::new(1.0, 2.0, 3.0);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^           --- unexpected argument #3 of type `{float}`
+   |
+note: associated function defined here
+  --> src/point.rs
+   |
+   |     pub const fn new(v0: T, v1: T) -> Self {
+   |                  ^^^
+help: remove the extra argument
+   |
+11 -     let _ = Point2D::<f64, Cartesian>::new(1.0, 2.0, 3.0);
+11 +     let _ = Point2D::<f64, Cartesian>::new(1.0, 2.0);
+   |

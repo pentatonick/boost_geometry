@@ -1,0 +1,7 @@
+error[E0046]: not all trait items implemented, missing: `Scalar`
+  --> tests/ui/point_no_scalar.rs:22:1
+   |
+22 | impl Point for NoScalar {
+   | ^^^^^^^^^^^^^^^^^^^^^^^ missing `Scalar` in implementation
+   |
+   = help: implement the missing item: `type Scalar = /* Type */;`

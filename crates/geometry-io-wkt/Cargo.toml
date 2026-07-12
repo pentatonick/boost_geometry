@@ -1,0 +1,28 @@
+[package]
+name = "geometry-io-wkt"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "OGC Well-Known Text (WKT) reader and writer for the geometry model."
+readme = "README.md"
+
+[features]
+default = ["std"]
+std = [
+    "geometry-coords/std",
+    "geometry-cs/std",
+    "geometry-trait/std",
+    "geometry-model/std",
+]
+
+[dependencies]
+geometry-tag    = { path = "../geometry-tag" }
+geometry-coords = { path = "../geometry-coords", default-features = false }
+geometry-cs     = { path = "../geometry-cs",     default-features = false }
+geometry-trait  = { path = "../geometry-trait",  default-features = false }
+geometry-model  = { path = "../geometry-model",  default-features = false }
+
+[lints]
+workspace = true

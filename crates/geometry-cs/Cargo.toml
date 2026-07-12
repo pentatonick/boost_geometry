@@ -1,0 +1,20 @@
+[package]
+name = "geometry-cs"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Coordinate system types: Cartesian, Spherical, Geographic, and angle units."
+readme = "README.md"
+
+[dependencies]
+geometry-coords = { path = "../geometry-coords", default-features = false }
+
+[features]
+default = ["std"]
+std = ["geometry-coords/std"]
+libm = ["geometry-coords/libm"]
+
+[lints]
+workspace = true

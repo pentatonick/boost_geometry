@@ -1,0 +1,436 @@
+//! The WKT serializer.
+//!
+//! Mirrors `boost/geometry/io/wkt/write.hpp` — the C++ side dispatches
+//! on the geometry tag to a per-kind stream inserter (`wkt_point`,
+//! `wkt_range`, `wkt_poly`, and the multi variants) that emits the type
+//! keyword followed by the parenthesised coordinate list. This port
+//! routes every concrete model type (and [`DynGeometry`]) through the
+//! [`WriteWkt`] trait so both the owned-`String` [`to_wkt`] and the
+//! streaming [`write_wkt`] share one implementation.
+//!
+//! # Canonical output
+//!
+//! Uppercase keyword, **no space** before the opening paren, single
+//! spaces between the two ordinates of a point and after each comma-less
+//! separator is a bare `,` (no leading space). Integer-valued
+//! coordinates print without a trailing `.0` (`10`, not `10.0`);
+//! non-integer coordinates use Rust's shortest round-tripping `f64`
+//! formatting. Example: `POINT(10 10)`,
+//! `POLYGON((10 10,10 20,20 20,20 15,10 10))`. Matches the spacing Boost
+//! writes in `boost/geometry/io/wkt/write.hpp` (`stream_wkt` inserts no
+//! space after the type keyword and separates coordinates with a single
+//! space, points with `,`).
+//!
+//! Reference: OGC Simple Feature Access Part 1 §7 and
+//! `boost/geometry/io/wkt/write.hpp`.
+
+use alloc::string::String;
+
+use geometry_cs::CoordinateSystem;
+use geometry_model::{
+    DynGeometry, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point, Polygon, Ring,
+};
+use geometry_trait::{
+    Geometry, Linestring as LinestringTrait, MultiLinestring as MultiLinestringTrait,
+    MultiPoint as MultiPointTrait, MultiPolygon as MultiPolygonTrait, Point as PointTrait,
+    Polygon as PolygonTrait, Ring as RingTrait,
+};
+
+/// Serialise a geometry to a canonical WKT [`String`].
+///
+/// A thin wrapper over [`write_wkt`] that owns the output buffer. The
+/// canonical spacing and number format are: uppercase keyword, no space
+/// before `(`, coordinates separated by a single space, points by a
+/// bare `,`, and integer-valued coordinates printed without a trailing
+/// `.0`. Mirrors `boost::geometry::wkt(g)` used as a manipulator into a
+/// `std::ostringstream` in `boost/geometry/io/wkt/write.hpp`.
+///
+/// # Examples
+///
+/// ```
+/// use geometry_cs::Cartesian;
+/// use geometry_io_wkt::to_wkt;
+/// use geometry_model::Point2D;
+///
+/// let p = Point2D::<f64, Cartesian>::new(10.0, 10.0);
+/// assert_eq!(to_wkt(&p), "POINT(10 10)");
+/// ```
+#[must_use]
+pub fn to_wkt<G: Geometry + WriteWkt>(g: &G) -> String {
+    let mut out = String::new();
+    // Writing into a `String` never fails, so the `Result` is discarded.
+    let _ = g.write_wkt(&mut out);
+    out
+}
+
+/// Serialise a geometry into any [`core::fmt::Write`] sink.
+///
+/// The streaming counterpart to [`to_wkt`]; use it to write straight
+/// into a caller-owned buffer or formatter. Mirrors the operator
+/// `<<` overload in `boost/geometry/io/wkt/write.hpp`.
+///
+/// # Errors
+///
+/// Propagates any [`core::fmt::Error`] the sink returns.
+///
+/// # Examples
+///
+/// ```
+/// use core::fmt::Write;
+/// use geometry_cs::Cartesian;
+/// use geometry_io_wkt::write_wkt;
+/// use geometry_model::Point2D;
+///
+/// let p = Point2D::<f64, Cartesian>::new(1.0, 2.0);
+/// let mut s = String::new();
+/// write_wkt(&p, &mut s).unwrap();
+/// assert_eq!(s, "POINT(1 2)");
+/// ```
+pub fn write_wkt<G: WriteWkt, W: core::fmt::Write>(g: &G, out: &mut W) -> core::fmt::Result {
+    g.write_wkt(out)
+}
+
+/// The per-kind WKT emitter, implemented for every concrete model type
+/// and for [`DynGeometry`].
+///
+/// Hidden from the public docs: callers use [`to_wkt`] / [`write_wkt`],
+/// which bound on this trait. It exists so the two entry points share
+/// one implementation per geometry kind, mirroring the tag-dispatched
+/// stream inserters in `boost/geometry/io/wkt/write.hpp`.
+#[doc(hidden)]
+pub trait WriteWkt {
+    /// Emit `self` as WKT into `out`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`core::fmt::Error`] from the sink.
+    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result;
+}
+
+/// Format one `f64` the WKT way: integer-valued numbers lose their
+/// trailing `.0`, everything else uses Rust's shortest round-tripping
+/// representation. Keeps `POINT(10 10)` free of `.0` noise while still
+/// round-tripping fractional coordinates exactly.
+fn write_scalar(out: &mut dyn core::fmt::Write, v: f64) -> core::fmt::Result {
+    if v.is_finite() && v.fract() == 0.0 {
+        // `v as i64` is exact for integer-valued f64 within i64 range;
+        // fall back to the default format for out-of-range magnitudes.
+        if v.abs() < 9.007_199_254_740_992e15 {
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "guarded by the magnitude check above; v is integer-valued"
+            )]
+            return write!(out, "{}", v as i64);
+        }
+    }
+    write!(out, "{v}")
+}
+
+/// Emit one point's ordinates as `x y` (no keyword, no parens). Shared
+/// by every coordinate-bearing kind. Only the first two dimensions are
+/// written — this is a 2D port.
+fn write_coords<P: PointTrait<Scalar = f64>>(
+    out: &mut dyn core::fmt::Write,
+    p: &P,
+) -> core::fmt::Result {
+    write_scalar(out, p.get::<0>())?;
+    out.write_char(' ')?;
+    write_scalar(out, p.get::<1>())
+}
+
+/// Emit a comma-separated coordinate list `x y,x y,…` (no surrounding
+/// parens). Shared by linestrings and rings.
+fn write_point_seq<'a, P, I>(out: &mut dyn core::fmt::Write, points: I) -> core::fmt::Result
+where
+    P: PointTrait<Scalar = f64> + 'a,
+    I: Iterator<Item = &'a P>,
+{
+    for (i, p) in points.enumerate() {
+        if i > 0 {
+            out.write_char(',')?;
+        }
+        write_coords(out, p)?;
+    }
+    Ok(())
+}
+
+/// Emit `((outer),(hole),…)` for a polygon's rings (no keyword). Shared
+/// by `POLYGON` and each member of `MULTIPOLYGON`.
+fn write_polygon_rings<Pg>(out: &mut dyn core::fmt::Write, pg: &Pg) -> core::fmt::Result
+where
+    Pg: PolygonTrait,
+    Pg::Point: PointTrait<Scalar = f64>,
+{
+    out.write_char('(')?;
+    out.write_char('(')?;
+    write_point_seq(out, pg.exterior().points())?;
+    out.write_char(')')?;
+    for ring in pg.interiors() {
+        out.write_char(',')?;
+        out.write_char('(')?;
+        write_point_seq(out, ring.points())?;
+        out.write_char(')')?;
+    }
+    out.write_char(')')
+}
+
+impl<Cs: CoordinateSystem> WriteWkt for Point<f64, 2, Cs> {
+    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
+        out.write_str("POINT(")?;
+        write_coords(out, self)?;
+        out.write_char(')')
+    }
+}
+
+impl<P: PointTrait<Scalar = f64>> WriteWkt for Linestring<P> {
+    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
+        // OGC WKT spells an empty geometry `<TYPE> EMPTY`, not `<TYPE>()`
+        // — the latter is not grammar the reader (or Boost) accepts.
+        if self.points().next().is_none() {
+            return out.write_str("LINESTRING EMPTY");
+        }
+        out.write_str("LINESTRING(")?;
+        write_point_seq(out, self.points())?;
+        out.write_char(')')
+    }
+}
+
+// `Ring` / `Polygon` carry two const-generic booleans (clockwise,
+// closed). Pinning the `WriteWkt` impls to Boost's defaults
+// (`true, true`) — the shape every `DynGeometry` variant is built from —
+// keeps const-generic inference unambiguous at the `to_wkt(&ring)` call
+// site; a ring's serialisation does not depend on those flags anyway.
+impl<P: PointTrait<Scalar = f64>> WriteWkt for Ring<P, true, true> {
+    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
+        // A bare ring serialises as a single-ring polygon — the OGC WKT
+        // grammar has no standalone RING keyword.
+        if self.points().next().is_none() {
+            return out.write_str("POLYGON EMPTY");
+        }
+        out.write_str("POLYGON((")?;
+        write_point_seq(out, self.points())?;
+        out.write_str("))")
+    }
+}
+
+impl<P: PointTrait<Scalar = f64>> WriteWkt for Polygon<P, true, true> {
+    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
+        // A polygon with no exterior vertices is empty.
+        if self.exterior().points().next().is_none() {
+            return out.write_str("POLYGON EMPTY");
+        }
+        out.write_str("POLYGON")?;
+        write_polygon_rings(out, self)
+    }
+}
+
+impl<P: PointTrait<Scalar = f64>> WriteWkt for MultiPoint<P> {
+    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
+        if self.points().next().is_none() {
+            return out.write_str("MULTIPOINT EMPTY");
+        }
+        out.write_str("MULTIPOINT(")?;
+        for (i, p) in self.points().enumerate() {
+            if i > 0 {
+                out.write_char(',')?;
+            }
+            out.write_char('(')?;
+            write_coords(out, p)?;
+            out.write_char(')')?;
+        }
+        out.write_char(')')
+    }
+}
+
+impl<L> WriteWkt for MultiLinestring<L>
+where
+    L: LinestringTrait,
+    L::Point: PointTrait<Scalar = f64>,
+{
+    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
+        if self.linestrings().next().is_none() {
+            return out.write_str("MULTILINESTRING EMPTY");
+        }
+        out.write_str("MULTILINESTRING(")?;
+        for (i, ls) in self.linestrings().enumerate() {
+            if i > 0 {
+                out.write_char(',')?;
+            }
+            out.write_char('(')?;
+            write_point_seq(out, ls.points())?;
+            out.write_char(')')?;
+        }
+        out.write_char(')')
+    }
+}
+
+impl<Pg> WriteWkt for MultiPolygon<Pg>
+where
+    Pg: PolygonTrait,
+    Pg::Point: PointTrait<Scalar = f64>,
+{
+    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
+        if self.polygons().next().is_none() {
+            return out.write_str("MULTIPOLYGON EMPTY");
+        }
+        out.write_str("MULTIPOLYGON(")?;
+        for (i, pg) in self.polygons().enumerate() {
+            if i > 0 {
+                out.write_char(',')?;
+            }
+            write_polygon_rings(out, pg)?;
+        }
+        out.write_char(')')
+    }
+}
+
+impl<Cs: CoordinateSystem> WriteWkt for DynGeometry<f64, Cs> {
+    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
+        // Only the `GeometryCollection` arm nests; the leaf/multi arms
+        // delegate to their own non-recursive writers. Walk the nesting
+        // with an explicit stack rather than recursion so a deeply nested
+        // `DynGeometry` cannot overflow the native stack (an uncatchable
+        // process abort). Each stack item is a fragment of pending work.
+        enum Frag<'a, Cs: CoordinateSystem> {
+            /// Emit this geometry (a leaf writes directly; a collection
+            /// pushes its own open/members/close fragments).
+            Geom(&'a DynGeometry<f64, Cs>),
+            /// Emit a literal (open paren, comma, or close paren).
+            Lit(&'static str),
+        }
+
+        let mut stack = alloc::vec![Frag::Geom(self)];
+        while let Some(frag) = stack.pop() {
+            match frag {
+                Frag::Lit(s) => out.write_str(s)?,
+                Frag::Geom(g) => match g {
+                    DynGeometry::Point(p) => p.write_wkt(out)?,
+                    DynGeometry::LineString(ls) => ls.write_wkt(out)?,
+                    DynGeometry::Polygon(pg) => pg.write_wkt(out)?,
+                    DynGeometry::MultiPoint(mp) => mp.write_wkt(out)?,
+                    DynGeometry::MultiLineString(mls) => mls.write_wkt(out)?,
+                    DynGeometry::MultiPolygon(mpg) => mpg.write_wkt(out)?,
+                    DynGeometry::GeometryCollection(items) => {
+                        if items.is_empty() {
+                            out.write_str("GEOMETRYCOLLECTION EMPTY")?;
+                            continue;
+                        }
+                        // Push in reverse so they pop in source order:
+                        // "(", g0, ",", g1, ",", …, ")". The stack is LIFO.
+                        stack.push(Frag::Lit(")"));
+                        for (i, item) in items.iter().enumerate().rev() {
+                            stack.push(Frag::Geom(item));
+                            if i > 0 {
+                                stack.push(Frag::Lit(","));
+                            }
+                        }
+                        stack.push(Frag::Lit("GEOMETRYCOLLECTION("));
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Canonical-output witnesses. Mirrors the string-equality checks in
+    //! `boost/geometry/test/io/wkt/wkt.cpp`.
+    #![allow(
+        clippy::float_cmp,
+        reason = "coordinates are exact integer literals in these fixtures"
+    )]
+
+    use super::*;
+    use alloc::vec;
+    use geometry_cs::Cartesian;
+    use geometry_model::Point2D;
+
+    type Pt = Point2D<f64, Cartesian>;
+
+    #[test]
+    fn point_canonical() {
+        let p = Pt::new(10.0, 10.0);
+        assert_eq!(to_wkt(&p), "POINT(10 10)");
+    }
+
+    #[test]
+    fn nested_collection_writer_is_iterative_and_correct() {
+        use geometry_model::DynGeometry;
+        // The DynGeometry writer walks nesting with an explicit stack, not
+        // recursion. Verify it emits the same nested output as before...
+        let g = DynGeometry::<f64, Cartesian>::GeometryCollection(vec![
+            DynGeometry::Point(Pt::new(1.0, 1.0)),
+            DynGeometry::GeometryCollection(vec![DynGeometry::Point(Pt::new(2.0, 2.0))]),
+        ]);
+        assert_eq!(
+            to_wkt(&g),
+            "GEOMETRYCOLLECTION(POINT(1 1),GEOMETRYCOLLECTION(POINT(2 2)))"
+        );
+        // ...and does not overflow the stack on a deeply nested value.
+        let mut deep = DynGeometry::<f64, Cartesian>::Point(Pt::new(0.0, 0.0));
+        for _ in 0..200_000 {
+            deep = DynGeometry::GeometryCollection(vec![deep]);
+        }
+        assert!(to_wkt(&deep).starts_with("GEOMETRYCOLLECTION("));
+        core::mem::forget(deep); // avoid the still-recursive value Drop
+    }
+
+    #[test]
+    fn fractional_coord_round_trips() {
+        let p = Pt::new(1.5, -2.25);
+        assert_eq!(to_wkt(&p), "POINT(1.5 -2.25)");
+    }
+
+    #[test]
+    fn linestring_canonical() {
+        let ls = Linestring(vec![
+            Pt::new(10.0, 10.0),
+            Pt::new(20.0, 20.0),
+            Pt::new(30.0, 40.0),
+        ]);
+        assert_eq!(to_wkt(&ls), "LINESTRING(10 10,20 20,30 40)");
+    }
+
+    #[test]
+    fn polygon_with_hole_canonical() {
+        let outer = Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(0.0, 10.0),
+            Pt::new(10.0, 10.0),
+            Pt::new(10.0, 0.0),
+            Pt::new(0.0, 0.0),
+        ]);
+        let hole = Ring::from_vec(vec![
+            Pt::new(2.0, 2.0),
+            Pt::new(2.0, 4.0),
+            Pt::new(4.0, 4.0),
+            Pt::new(4.0, 2.0),
+            Pt::new(2.0, 2.0),
+        ]);
+        let poly = Polygon::with_inners(outer, vec![hole]);
+        assert_eq!(
+            to_wkt(&poly),
+            "POLYGON((0 0,0 10,10 10,10 0,0 0),(2 2,2 4,4 4,4 2,2 2))"
+        );
+    }
+
+    #[test]
+    fn multipoint_canonical() {
+        let mp = MultiPoint(vec![Pt::new(10.0, 10.0), Pt::new(20.0, 20.0)]);
+        assert_eq!(to_wkt(&mp), "MULTIPOINT((10 10),(20 20))");
+    }
+
+    #[test]
+    fn geometry_collection_canonical() {
+        let g = DynGeometry::<f64, Cartesian>::GeometryCollection(vec![
+            DynGeometry::Point(Pt::new(10.0, 10.0)),
+            DynGeometry::LineString(Linestring(vec![Pt::new(10.0, 10.0), Pt::new(20.0, 20.0)])),
+        ]);
+        assert_eq!(
+            to_wkt(&g),
+            "GEOMETRYCOLLECTION(POINT(10 10),LINESTRING(10 10,20 20))"
+        );
+    }
+}

@@ -1,0 +1,36 @@
+[package]
+name = "geometry-adapt"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+description = "Adapters and registration macros for foreign point/linestring/polygon types."
+readme = "README.md"
+
+[features]
+default = ["std"]
+std = [
+    "geometry-coords/std",
+    "geometry-cs/std",
+    "geometry-trait/std",
+]
+libm = [
+    "geometry-coords/libm",
+    "geometry-trait/libm",
+]
+
+[dependencies]
+geometry-tag    = { path = "../geometry-tag" }
+geometry-coords = { path = "../geometry-coords", default-features = false }
+geometry-cs     = { path = "../geometry-cs",     default-features = false }
+geometry-trait  = { path = "../geometry-trait",  default-features = false }
+
+[dev-dependencies]
+geometry-algorithm = { path = "../geometry-algorithm" }
+geometry-cs        = { path = "../geometry-cs" }    # bring std for tests
+geometry-model     = { path = "../geometry-model" }
+geometry-trait     = { path = "../geometry-trait" } # bring std for tests
+
+[lints]
+workspace = true

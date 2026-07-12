@@ -1,1 +1,23 @@
-/target
+# Rust build artefacts
+/target/
+**/target/
+
+# Cargo lockfile — kept for binaries, not for libraries.
+# This workspace ships libraries only, so the lockfile is not committed.
+Cargo.lock
+
+# IDE and editor cruft
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Vendored Boost.Geometry C++ tree — the porting reference, not the
+# port's own source. Carries its own .git; do not commit it.
+/geometry/
+
+# Local agent/session runtime state.
+/.claude/

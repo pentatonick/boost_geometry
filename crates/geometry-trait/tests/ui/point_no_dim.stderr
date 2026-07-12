@@ -1,0 +1,7 @@
+error[E0046]: not all trait items implemented, missing: `DIM`
+  --> tests/ui/point_no_dim.rs:20:1
+   |
+20 | impl Point for NoDim {
+   | ^^^^^^^^^^^^^^^^^^^^ missing `DIM` in implementation
+   |
+   = help: implement the missing item: `const DIM: usize = 42;`
