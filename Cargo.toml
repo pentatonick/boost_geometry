@@ -1,0 +1,8 @@
+[package]
+name = "boost_geometry"
+version = "0.0.0"
+edition = "2024"
+description = "A Rust port of Boost.Geometry"
+license = "BSL-1.0"
+
+[dependencies]
