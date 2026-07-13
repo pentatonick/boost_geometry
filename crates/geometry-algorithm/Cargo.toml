@@ -28,22 +28,22 @@ libm = [
 ]
 
 [dependencies]
-geometry-coords   = { workspace = true, default-features = false }
-geometry-tag      = { workspace = true, default-features = false }
-geometry-cs       = { workspace = true, default-features = false }
-geometry-trait    = { workspace = true, default-features = false }
-geometry-strategy = { workspace = true, default-features = false }
-geometry-model    = { workspace = true, default-features = false }
+geometry-coords   = { version = "0.0.5", path = "../geometry-coords",   default-features = false }
+geometry-tag      = { version = "0.0.5", path = "../geometry-tag",      default-features = false }
+geometry-cs       = { version = "0.0.5", path = "../geometry-cs",       default-features = false }
+geometry-trait    = { version = "0.0.5", path = "../geometry-trait",    default-features = false }
+geometry-strategy = { version = "0.0.5", path = "../geometry-strategy", default-features = false }
+geometry-model    = { version = "0.0.5", path = "../geometry-model",    default-features = false }
 
 [dev-dependencies]
-geometry-adapt    = { workspace = true, features = ["std"] }
-geometry-coords   = { workspace = true, features = ["std"] }
-geometry-cs       = { workspace = true, features = ["std"] }
-geometry-derive   = { workspace = true }
-geometry-model    = { workspace = true, features = ["std"] }
-geometry-strategy = { workspace = true, features = ["std"] }
-geometry-tag      = { workspace = true }
-geometry-trait    = { workspace = true, features = ["std"] }
+geometry-adapt    = { path = "../geometry-adapt" }
+geometry-coords   = { path = "../geometry-coords" }
+geometry-cs       = { path = "../geometry-cs" }
+geometry-derive   = { path = "../geometry-derive" }
+geometry-model    = { path = "../geometry-model" }
+geometry-strategy = { path = "../geometry-strategy" }
+geometry-tag      = { path = "../geometry-tag" }
+geometry-trait    = { path = "../geometry-trait" }
 
 [lints]
 workspace = true
