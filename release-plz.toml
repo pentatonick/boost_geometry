@@ -1,7 +1,16 @@
 [workspace]
-# All crates inherit version from [workspace.package] — bumped in lockstep
-# via the release-plz release PR. Publishing, tagging, and the GitHub
-# release are handled by .github/workflows/publish.yml on `v*` tag push.
+# Each crate declares its own version; intra-workspace dependency version
+# requirements stay centralized in [workspace.dependencies] in the root
+# Cargo.toml, and release-plz rewrites them on bump. Cargo's
+# [workspace.package] version inheritance is NOT used: release-plz only
+# releases (and rewrites requirements for) crates with changes, but the
+# inheritance bumps every crate's version implicitly, leaving the
+# requirements on unchanged crates stale — `cargo update` then fails with
+# "failed to select a version" during the release PR job.
+# The shared `version_group` below keeps the versions of crates released
+# together aligned to the same next version.
+# Publishing, tagging, and the GitHub release are handled by
+# .github/workflows/publish.yml on `v*` tag push.
 publish = false
 git_tag_enable = false
 git_release_enable = false
@@ -14,9 +23,82 @@ changelog_update = true
 # (#14 → #15 → #16).
 release_commits = "^(feat|fix|perf|docs|refactor|build|deps)"
 
-# Tag the workspace release (one tag for the lockstep version, created on
+# Tag the workspace release (one tag for the release version, created on
 # the facade crate only). The tag push triggers publish.yml.
 [[package]]
 name = "boost_geometry"
 git_tag_enable = true
 git_tag_name = "v{{ version }}"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-tag"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-coords"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-cs"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-trait"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-model"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-strategy"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-algorithm"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-adapt"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-adapt-nalgebra"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-adapt-geo-types"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-derive"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-overlay"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-rtree"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-io-svg"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-io-geojson"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-io-wkt"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-io-wkb"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-proj"
+version_group = "lockstep"
