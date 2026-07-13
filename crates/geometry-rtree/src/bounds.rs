@@ -85,9 +85,18 @@ impl Bounds {
     /// Used by nearest-neighbour pruning.
     #[must_use]
     pub fn min_distance_to(&self, p: [f64; 2]) -> f64 {
+        self.comparable_min_distance_to(p).sqrt()
+    }
+
+    /// The SQUARED minimum distance from a query point to this box —
+    /// same ordering as [`min_distance_to`](Self::min_distance_to)
+    /// without the square root, for hot comparison paths. The analogue
+    /// of `boost::geometry::comparable_distance`.
+    #[must_use]
+    pub fn comparable_min_distance_to(&self, p: [f64; 2]) -> f64 {
         let dx = clamp_gap(p[0], self.min[0], self.max[0]);
         let dy = clamp_gap(p[1], self.min[1], self.max[1]);
-        (dx * dx + dy * dy).sqrt()
+        dx * dx + dy * dy
     }
 
     /// The centroid, used by the STR bulk-load sort.
@@ -169,6 +178,7 @@ mod tests {
         assert_eq!(b.min_distance_to([1.0, 1.0]), 0.0); // inside
         assert_eq!(b.min_distance_to([5.0, 1.0]), 3.0); // right of it
         assert_eq!(b.min_distance_to([5.0, 6.0]), 5.0); // corner (3,4)→5
+        assert_eq!(b.comparable_min_distance_to([5.0, 6.0]), 25.0);
     }
 
     #[test]

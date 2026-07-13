@@ -53,6 +53,22 @@ impl Predicate {
             Predicate::Contains(q) => node.intersects(q),
         }
     }
+
+    /// Whether EVERY value in a subtree with box `node` is a guaranteed
+    /// match — the containment fast path. A covered subtree is dumped
+    /// without per-node or per-value tests.
+    ///
+    /// Sound because a value's box ⊆ its node's box: for `Intersects`
+    /// and `Within`, `q.contains(node)` implies every value below
+    /// matches. `Contains` needs value ⊇ q, which node ⊆ q says nothing
+    /// about, so it never takes the fast path.
+    #[must_use]
+    pub(crate) fn covers_all(&self, node: &Bounds) -> bool {
+        match self {
+            Predicate::Intersects(q) | Predicate::Within(q) => q.contains(node),
+            Predicate::Contains(_) => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -86,5 +102,37 @@ mod tests {
         let p = Predicate::Intersects(Bounds::new([0.0, 0.0], [1.0, 1.0]));
         assert!(p.could_match(&Bounds::new([0.5, 0.5], [9.0, 9.0])));
         assert!(!p.could_match(&Bounds::new([5.0, 5.0], [9.0, 9.0])));
+    }
+
+    const QUERY: Bounds = Bounds::new([0.0, 0.0], [10.0, 10.0]);
+    const CONTAINED: Bounds = Bounds::new([2.0, 2.0], [3.0, 3.0]);
+    const OVERLAPPING: Bounds = Bounds::new([5.0, 5.0], [15.0, 15.0]);
+    const DISJOINT: Bounds = Bounds::new([20.0, 20.0], [30.0, 30.0]);
+
+    #[test]
+    fn covers_all_intersects() {
+        let p = Predicate::Intersects(QUERY);
+        assert!(p.covers_all(&CONTAINED));
+        assert!(p.covers_all(&QUERY));
+        assert!(!p.covers_all(&OVERLAPPING));
+        assert!(!p.covers_all(&DISJOINT));
+    }
+
+    #[test]
+    fn covers_all_within() {
+        let p = Predicate::Within(QUERY);
+        assert!(p.covers_all(&CONTAINED));
+        assert!(p.covers_all(&QUERY));
+        assert!(!p.covers_all(&OVERLAPPING));
+        assert!(!p.covers_all(&DISJOINT));
+    }
+
+    #[test]
+    fn covers_all_contains_never() {
+        let p = Predicate::Contains(QUERY);
+        assert!(!p.covers_all(&CONTAINED));
+        assert!(!p.covers_all(&QUERY));
+        assert!(!p.covers_all(&OVERLAPPING));
+        assert!(!p.covers_all(&DISJOINT));
     }
 }

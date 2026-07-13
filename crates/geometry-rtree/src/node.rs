@@ -4,7 +4,6 @@
 //! its node variant with a runtime visitor; the port uses a plain enum
 //! and lets `match` be the visitor — the same shape, no vtable.
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::bounds::{Bounds, union_all};
@@ -20,7 +19,7 @@ pub enum Node<T> {
     /// Values at the bottom of the tree.
     Leaf(Vec<T>),
     /// Child subtrees, each paired with its bounding box.
-    Branch(Vec<(Bounds, Box<Node<T>>)>),
+    Branch(Vec<(Bounds, Node<T>)>),
 }
 
 impl<T: Indexable> Node<T> {
@@ -63,7 +62,7 @@ impl<T: Indexable> Node<T> {
     pub fn value_count(&self) -> usize {
         match self {
             Node::Leaf(values) => values.len(),
-            Node::Branch(children) => children.iter().map(|(_, c)| c.value_count()).sum(),
+            Node::Branch(children) => children.iter().map(|(_, child)| child.value_count()).sum(),
         }
     }
 
@@ -73,7 +72,11 @@ impl<T: Indexable> Node<T> {
         match self {
             Node::Leaf(_) => 1,
             Node::Branch(children) => {
-                1 + children.iter().map(|(_, c)| c.height()).max().unwrap_or(0)
+                1 + children
+                    .iter()
+                    .map(|(_, child)| child.height())
+                    .max()
+                    .unwrap_or(0)
             }
         }
     }
@@ -83,7 +86,6 @@ impl<T: Indexable> Node<T> {
 mod tests {
     use super::Node;
     use crate::bounds::Bounds;
-    use alloc::boxed::Box;
 
     #[test]
     fn leaf_bounds_union_of_values() {
@@ -101,8 +103,8 @@ mod tests {
         let leaf_a: Node<Bounds> = Node::Leaf(alloc::vec![Bounds::point([0.0, 0.0])]);
         let leaf_b: Node<Bounds> = Node::Leaf(alloc::vec![Bounds::point([5.0, 5.0])]);
         let branch: Node<Bounds> = Node::Branch(alloc::vec![
-            (leaf_a.bounds().unwrap(), Box::new(leaf_a)),
-            (leaf_b.bounds().unwrap(), Box::new(leaf_b)),
+            (leaf_a.bounds().unwrap(), leaf_a),
+            (leaf_b.bounds().unwrap(), leaf_b),
         ]);
         assert_eq!(branch.bounds(), Some(Bounds::new([0.0, 0.0], [5.0, 5.0])));
         assert_eq!(branch.height(), 2);
