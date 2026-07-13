@@ -1,6 +1,7 @@
 # boost_geometry
 
 [![CI](https://github.com/pentatonick/boost_geometry/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pentatonick/boost_geometry/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/pentatonick/boost_geometry/branch/main/graph/badge.svg)](https://codecov.io/gh/pentatonick/boost_geometry)
 [![Publish](https://github.com/pentatonick/boost_geometry/actions/workflows/publish.yml/badge.svg)](https://github.com/pentatonick/boost_geometry/actions/workflows/publish.yml)
 [![crates.io](https://img.shields.io/crates/v/boost_geometry.svg)](https://crates.io/crates/boost_geometry)
 [![docs.rs](https://img.shields.io/docsrs/boost_geometry)](https://docs.rs/boost_geometry)
