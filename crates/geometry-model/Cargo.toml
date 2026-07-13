@@ -8,7 +8,7 @@ license-file.workspace = true
 repository.workspace   = true
 keywords.workspace     = true
 categories.workspace   = true
-description = "Built-in concrete geometry types (Point, Segment, Box, Linestring, Polygon, …)."
+description = "Built-in concrete geometry types (Point, Segment, Box, Linestring, Polygon, …) mirroring Boost.Geometry models — or bring your own via the concept traits."
 readme = "README.md"
 
 [features]

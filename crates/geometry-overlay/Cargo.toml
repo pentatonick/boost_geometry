@@ -8,7 +8,7 @@ license-file.workspace = true
 repository.workspace   = true
 keywords.workspace     = true
 categories.workspace   = true
-description = "Segment-intersection kernel, turn graph, and boolean overlay (intersection/union/difference) for the geometry port."
+description = "Segment-intersection kernel, turn graph, and boolean overlay (intersection/union/difference) for the Boost.Geometry Rust port."
 readme = "README.md"
 
 [features]

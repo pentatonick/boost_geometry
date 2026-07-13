@@ -8,7 +8,7 @@ license-file.workspace = true
 repository.workspace   = true
 keywords.workspace     = true
 categories.workspace   = true
-description = "Facade crate re-exporting the geometry workspace as a single API surface."
+description = "Rust port of Boost.Geometry — same design philosophy (concepts, tags, strategy-based dispatch), works with your own point/geometry types, re-exported as a single API surface."
 readme = "../../README.md"
 
 [package.metadata.docs.rs]
