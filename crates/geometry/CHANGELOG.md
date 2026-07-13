@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/pentatonick/boost_geometry/compare/v0.0.5...v0.0.6) - 2026-07-13
+
+### Other
+
+- decouple crate versions from workspace.package for release-plz
+- revert to per-crate intra-workspace version requirements
+- add a generated no_std support table to the README
+- inherit intra-workspace crate versions from workspace.dependencies
+- upload coverage to Codecov and add badge
+- anchor crate descriptions to Boost.Geometry port
+
 ## [0.0.5](https://github.com/pentatonick/boost_geometry/compare/v0.0.4...v0.0.5) - 2026-07-12
 
 ### Other
