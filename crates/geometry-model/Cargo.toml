@@ -22,17 +22,17 @@ libm = ["geometry-coords/libm", "geometry-trait/libm"]
 serde = ["dep:serde"]
 
 [dependencies]
-geometry-tag    = { version = "0.0.5", path = "../geometry-tag" }
-geometry-coords = { version = "0.0.5", path = "../geometry-coords", default-features = false }
-geometry-cs     = { version = "0.0.5", path = "../geometry-cs",     default-features = false }
-geometry-trait  = { version = "0.0.5", path = "../geometry-trait",  default-features = false }
+geometry-tag    = { workspace = true }
+geometry-coords = { workspace = true, default-features = false }
+geometry-cs     = { workspace = true, default-features = false }
+geometry-trait  = { workspace = true, default-features = false }
 serde           = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
 
 [dev-dependencies]
 trybuild        = "1"
-geometry-coords = { path = "../geometry-coords" }   # bring std for tests
-geometry-cs     = { path = "../geometry-cs" }       # bring std for tests
-geometry-trait  = { path = "../geometry-trait" }    # bring std for tests
+geometry-coords = { workspace = true, features = ["std"] } # bring std for tests
+geometry-cs     = { workspace = true, features = ["std"] } # bring std for tests
+geometry-trait  = { workspace = true, features = ["std"] } # bring std for tests
 serde_json      = "1"                               # serde round-trip tests
 
 [lints]
