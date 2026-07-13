@@ -84,4 +84,4 @@ jobs:
       - name: Create GitHub release
         run: gh release create "${GITHUB_REF_NAME}" --generate-notes
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN_BOOST_GEOMETRY }}
