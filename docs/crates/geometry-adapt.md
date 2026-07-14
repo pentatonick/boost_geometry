@@ -38,10 +38,13 @@ documented in the crate's `lib.rs` in order from least to most indirect:
   Either wrapper can also re-tag a type that already implements `Point`, so
   a `MyPoint` from path 1 can be reused as a geographic point without a
   second adapter type.
-* **`register_linestring!` / `register_ring!` / `register_polygon!`**
+* **`register_linestring!` / `register_ring!` / `register_polygon!` /
+  `register_multi_point!` / `register_multi_linestring!` /
+  `register_multi_polygon!`**
   (declarative, `#[macro_export]`ed) — container-level adaptation, since
   coherence also forbids a blanket `impl<P: Point, C: AsRef<[P]>> Linestring for C`.
-  Mirrors `BOOST_GEOMETRY_REGISTER_LINESTRING` and siblings.
+  Mirrors `BOOST_GEOMETRY_REGISTER_LINESTRING` and siblings, including the
+  three multi-geometry registration headers.
 
 ## Who depends on this
 

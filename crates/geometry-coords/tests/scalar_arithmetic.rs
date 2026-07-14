@@ -16,3 +16,9 @@ fn float_abs_matches_std() {
     assert!((CoordinateScalar::abs(-2.5_f64) - 2.5).abs() < 1e-15);
     assert!((CoordinateScalar::abs(-2.5_f32) - 2.5).abs() < 1e-6);
 }
+
+#[test]
+fn integer_square_root_rejects_unpromoted_arithmetic() {
+    let panic = std::panic::catch_unwind(|| CoordinateScalar::sqrt(4_i32));
+    assert!(panic.is_err());
+}

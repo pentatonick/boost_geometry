@@ -9,21 +9,26 @@
 //! (`algorithms/{crosses,overlaps,touches}.hpp`) are then thin tests on
 //! that matrix.
 //!
-//! v1 scope: polygon × polygon (areal × areal), computed from the turn
-//! graph plus interior sampling. The matrix is filled well enough for
-//! the three predicates; the full mask-string interface is deferred.
+//! Cartesian point, linestring, and polygon pairs are dispatched through the
+//! same matrix interface. Polygon relations include interior rings and exact
+//! point/curve dimensions for colocated boundaries; the public mask-string
+//! interface consumes the completed matrix.
 
-use geometry_coords::CoordinateScalar;
+#![allow(
+    clippy::float_cmp,
+    reason = "exact equality identifies stored endpoint identity for DE-9IM boundary classification"
+)]
+
+use geometry_coords::{CoordinateScalar, precise_math};
 use geometry_cs::{CartesianFamily, CoordinateSystem};
-use geometry_model::{Polygon, Ring};
-use geometry_tag::SameAs;
-use geometry_trait::{Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait};
+use geometry_tag::{LinestringTag, PointTag, PolygonTag, SameAs};
+use geometry_trait::{
+    Geometry, Linestring as LinestringTrait, Point, PointMut, Polygon as PolygonTrait,
+    Ring as RingTrait,
+};
 
 use crate::operation::OverlayError;
 use crate::predicate::range_guard::polygon_in_range;
-use crate::surface_point::point_on_surface;
-use crate::turn::info::Method;
-use crate::turn::{RingKind, get_turns_ring_ring};
 
 /// The dimension of an intersection cell in a [`De9im`] matrix.
 ///
@@ -73,6 +78,18 @@ pub mod feature {
 }
 
 impl De9im {
+    /// Swap the two related geometries by transposing the matrix.
+    #[must_use]
+    pub fn transposed(self) -> Self {
+        let mut result = [[Dimension::Empty; 3]; 3];
+        for (row, cells) in self.m.iter().enumerate() {
+            for (column, dimension) in cells.iter().enumerate() {
+                result[column][row] = *dimension;
+            }
+        }
+        Self { m: result }
+    }
+
     /// The `[Interior][Interior]` cell — do the two interiors meet, and
     /// in what dimension.
     #[must_use]
@@ -159,32 +176,685 @@ impl From<OverlayError> for RelateError {
     }
 }
 
+/// Per-pair DE-9IM relation strategy.
+///
+/// Mirrors Boost's tag-dispatched implementations under
+/// `algorithms/detail/relate/`.
+#[doc(hidden)]
+pub trait RelateStrategy<A, B> {
+    /// Compute the relation matrix for the ordered pair.
+    fn relate(&self, first: &A, second: &B) -> Result<De9im, OverlayError>;
+}
+
+/// Select a relation strategy from an ordered geometry-tag pair.
+#[doc(hidden)]
+pub trait RelatePairStrategy<Other> {
+    /// Strategy implementing this ordered pair.
+    type Strategy: Default;
+}
+
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RelatePointPoint;
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RelatePointLinestring;
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RelatePointPolygon;
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RelateLinestringPoint;
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RelateLinestringLinestring;
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RelateLinestringPolygon;
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RelatePolygonPoint;
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RelatePolygonLinestring;
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RelatePolygonPolygon;
+
+impl RelatePairStrategy<PointTag> for PointTag {
+    type Strategy = RelatePointPoint;
+}
+impl RelatePairStrategy<LinestringTag> for PointTag {
+    type Strategy = RelatePointLinestring;
+}
+impl RelatePairStrategy<PolygonTag> for PointTag {
+    type Strategy = RelatePointPolygon;
+}
+impl RelatePairStrategy<PointTag> for LinestringTag {
+    type Strategy = RelateLinestringPoint;
+}
+impl RelatePairStrategy<LinestringTag> for LinestringTag {
+    type Strategy = RelateLinestringLinestring;
+}
+impl RelatePairStrategy<PolygonTag> for LinestringTag {
+    type Strategy = RelateLinestringPolygon;
+}
+impl RelatePairStrategy<PointTag> for PolygonTag {
+    type Strategy = RelatePolygonPoint;
+}
+impl RelatePairStrategy<LinestringTag> for PolygonTag {
+    type Strategy = RelatePolygonLinestring;
+}
+impl RelatePairStrategy<PolygonTag> for PolygonTag {
+    type Strategy = RelatePolygonPolygon;
+}
+
+type PairStrategy<A, B> =
+    <<A as Geometry>::Kind as RelatePairStrategy<<B as Geometry>::Kind>>::Strategy;
+
+/// Compute the DE-9IM matrix for a supported pointlike, linear, or areal pair.
+///
+/// Mirrors the pair dispatch in
+/// `algorithms/detail/relate/interface.hpp:275-382`.
+///
+/// # Errors
+///
+/// Returns [`OverlayError::Unsupported`] when coordinates exceed the
+/// Cartesian predicate range.
+#[inline]
+#[must_use = "relation computation can fail and the matrix should be used"]
+pub fn relate<A, B>(first: &A, second: &B) -> Result<De9im, OverlayError>
+where
+    A: Geometry,
+    B: Geometry,
+    A::Kind: RelatePairStrategy<B::Kind>,
+    PairStrategy<A, B>: RelateStrategy<A, B> + Default,
+{
+    PairStrategy::<A, B>::default().relate(first, second)
+}
+
+impl<A, B> RelateStrategy<A, B> for RelatePointPoint
+where
+    A: Point,
+    B: Point<Scalar = A::Scalar>,
+    <A::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+    <B::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn relate(&self, first: &A, second: &B) -> Result<De9im, OverlayError> {
+        Ok(relate_point_point(first, second))
+    }
+}
+
+impl<P, L> RelateStrategy<P, L> for RelatePointLinestring
+where
+    P: Point,
+    L: LinestringTrait<Point = P>,
+    P::Scalar: Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn relate(&self, point: &P, line: &L) -> Result<De9im, OverlayError> {
+        Ok(relate_point_linestring(point, line))
+    }
+}
+
+impl<P, G> RelateStrategy<P, G> for RelatePointPolygon
+where
+    P: Point + Copy,
+    G: PolygonTrait<Point = P>,
+    P::Scalar: Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn relate(&self, point: &P, polygon: &G) -> Result<De9im, OverlayError> {
+        Ok(relate_point_polygon(point, polygon))
+    }
+}
+
+impl<L, P> RelateStrategy<L, P> for RelateLinestringPoint
+where
+    P: Point,
+    L: LinestringTrait<Point = P>,
+    P::Scalar: Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn relate(&self, line: &L, point: &P) -> Result<De9im, OverlayError> {
+        Ok(relate_point_linestring(point, line).transposed())
+    }
+}
+
+impl<A, B, P> RelateStrategy<A, B> for RelateLinestringLinestring
+where
+    A: LinestringTrait<Point = P>,
+    B: LinestringTrait<Point = P>,
+    P: Point,
+    P::Scalar: Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn relate(&self, first: &A, second: &B) -> Result<De9im, OverlayError> {
+        Ok(relate_linestring_linestring(first, second))
+    }
+}
+
+impl<L, G, P> RelateStrategy<L, G> for RelateLinestringPolygon
+where
+    L: LinestringTrait<Point = P>,
+    G: PolygonTrait<Point = P>,
+    P: Point + Copy,
+    P::Scalar: Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn relate(&self, line: &L, polygon: &G) -> Result<De9im, OverlayError> {
+        Ok(relate_linestring_polygon(line, polygon))
+    }
+}
+
+impl<G, P> RelateStrategy<G, P> for RelatePolygonPoint
+where
+    G: PolygonTrait<Point = P>,
+    P: Point + Copy,
+    P::Scalar: Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn relate(&self, polygon: &G, point: &P) -> Result<De9im, OverlayError> {
+        Ok(relate_point_polygon(point, polygon).transposed())
+    }
+}
+
+impl<G, L, P> RelateStrategy<G, L> for RelatePolygonLinestring
+where
+    G: PolygonTrait<Point = P>,
+    L: LinestringTrait<Point = P>,
+    P: Point + Copy,
+    P::Scalar: Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn relate(&self, polygon: &G, line: &L) -> Result<De9im, OverlayError> {
+        Ok(relate_linestring_polygon(line, polygon).transposed())
+    }
+}
+
+impl<A, B, P> RelateStrategy<A, B> for RelatePolygonPolygon
+where
+    A: PolygonTrait<Point = P>,
+    B: PolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn relate(&self, first: &A, second: &B) -> Result<De9im, OverlayError> {
+        relate_polygon_polygon(first, second)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Location {
+    Interior,
+    Boundary,
+    Exterior,
+}
+
+impl Location {
+    fn index(self) -> usize {
+        match self {
+            Self::Interior => feature::INTERIOR,
+            Self::Boundary => feature::BOUNDARY,
+            Self::Exterior => feature::EXTERIOR,
+        }
+    }
+}
+
+fn empty_matrix() -> De9im {
+    let mut matrix = De9im {
+        m: [[Dimension::Empty; 3]; 3],
+    };
+    matrix.m[feature::EXTERIOR][feature::EXTERIOR] = Dimension::Area;
+    matrix
+}
+
+fn relate_point_point<A, B>(first: &A, second: &B) -> De9im
+where
+    A: Point,
+    B: Point<Scalar = A::Scalar>,
+{
+    let mut matrix = empty_matrix();
+    if point_equal(first, second) {
+        matrix.m[feature::INTERIOR][feature::INTERIOR] = Dimension::Point;
+    } else {
+        matrix.m[feature::INTERIOR][feature::EXTERIOR] = Dimension::Point;
+        matrix.m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Point;
+    }
+    matrix
+}
+
+fn relate_point_linestring<P, L>(point: &P, line: &L) -> De9im
+where
+    P: Point,
+    L: LinestringTrait<Point = P>,
+    P::Scalar: Into<f64>,
+{
+    let mut matrix = empty_matrix();
+    let location = point_location_linestring(point, line);
+    matrix.m[feature::INTERIOR][location.index()] = Dimension::Point;
+    if line_has_curve(line) {
+        matrix.m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Curve;
+    }
+    let boundaries = line_boundary_points(line);
+    if boundaries
+        .iter()
+        .any(|boundary| !point_equal(point, *boundary))
+    {
+        matrix.m[feature::EXTERIOR][feature::BOUNDARY] = Dimension::Point;
+    }
+    matrix
+}
+
+fn relate_point_polygon<P, G>(point: &P, polygon: &G) -> De9im
+where
+    P: Point + Copy,
+    G: PolygonTrait<Point = P>,
+    P::Scalar: Into<f64>,
+{
+    let mut matrix = empty_matrix();
+    let location = point_location_polygon(point, polygon);
+    matrix.m[feature::INTERIOR][location.index()] = Dimension::Point;
+    matrix.m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Area;
+    matrix.m[feature::EXTERIOR][feature::BOUNDARY] = Dimension::Curve;
+    matrix
+}
+
+fn relate_linestring_linestring<A, B, P>(first: &A, second: &B) -> De9im
+where
+    A: LinestringTrait<Point = P>,
+    B: LinestringTrait<Point = P>,
+    P: Point,
+    P::Scalar: Into<f64>,
+{
+    let mut matrix = empty_matrix();
+    for point in line_boundary_points(first) {
+        let location = point_location_linestring(point, second);
+        matrix.m[feature::BOUNDARY][location.index()] = Dimension::Point;
+    }
+    for point in line_boundary_points(second) {
+        let location = point_location_linestring(point, first);
+        matrix.m[location.index()][feature::BOUNDARY] = Dimension::Point;
+    }
+
+    for_each_line_segment(first, |first1, first2| {
+        for_each_line_segment(second, |second1, second2| {
+            match segment_relation(xy(first1), xy(first2), xy(second1), xy(second2)) {
+                SegmentRelation::Disjoint => {}
+                SegmentRelation::Point(point) => {
+                    let first_location = xy_location_linestring(point, first);
+                    let second_location = xy_location_linestring(point, second);
+                    matrix.m[first_location.index()][second_location.index()] = Dimension::Point;
+                }
+                SegmentRelation::Overlap => {
+                    matrix.m[feature::INTERIOR][feature::INTERIOR] = Dimension::Curve;
+                }
+            }
+        });
+        for fraction in [0.25, 0.5, 0.75] {
+            let sample = interpolate(xy(first1), xy(first2), fraction);
+            if xy_location_linestring(sample, second) == Location::Exterior {
+                matrix.m[feature::INTERIOR][feature::EXTERIOR] = Dimension::Curve;
+            }
+        }
+    });
+    for_each_line_segment(second, |second1, second2| {
+        for fraction in [0.25, 0.5, 0.75] {
+            let sample = interpolate(xy(second1), xy(second2), fraction);
+            if xy_location_linestring(sample, first) == Location::Exterior {
+                matrix.m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Curve;
+            }
+        }
+    });
+    matrix
+}
+
+fn relate_linestring_polygon<L, G, P>(line: &L, polygon: &G) -> De9im
+where
+    L: LinestringTrait<Point = P>,
+    G: PolygonTrait<Point = P>,
+    P: Point + Copy,
+    P::Scalar: Into<f64>,
+{
+    let mut matrix = empty_matrix();
+    matrix.m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Area;
+    matrix.m[feature::EXTERIOR][feature::BOUNDARY] = Dimension::Curve;
+    for point in line_boundary_points(line) {
+        let location = point_location_polygon(point, polygon);
+        matrix.m[feature::BOUNDARY][location.index()] = Dimension::Point;
+    }
+
+    let mut boundary_crossings = 0usize;
+    for_each_line_segment(line, |line1, line2| {
+        for fraction in [0.125, 0.375, 0.625, 0.875] {
+            match xy_location_polygon(interpolate(xy(line1), xy(line2), fraction), polygon) {
+                Location::Interior => {
+                    matrix.m[feature::INTERIOR][feature::INTERIOR] = Dimension::Curve;
+                }
+                Location::Boundary => {
+                    matrix.m[feature::INTERIOR][feature::BOUNDARY] = Dimension::Point;
+                }
+                Location::Exterior => {
+                    matrix.m[feature::INTERIOR][feature::EXTERIOR] = Dimension::Curve;
+                }
+            }
+        }
+        for_each_polygon_segment(polygon, |polygon1, polygon2| {
+            if let SegmentRelation::Point(point) =
+                segment_relation(xy(line1), xy(line2), xy(polygon1), xy(polygon2))
+            {
+                boundary_crossings += 1;
+                let line_location = xy_location_linestring(point, line);
+                matrix.m[line_location.index()][feature::BOUNDARY] = Dimension::Point;
+            }
+        });
+    });
+    if boundary_crossings >= 2 {
+        matrix.m[feature::INTERIOR][feature::INTERIOR] = Dimension::Curve;
+    }
+    matrix
+}
+
+fn point_equal<A, B>(first: &A, second: &B) -> bool
+where
+    A: Point,
+    B: Point<Scalar = A::Scalar>,
+{
+    first.get::<0>() == second.get::<0>() && first.get::<1>() == second.get::<1>()
+}
+
+fn line_has_curve<L>(line: &L) -> bool
+where
+    L: LinestringTrait,
+    L::Point: Point,
+{
+    let mut points = line.points();
+    let Some(mut previous) = points.next() else {
+        return false;
+    };
+    for current in points {
+        if !point_equal(previous, current) {
+            return true;
+        }
+        previous = current;
+    }
+    false
+}
+
+fn line_boundary_points<L>(line: &L) -> alloc::vec::Vec<&L::Point>
+where
+    L: LinestringTrait,
+    L::Point: Point,
+{
+    let points = line.points();
+    let Some(first) = points.clone().next() else {
+        return alloc::vec::Vec::new();
+    };
+    let last = points
+        .last()
+        .expect("a non-empty iterator has a last point");
+    if point_equal(first, last) {
+        alloc::vec::Vec::new()
+    } else {
+        alloc::vec![first, last]
+    }
+}
+
+fn point_location_linestring<P, L>(point: &P, line: &L) -> Location
+where
+    P: Point,
+    L: LinestringTrait<Point = P>,
+    P::Scalar: Into<f64>,
+{
+    xy_location_linestring(xy(point), line)
+}
+
+fn xy_location_linestring<L>(point: [f64; 2], line: &L) -> Location
+where
+    L: LinestringTrait,
+    L::Point: Point,
+    <L::Point as Point>::Scalar: Into<f64>,
+{
+    for boundary in line_boundary_points(line) {
+        if xy_equal(point, xy(boundary)) {
+            return Location::Boundary;
+        }
+    }
+    let mut interior = false;
+    for_each_line_segment(line, |first, second| {
+        if point_on_segment(point, xy(first), xy(second)) {
+            interior = true;
+        }
+    });
+    if interior {
+        Location::Interior
+    } else {
+        Location::Exterior
+    }
+}
+
+fn point_location_polygon<P, G>(point: &P, polygon: &G) -> Location
+where
+    P: Point + Copy,
+    G: PolygonTrait<Point = P>,
+    P::Scalar: Into<f64>,
+{
+    xy_location_polygon(xy(point), polygon)
+}
+
+fn xy_location_polygon<G>(point: [f64; 2], polygon: &G) -> Location
+where
+    G: PolygonTrait,
+    G::Point: Point,
+    <G::Point as Point>::Scalar: Into<f64>,
+{
+    let mut boundary = false;
+    for_each_polygon_segment(polygon, |first, second| {
+        if point_on_segment(point, xy(first), xy(second)) {
+            boundary = true;
+        }
+    });
+    if boundary {
+        return Location::Boundary;
+    }
+    if point_in_ring_xy(point, polygon.exterior())
+        && !polygon
+            .interiors()
+            .any(|ring| point_in_ring_xy(point, ring))
+    {
+        Location::Interior
+    } else {
+        Location::Exterior
+    }
+}
+
+fn point_in_ring_xy<R>(point: [f64; 2], ring: &R) -> bool
+where
+    R: RingTrait,
+    R::Point: Point,
+    <R::Point as Point>::Scalar: Into<f64>,
+{
+    let mut inside = false;
+    for_each_ring_segment(ring, |first, second| {
+        let first = xy(first);
+        let second = xy(second);
+        if (first[1] > point[1]) != (second[1] > point[1])
+            && point[0]
+                < (second[0] - first[0]) * (point[1] - first[1]) / (second[1] - first[1]) + first[0]
+        {
+            inside = !inside;
+        }
+    });
+    inside
+}
+
+fn for_each_line_segment<L>(line: &L, mut function: impl FnMut(&L::Point, &L::Point))
+where
+    L: LinestringTrait,
+{
+    let mut points = line.points();
+    let Some(mut previous) = points.next() else {
+        return;
+    };
+    for current in points {
+        function(previous, current);
+        previous = current;
+    }
+}
+
+fn for_each_ring_segment<R>(ring: &R, mut function: impl FnMut(&R::Point, &R::Point))
+where
+    R: RingTrait,
+{
+    let mut points = ring.points();
+    let Some(first) = points.next() else {
+        return;
+    };
+    let mut previous = first;
+    for current in points {
+        function(previous, current);
+        previous = current;
+    }
+    if !point_equal(previous, first) {
+        function(previous, first);
+    }
+}
+
+fn for_each_polygon_segment<G>(polygon: &G, mut function: impl FnMut(&G::Point, &G::Point))
+where
+    G: PolygonTrait,
+{
+    for_each_ring_segment(polygon.exterior(), &mut function);
+    for ring in polygon.interiors() {
+        for_each_ring_segment(ring, &mut function);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SegmentRelation {
+    Disjoint,
+    Point([f64; 2]),
+    Overlap,
+}
+
+fn segment_relation(
+    first1: [f64; 2],
+    first2: [f64; 2],
+    second1: [f64; 2],
+    second2: [f64; 2],
+) -> SegmentRelation {
+    let d1 = precise_math::orient2d(second1, second2, first1);
+    let d2 = precise_math::orient2d(second1, second2, first2);
+    let d3 = precise_math::orient2d(first1, first2, second1);
+    let d4 = precise_math::orient2d(first1, first2, second2);
+    if opposite(d1, d2) && opposite(d3, d4) {
+        return SegmentRelation::Point(line_cross(first1, first2, second1, second2));
+    }
+    if d1 == 0.0 && d2 == 0.0 && d3 == 0.0 && d4 == 0.0 {
+        let overlap = collinear_overlap_length(first1, first2, second1, second2);
+        return if overlap > 0.0 {
+            SegmentRelation::Overlap
+        } else if overlap == 0.0 {
+            [first1, first2, second1, second2]
+                .into_iter()
+                .find(|point| {
+                    point_on_segment(*point, first1, first2)
+                        && point_on_segment(*point, second1, second2)
+                })
+                .map_or(SegmentRelation::Disjoint, SegmentRelation::Point)
+        } else {
+            SegmentRelation::Disjoint
+        };
+    }
+    for (value, point, start, end) in [
+        (d1, first1, second1, second2),
+        (d2, first2, second1, second2),
+        (d3, second1, first1, first2),
+        (d4, second2, first1, first2),
+    ] {
+        if value == 0.0 && point_on_segment(point, start, end) {
+            return SegmentRelation::Point(point);
+        }
+    }
+    SegmentRelation::Disjoint
+}
+
+fn xy<P>(point: &P) -> [f64; 2]
+where
+    P: Point,
+    P::Scalar: Into<f64>,
+{
+    [point.get::<0>().into(), point.get::<1>().into()]
+}
+
+fn xy_equal(first: [f64; 2], second: [f64; 2]) -> bool {
+    first[0] == second[0] && first[1] == second[1]
+}
+
+fn point_on_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> bool {
+    precise_math::orient2d(start, end, point) == 0.0
+        && point[0] >= start[0].min(end[0])
+        && point[0] <= start[0].max(end[0])
+        && point[1] >= start[1].min(end[1])
+        && point[1] <= start[1].max(end[1])
+}
+
+fn opposite(first: f64, second: f64) -> bool {
+    (first > 0.0 && second < 0.0) || (first < 0.0 && second > 0.0)
+}
+
+fn line_cross(
+    first1: [f64; 2],
+    first2: [f64; 2],
+    second1: [f64; 2],
+    second2: [f64; 2],
+) -> [f64; 2] {
+    let denominator = (first1[0] - first2[0]) * (second1[1] - second2[1])
+        - (first1[1] - first2[1]) * (second1[0] - second2[0]);
+    let first_cross = first1[0] * first2[1] - first1[1] * first2[0];
+    let second_cross = second1[0] * second2[1] - second1[1] * second2[0];
+    [
+        (first_cross * (second1[0] - second2[0]) - (first1[0] - first2[0]) * second_cross)
+            / denominator,
+        (first_cross * (second1[1] - second2[1]) - (first1[1] - first2[1]) * second_cross)
+            / denominator,
+    ]
+}
+
+fn collinear_overlap_length(
+    first1: [f64; 2],
+    first2: [f64; 2],
+    second1: [f64; 2],
+    second2: [f64; 2],
+) -> f64 {
+    let use_x = (first1[0] - first2[0]).abs() >= (first1[1] - first2[1]).abs();
+    let index = usize::from(!use_x);
+    first1[index]
+        .max(first2[index])
+        .min(second1[index].max(second2[index]))
+        - first1[index]
+            .min(first2[index])
+            .max(second1[index].min(second2[index]))
+}
+
+fn interpolate(first: [f64; 2], second: [f64; 2], fraction: f64) -> [f64; 2] {
+    [
+        first[0] + (second[0] - first[0]) * fraction,
+        first[1] + (second[1] - first[1]) * fraction,
+    ]
+}
+
 /// Compute the DE-9IM matrix relating two polygons.
 ///
-/// Fills the matrix from the turn graph (do the boundaries cross, and
-/// where) and interior sampling (is each interior partly inside / partly
-/// outside the other). Mirrors `boost::geometry::relation`
+/// Fills the matrix from Boolean interior regions and exact segment-pair
+/// boundary dimensions. Mirrors `boost::geometry::relation`
 /// (`algorithms/relation.hpp`) for the areal × areal case.
 ///
 /// # Errors
 ///
-/// Returns [`OverlayError::Unsupported`] in two cases:
-///
-/// * Either polygon has a coordinate outside the safe arithmetic range
-///   ([`SAFE_ABS_MAX`](crate::predicate::range_guard::SAFE_ABS_MAX)) — out
-///   of range the turn collector silently drops intersections, so the
-///   relation cannot be trusted.
-/// * The boundaries meet but only *non-transversally* (edge-aligned/
-///   collinear or vertex-only contact) **and** neither interior
-///   representative point falls strictly inside the other. In that state
-///   the turn graph cannot distinguish a pure boundary touch from a
-///   genuine area overlap whose crossings all land on vertices/edges, so
-///   the interior/interior cell is genuinely ambiguous — the same
-///   degenerate class the boolean overlay operations refuse (see
-///   [`crate::intersection`]).
-///
-/// Every transversal crossing, containment, or clean disjoint case is
-/// answered normally.
+/// Returns [`OverlayError::Unsupported`] when either polygon leaves the exact
+/// predicate range.
 ///
 /// # Examples
 ///
@@ -200,7 +870,7 @@ impl From<OverlayError> for RelateError {
 /// // Overlapping squares: their interiors meet in an area.
 /// assert_eq!(matrix.interior_interior(), Dimension::Area);
 /// ```
-pub fn relate<G1, G2, P>(g1: &G1, g2: &G2) -> Result<De9im, OverlayError>
+fn relate_polygon_polygon<G1, G2, P>(g1: &G1, g2: &G2) -> Result<De9im, OverlayError>
 where
     G1: PolygonTrait<Point = P>,
     G2: PolygonTrait<Point = P>,
@@ -208,75 +878,100 @@ where
     P::Scalar: CoordinateScalar + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    // Out-of-range coordinates make the turn collector silently drop
-    // intersections, so an emptied turn graph would be misread as
-    // disjoint (II = Empty) — a wrong answer. Refuse up front, matching
-    // the boolean overlay operations (see `crate::predicate::range_guard`).
     if !polygon_in_range(g1) || !polygon_in_range(g2) {
         return Err(OverlayError::Unsupported);
     }
 
-    let r1 = g1.exterior();
-    let r2 = g2.exterior();
-    let turns = get_turns_ring_ring(r1, 0, RingKind::Exterior, r2, 1, RingKind::Exterior);
-    let boundaries_meet = !turns.is_empty();
-    // A transversal crossing (not a mere touch/collinear contact) is the
-    // signal that the interiors genuinely overlap in area.
-    let boundaries_cross_transversally = turns.iter().any(|t| t.method == Method::Crosses);
+    let interiors_overlap = !crate::operation::intersection(g1, g2)?.0.is_empty();
+    let first_outside = !crate::operation::difference(g1, g2)?.0.is_empty();
+    let second_outside = !crate::operation::difference(g2, g1)?.0.is_empty();
+    let boundary_boundary = polygon_boundary_dimension(g1, g2);
 
-    // Interior representatives.
-    let rep1 = point_on_surface(g1);
-    let rep2 = point_on_surface(g2);
-
-    // Is g1's interior point strictly inside g2, and vice versa? (Boost's
-    // `within` is strict-interior, which is what we want here.)
-    let g2_model = clone_polygon(g2);
-    let g1_model = clone_polygon(g1);
-    let rep1_in_g2 = rep1.is_some_and(|p| geometry_algorithm::within(&p, &g2_model));
-    let rep2_in_g1 = rep2.is_some_and(|p| geometry_algorithm::within(&p, &g1_model));
-
-    // Ambiguous overlap: the boundaries touch, but neither a transversal
-    // crossing nor a rep-point containment witnesses an interior overlap.
-    // A single interior sample can miss an overlap region that lies off to
-    // one side (e.g. two edge-aligned bands, or a diamond whose crossings
-    // all land on B's vertices). We cannot soundly decide II here, so we
-    // refuse rather than under-report. Note the order: transversal cross
-    // OR either containment makes the relation decidable and is handled
-    // below; only their joint absence *with* boundary contact is unsafe.
-    if boundaries_meet && !boundaries_cross_transversally && !rep1_in_g2 && !rep2_in_g1 {
-        return Err(OverlayError::Unsupported);
-    }
-
-    let interiors_overlap = boundaries_cross_transversally || rep1_in_g2 || rep2_in_g1;
-
-    let mut m = [[Dimension::Empty; 3]; 3];
-
-    // Interior/Interior: area when the interiors genuinely overlap.
+    let mut matrix = empty_matrix();
     if interiors_overlap {
-        m[feature::INTERIOR][feature::INTERIOR] = Dimension::Area;
+        matrix.m[feature::INTERIOR][feature::INTERIOR] = Dimension::Area;
+    }
+    if first_outside {
+        matrix.m[feature::INTERIOR][feature::EXTERIOR] = Dimension::Area;
+        matrix.m[feature::BOUNDARY][feature::EXTERIOR] = Dimension::Curve;
+    }
+    if second_outside {
+        matrix.m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Area;
+        matrix.m[feature::EXTERIOR][feature::BOUNDARY] = Dimension::Curve;
+    }
+    matrix.m[feature::BOUNDARY][feature::BOUNDARY] = boundary_boundary;
+
+    if interiors_overlap {
+        match (first_outside, second_outside) {
+            (true, true) => {
+                matrix.m[feature::INTERIOR][feature::BOUNDARY] = Dimension::Curve;
+                matrix.m[feature::BOUNDARY][feature::INTERIOR] = Dimension::Curve;
+            }
+            (true, false) => {
+                matrix.m[feature::INTERIOR][feature::BOUNDARY] = Dimension::Curve;
+            }
+            (false, true) => {
+                matrix.m[feature::BOUNDARY][feature::INTERIOR] = Dimension::Curve;
+            }
+            (false, false) => {}
+        }
     }
 
-    // Boundary/Boundary: the boundaries meet at the turn points.
-    if boundaries_meet {
-        m[feature::BOUNDARY][feature::BOUNDARY] = Dimension::Point;
-    }
+    Ok(matrix)
+}
 
-    // Interior/Exterior: part of g1's interior lies outside g2 unless g1
-    // is wholly contained in g2. It is contained only when its interior
-    // point is inside g2 *and* the boundaries do not cross transversally.
-    let g1_contained = rep1_in_g2 && !boundaries_cross_transversally;
-    if !g1_contained {
-        m[feature::INTERIOR][feature::EXTERIOR] = Dimension::Area;
+fn polygon_boundary_dimension<G1, G2, P>(first: &G1, second: &G2) -> Dimension
+where
+    G1: PolygonTrait<Point = P>,
+    G2: PolygonTrait<Point = P>,
+    P: Point,
+    P::Scalar: Into<f64>,
+{
+    let first_segments = polygon_boundary_segments(first);
+    let second_segments = polygon_boundary_segments(second);
+    let mut dimension = Dimension::Empty;
+    for (first_start, first_end) in &first_segments {
+        for (second_start, second_end) in &second_segments {
+            match segment_relation(*first_start, *first_end, *second_start, *second_end) {
+                SegmentRelation::Overlap => return Dimension::Curve,
+                SegmentRelation::Point(_) => dimension = Dimension::Point,
+                SegmentRelation::Disjoint => {}
+            }
+        }
     }
-    let g2_contained = rep2_in_g1 && !boundaries_cross_transversally;
-    if !g2_contained {
-        m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Area;
+    dimension
+}
+
+fn polygon_boundary_segments<G, P>(polygon: &G) -> alloc::vec::Vec<([f64; 2], [f64; 2])>
+where
+    G: PolygonTrait<Point = P>,
+    P: Point,
+    P::Scalar: Into<f64>,
+{
+    let mut segments = alloc::vec::Vec::new();
+    append_boundary_segments(polygon.exterior(), &mut segments);
+    for ring in polygon.interiors() {
+        append_boundary_segments(ring, &mut segments);
     }
+    segments
+}
 
-    // Exterior/Exterior is always the unbounded plane outside both.
-    m[feature::EXTERIOR][feature::EXTERIOR] = Dimension::Area;
-
-    Ok(De9im { m })
+fn append_boundary_segments<R>(ring: &R, output: &mut alloc::vec::Vec<([f64; 2], [f64; 2])>)
+where
+    R: RingTrait,
+    <R::Point as Point>::Scalar: Into<f64>,
+{
+    let points: alloc::vec::Vec<_> = ring.points().map(xy).collect();
+    for pair in points.windows(2) {
+        if !xy_equal(pair[0], pair[1]) {
+            output.push((pair[0], pair[1]));
+        }
+    }
+    if let (Some(first), Some(last)) = (points.first(), points.last())
+        && !xy_equal(*first, *last)
+    {
+        output.push((*last, *first));
+    }
 }
 
 /// Test whether two polygons satisfy a DE-9IM mask.
@@ -292,13 +987,12 @@ where
 /// or [`RelateError::InvalidMask`] for a malformed mask.
 #[inline]
 #[must_use = "relate can fail and its predicate result should be used"]
-pub fn relate_mask<G1, G2, P>(g1: &G1, g2: &G2, mask: &str) -> Result<bool, RelateError>
+pub fn relate_mask<G1, G2>(g1: &G1, g2: &G2, mask: &str) -> Result<bool, RelateError>
 where
-    G1: PolygonTrait<Point = P>,
-    G2: PolygonTrait<Point = P>,
-    P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
-    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+    G1: Geometry,
+    G2: Geometry,
+    G1::Kind: RelatePairStrategy<G2::Kind>,
+    PairStrategy<G1, G2>: RelateStrategy<G1, G2> + Default,
 {
     relate(g1, g2)?.matches(mask)
 }
@@ -311,18 +1005,21 @@ where
 ///
 /// # Errors
 ///
-/// Propagates [`OverlayError::Unsupported`] from [`relate`] for the
-/// ambiguous non-transversal-contact class (see [`relate`]'s docs).
-pub fn touches<G1, G2, P>(g1: &G1, g2: &G2) -> Result<bool, OverlayError>
+/// Propagates [`OverlayError::Unsupported`] from [`relate`].
+#[inline]
+#[must_use = "touches can fail and its predicate result should be used"]
+pub fn touches<G1, G2>(g1: &G1, g2: &G2) -> Result<bool, OverlayError>
 where
-    G1: PolygonTrait<Point = P>,
-    G2: PolygonTrait<Point = P>,
-    P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
-    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+    G1: Geometry,
+    G2: Geometry,
+    G1::Kind: RelatePairStrategy<G2::Kind>,
+    PairStrategy<G1, G2>: RelateStrategy<G1, G2> + Default,
 {
     let matrix = relate(g1, g2)?;
-    Ok(!matrix.interior_interior().is_set() && matrix.boundary_boundary().is_set())
+    Ok(!matrix.interior_interior().is_set()
+        && (matrix.m[feature::INTERIOR][feature::BOUNDARY].is_set()
+            || matrix.m[feature::BOUNDARY][feature::INTERIOR].is_set()
+            || matrix.boundary_boundary().is_set()))
 }
 
 /// `overlaps`: the interiors intersect, and each geometry has interior
@@ -333,63 +1030,50 @@ where
 ///
 /// # Errors
 ///
-/// Propagates [`OverlayError::Unsupported`] from [`relate`] for the
-/// ambiguous non-transversal-contact class (see [`relate`]'s docs). This
-/// keeps `overlaps` from silently reporting `false` for two polygons that
-/// genuinely overlap along an edge-aligned or vertex-only boundary.
-pub fn overlaps<G1, G2, P>(g1: &G1, g2: &G2) -> Result<bool, OverlayError>
+/// Propagates [`OverlayError::Unsupported`] from [`relate`].
+#[inline]
+#[must_use = "overlaps can fail and its predicate result should be used"]
+pub fn overlaps<G1, G2>(g1: &G1, g2: &G2) -> Result<bool, OverlayError>
 where
-    G1: PolygonTrait<Point = P>,
-    G2: PolygonTrait<Point = P>,
-    P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
-    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+    G1: Geometry,
+    G2: Geometry,
+    G1::Kind: RelatePairStrategy<G2::Kind>,
+    PairStrategy<G1, G2>: RelateStrategy<G1, G2> + Default,
 {
     let matrix = relate(g1, g2)?;
-    Ok(matrix.interior_interior() == Dimension::Area
-        && matrix.interior_exterior() == Dimension::Area
-        && matrix.exterior_interior() == Dimension::Area)
+    let dimension = matrix.interior_interior();
+    Ok(matches!(
+        dimension,
+        Dimension::Point | Dimension::Curve | Dimension::Area
+    ) && matrix.interior_exterior() == dimension
+        && matrix.exterior_interior() == dimension)
 }
 
-/// `crosses`: for two areal geometries this is always `false` — crossing
-/// is defined only for geometries of differing dimension (e.g. a line
-/// crossing an area).
+/// `crosses`: test the DE-9IM crossing masks for supported pairs.
 ///
 /// Mirrors `boost::geometry::crosses` (`algorithms/crosses.hpp`); the
-/// areal × areal arm returns `false` by definition. Provided for
-/// completeness so callers get a uniform predicate surface. It never
-/// inspects the (possibly ambiguous) turn graph, so it is infallible;
-/// the `Result` return keeps its signature uniform with the sibling
-/// predicates [`overlaps`] / [`touches`].
+/// areal × areal arm returns `false` by definition, while line/line and
+/// line/areal pairs use their corresponding dimensional masks.
 ///
 /// # Errors
 ///
-/// Never returns an error; the `Ok(false)` is unconditional.
-#[allow(
-    clippy::unnecessary_wraps,
-    reason = "The Result is intentional: it keeps `crosses` signature-compatible with the sibling fallible predicates `overlaps`/`touches`, so callers handle one uniform surface."
-)]
-pub fn crosses<G1, G2, P>(_g1: &G1, _g2: &G2) -> Result<bool, OverlayError>
+/// Propagates [`OverlayError::Unsupported`] from [`relate`].
+#[inline]
+#[must_use = "crosses can fail and its predicate result should be used"]
+pub fn crosses<G1, G2>(g1: &G1, g2: &G2) -> Result<bool, OverlayError>
 where
-    G1: PolygonTrait<Point = P>,
-    G2: PolygonTrait<Point = P>,
-    P: Point,
+    G1: Geometry,
+    G2: Geometry,
+    G1::Kind: RelatePairStrategy<G2::Kind>,
+    PairStrategy<G1, G2>: RelateStrategy<G1, G2> + Default,
 {
-    Ok(false)
-}
-
-/// Copy any [`PolygonTrait`] into a concrete `model::Polygon`.
-fn clone_polygon<G, P>(g: &G) -> Polygon<P>
-where
-    G: PolygonTrait<Point = P>,
-    P: Point + Copy,
-{
-    let outer: Ring<P> = Ring::from_vec(g.exterior().points().copied().collect());
-    let inners = g
-        .interiors()
-        .map(|r| Ring::from_vec(r.points().copied().collect()))
-        .collect();
-    Polygon::with_inners(outer, inners)
+    let matrix = relate(g1, g2)?;
+    Ok((matrix.interior_interior() == Dimension::Point
+        && matrix.interior_exterior() == Dimension::Curve
+        && matrix.exterior_interior() == Dimension::Curve)
+        || (matrix.interior_interior() == Dimension::Curve
+            && (matrix.interior_exterior() == Dimension::Curve
+                || matrix.exterior_interior() == Dimension::Curve)))
 }
 
 #[cfg(test)]
@@ -419,30 +1103,22 @@ mod tests {
     }
 
     #[test]
-    fn edge_touching_squares_are_unsupported() {
-        // Share the edge x = 2 but interiors are disjoint. The boundaries
-        // meet only collinearly and neither interior point is inside the
-        // other, so the turn graph cannot tell a pure edge-touch from an
-        // edge-aligned overlap — the relation is reported unsupported
-        // rather than a possibly-wrong boolean.
-        use crate::operation::OverlayError;
+    fn edge_touching_squares_have_curve_boundary_intersection() {
         let a = square(0.0, 0.0, 2.0);
         let b = square(2.0, 0.0, 2.0);
-        assert_eq!(relate(&a, &b), Err(OverlayError::Unsupported));
-        assert_eq!(touches(&a, &b), Err(OverlayError::Unsupported));
-        assert_eq!(overlaps(&a, &b), Err(OverlayError::Unsupported));
+        assert_eq!(
+            relate(&a, &b).unwrap().boundary_boundary(),
+            Dimension::Curve
+        );
+        assert!(touches(&a, &b).unwrap());
+        assert!(!overlaps(&a, &b).unwrap());
     }
 
     #[test]
-    fn edge_aligned_overlap_is_unsupported_not_false() {
-        // Regression: A = [0,3]x[0,1], B = [2,5]x[0,1] genuinely overlap
-        // in [2,3]x[0,1], but all boundary contacts are collinear and both
-        // interior samples land outside the other. The old code returned
-        // `overlaps = false` here (a wrong answer); now it refuses.
-        use crate::operation::OverlayError;
+    fn edge_aligned_overlap_is_detected() {
         let a: Polygon<P> = polygon![[(0.0, 0.0), (3.0, 0.0), (3.0, 1.0), (0.0, 1.0), (0.0, 0.0)]];
         let b: Polygon<P> = polygon![[(2.0, 0.0), (5.0, 0.0), (5.0, 1.0), (2.0, 1.0), (2.0, 0.0)]];
-        assert_eq!(overlaps(&a, &b), Err(OverlayError::Unsupported));
+        assert!(overlaps(&a, &b).unwrap());
     }
 
     #[test]

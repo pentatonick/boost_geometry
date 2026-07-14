@@ -14,14 +14,11 @@
 //!
 //! # Robustness
 //!
-//! Like [`orientation`](super::orientation) the determinant is exact
-//! only inside the safe-magnitude range
-//!; the products here are of
-//! *squared* coordinate differences, so the safe range is tighter than
-//! the orientation predicate's. Callers route inputs through
-//! [`range_guard`](super::range_guard) first.
+//! The determinant and base orientation use the adaptive expansion
+//! arithmetic in [`geometry_coords::precise_math`], giving exact signs for
+//! finite `f32`/`f64` inputs without rescaling.
 
-use geometry_coords::CoordinateScalar;
+use geometry_coords::{CoordinateScalar, precise_math};
 use geometry_trait::Point;
 
 use super::orientation::Sign;
@@ -66,7 +63,7 @@ use super::orientation::Sign;
 pub fn in_circle_2d<P>(a: &P, b: &P, c: &P, d: &P) -> Sign
 where
     P: Point,
-    P::Scalar: CoordinateScalar,
+    P::Scalar: CoordinateScalar + Into<f64>,
 {
     let ax = a.get::<0>();
     let ay = a.get::<1>();
@@ -77,47 +74,27 @@ where
     let dx = d.get::<0>();
     let dy = d.get::<1>();
 
-    // Translate so `d` is the origin, then the in-circle test is the
-    // sign of the 3×3 determinant of rows
-    // `[ex, ey, ex² + ey²]` for e ∈ {a, b, c}. This is the standard
-    // reduction of the 4×4 in-circle determinant (Guibas & Stolfi).
-    let adx = ax - dx;
-    let ady = ay - dy;
-    let bdx = bx - dx;
-    let bdy = by - dy;
-    let cdx = cx - dx;
-    let cdy = cy - dy;
-
-    let a_lift = adx * adx + ady * ady;
-    let b_lift = bdx * bdx + bdy * bdy;
-    let c_lift = cdx * cdx + cdy * cdy;
-
-    let det = adx * (bdy * c_lift - b_lift * cdy) - ady * (bdx * c_lift - b_lift * cdx)
-        + a_lift * (bdx * cdy - bdy * cdx);
+    let a = [ax.into(), ay.into()];
+    let b = [bx.into(), by.into()];
+    let c = [cx.into(), cy.into()];
+    let d = [dx.into(), dy.into()];
+    let determinant = precise_math::incircle(a, b, c, d);
 
     // `det > 0` ⇔ d inside, *when a,b,c are CCW*. For a CW triangle the
     // determinant negates, so fold in the base orientation to give a
     // winding-independent answer.
-    let base = orientation_of(adx, ady, bdx, bdy, cdx, cdy);
+    let base = sign_of(precise_math::orient2d(a, b, c));
     match base {
-        Sign::Collinear => Sign::Collinear,   // degenerate circle
-        Sign::Positive => sign_of(det),       // CCW: det>0 = inside
-        Sign::Negative => flip(sign_of(det)), // CW: invert
+        Sign::Collinear => Sign::Collinear,           // degenerate circle
+        Sign::Positive => sign_of(determinant),       // CCW: det>0 = inside
+        Sign::Negative => flip(sign_of(determinant)), // CW: invert
     }
 }
 
-/// Sign of the signed area of the triangle whose vertices, already
-/// translated to be relative to `d`, are `(ax, ay)`, `(bx, by)`,
-/// `(cx, cy)`. Local to the in-circle reduction.
-fn orientation_of<T: CoordinateScalar>(ax: T, ay: T, bx: T, by: T, cx: T, cy: T) -> Sign {
-    let area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-    sign_of(area)
-}
-
-fn sign_of<T: CoordinateScalar>(v: T) -> Sign {
-    if v > T::ZERO {
+fn sign_of(value: f64) -> Sign {
+    if value > 0.0 {
         Sign::Positive
-    } else if v < T::ZERO {
+    } else if value < 0.0 {
         Sign::Negative
     } else {
         Sign::Collinear

@@ -35,7 +35,7 @@ impl Default for Lcg {
 
 #[must_use]
 pub fn uniform(n: usize) -> Vec<[f64; 2]> {
-    let mut lcg = Lcg::new();
+    let mut lcg = Lcg::default();
     (0..n)
         .map(|_| [lcg.next_f64() * FIELD, lcg.next_f64() * FIELD])
         .collect()

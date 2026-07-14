@@ -293,11 +293,11 @@ mod tests {
     //! `test_2d<P1, P2>(wkt_p, wkt_a, wkt_b, expected)` helper; here
     //! the WKT is translated to literal coordinates.
 
-    use super::PointToSegment;
+    use super::{PointToSegment, assemble_foot, dots};
     use crate::cartesian::{ComparablePythagoras, Pythagoras};
     use crate::distance::DistanceStrategy;
     use geometry_cs::Cartesian;
-    use geometry_model::{Point2D, Segment};
+    use geometry_model::{Point as ModelPoint, Point2D, Segment};
 
     fn pt(x: f64, y: f64) -> Point2D<f64, Cartesian> {
         Point2D::<f64, Cartesian>::new(x, y)
@@ -402,5 +402,17 @@ mod tests {
         let d = PointToSegment::<Pythagoras>::default()
             .distance(&pt(3.0, 4.0), &seg(0.0, 0.0, 0.0, 0.0));
         assert!((d - 5.0).abs() < 1e-12);
+    }
+
+    /// The public strategy rejects dimensions above four while materialising
+    /// endpoints. Direct kernel checks keep the same invariant on the two
+    /// private helpers that cannot otherwise be reached after that early
+    /// rejection.
+    #[test]
+    fn private_projection_helpers_reject_dimensions_above_four() {
+        type P5 = ModelPoint<f64, 5, Cartesian>;
+        let p = P5::default();
+        assert!(std::panic::catch_unwind(|| dots(&p, &p, &p)).is_err());
+        assert!(std::panic::catch_unwind(|| assemble_foot(&p, &p, 0.5)).is_err());
     }
 }

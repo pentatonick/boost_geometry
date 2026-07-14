@@ -15,16 +15,17 @@
 //!
 //! # Robustness
 //!
-//! The sign is computed on
-//! the raw input coordinates (no rescale). It is exact only inside the
-//! safe-magnitude range; callers that need that guarantee route their
-//! inputs through [`range_guard`](super::range_guard) first. Boost's
+//! The sign is computed on the raw input coordinates (no rescale) by the
+//! adaptive expansion arithmetic in
+//! [`geometry_coords::precise_math::orient2d`]. This mirrors Boost's robust
+//! side strategy and produces the exact sign for finite `f32`/`f64` inputs.
+//! Boost's
 //! `side_by_triangle` additionally treats any coincident pair among the
 //! three points as collinear
 //! (`side_by_triangle.hpp:159-164`); this predicate does the same,
 //! because a zero-length base line has no well-defined side.
 
-use geometry_coords::CoordinateScalar;
+use geometry_coords::{CoordinateScalar, precise_math};
 use geometry_trait::Point;
 
 /// The three possible outcomes of the [`orientation_2d`] side test.
@@ -81,7 +82,7 @@ pub enum Sign {
 pub fn orientation_2d<P>(p: &P, q: &P, r: &P) -> Sign
 where
     P: Point,
-    P::Scalar: CoordinateScalar,
+    P::Scalar: CoordinateScalar + Into<f64>,
 {
     let px = p.get::<0>();
     let py = p.get::<1>();
@@ -93,11 +94,15 @@ where
     // Signed area of (p, q, r). Boost's `side_by_triangle::side_value`
     // computes the identical determinant
     // (`side_by_triangle.hpp` `side_value`).
-    let area = (qx - px) * (ry - py) - (qy - py) * (rx - px);
+    let area = precise_math::orient2d(
+        [px.into(), py.into()],
+        [qx.into(), qy.into()],
+        [rx.into(), ry.into()],
+    );
 
-    if area > P::Scalar::ZERO {
+    if area > 0.0 {
         Sign::Positive
-    } else if area < P::Scalar::ZERO {
+    } else if area < 0.0 {
         Sign::Negative
     } else {
         Sign::Collinear

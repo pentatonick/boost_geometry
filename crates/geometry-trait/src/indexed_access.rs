@@ -103,7 +103,7 @@ mod tests {
 
     use super::{IndexedAccess, corner};
     use crate::geometry::Geometry;
-    use crate::point::{Point, PointMut};
+    use crate::point::Point;
     use geometry_cs::Cartesian;
     use geometry_tag::{BoxTag, PointTag};
 
@@ -124,19 +124,6 @@ mod tests {
                 assert!(D < <P2 as Point>::DIM, "Point::get: dimension out of range");
             }
             if D == 0 { self.0 } else { self.1 }
-        }
-    }
-
-    impl PointMut for P2 {
-        fn set<const D: usize>(&mut self, v: f64) {
-            const {
-                assert!(D < <P2 as Point>::DIM, "Point::set: dimension out of range");
-            }
-            if D == 0 {
-                self.0 = v;
-            } else {
-                self.1 = v;
-            }
         }
     }
 
@@ -169,6 +156,10 @@ mod tests {
 
     #[test]
     fn indexed_get_set_roundtrip() {
+        let point = P2(5.0, 6.0);
+        assert_eq!(point.get::<0>().to_bits(), 5.0_f64.to_bits());
+        assert_eq!(point.get::<1>().to_bits(), 6.0_f64.to_bits());
+
         let mut b = B {
             corners: [[0.0; 2]; 2],
         };

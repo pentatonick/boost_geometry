@@ -51,9 +51,9 @@ pub use crate::cs::{Cartesian, CoordinateSystem, Degree, Geographic, Radian, Sph
 pub use crate::model::{Point2D, Point3D};
 pub use crate::overlay::{
     De9im, Dimension, JoinStrategy, OverlayError, PointStrategy, RelateError, ValidityFailure,
-    buffer, buffer_convex_polygon, buffer_point, crosses, difference, intersection, is_valid,
-    is_valid_polygon, is_valid_ring, merge_elements, merge_multipolygon, merge_polygons, overlaps,
-    point_on_surface, relate, relation, sym_difference, touches, r#union, union_poly,
+    buffer, buffer_convex_polygon, buffer_point, buffer_with, crosses, difference, intersection,
+    is_valid, is_valid_polygon, is_valid_ring, merge_elements, merge_multipolygon, merge_polygons,
+    overlaps, point_on_surface, relate, relation, sym_difference, touches, r#union, union_poly,
 };
 pub use crate::rtree::{Bounds, Indexable, Linear, Predicate, Quadratic, Rtree};
 pub use crate::trait_::{

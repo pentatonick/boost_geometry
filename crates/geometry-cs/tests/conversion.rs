@@ -4,7 +4,13 @@
 //! `geometry/test/srs/` and the angle-conversion checks scattered
 //! through `geometry/test/strategies/`.
 
-use geometry_cs::{AngleUnit, Degree, Radian, Spheroid};
+use geometry_cs::{AngleUnit, Degree, FromF64, Radian, Spheroid};
+
+#[test]
+fn conversion_factor_scalars_accept_f64_constants() {
+    assert_eq!(f32::from_f64(1.5).to_bits(), 1.5_f32.to_bits());
+    assert_eq!(f64::from_f64(1.5).to_bits(), 1.5_f64.to_bits());
+}
 
 #[test]
 fn degree_to_radian_180() {

@@ -116,4 +116,13 @@ mod tests {
         let leaf: Node<Bounds> = Node::Leaf(alloc::vec![]);
         assert_eq!(leaf.bounds(), None);
     }
+
+    #[test]
+    fn empty_branch_has_no_bounds_or_values() {
+        let branch: Node<Bounds> = Node::Branch(alloc::vec![]);
+        assert_eq!(branch.bounds(), None);
+        assert_eq!(branch.entry_count(), 0);
+        assert_eq!(branch.value_count(), 0);
+        assert_eq!(branch.height(), 1);
+    }
 }

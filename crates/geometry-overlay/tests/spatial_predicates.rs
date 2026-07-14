@@ -8,11 +8,10 @@
 
 use geometry_algorithm::within;
 use geometry_cs::Cartesian;
-use geometry_model::{Point2D, Polygon, polygon};
+use geometry_model::{Point2D, Polygon, Ring, polygon};
 use geometry_overlay::relate::Dimension;
 use geometry_overlay::{
-    OverlayError, ValidityFailure, crosses, is_valid_polygon, overlaps, point_on_surface,
-    relate_matrix, touches,
+    ValidityFailure, crosses, is_valid_polygon, overlaps, point_on_surface, relate_matrix, touches,
 };
 
 type P = Point2D<f64, Cartesian>;
@@ -38,24 +37,19 @@ fn overlapping_squares() {
 }
 
 #[test]
-fn edge_touching_squares_are_unsupported() {
-    // Collinear edge contact with both interiors outside the other: the
-    // turn graph cannot tell this pure touch from an edge-aligned overlap,
-    // so the relation is reported unsupported rather than a wrong boolean.
+fn edge_touching_squares_touch() {
     let a = square(0.0, 0.0, 2.0);
     let b = square(2.0, 0.0, 2.0);
-    assert_eq!(touches(&a, &b), Err(OverlayError::Unsupported));
-    assert_eq!(overlaps(&a, &b), Err(OverlayError::Unsupported));
+    assert!(touches(&a, &b).unwrap());
+    assert!(!overlaps(&a, &b).unwrap());
 }
 
 #[test]
-fn corner_touching_squares_are_unsupported() {
-    // Meet only at the single corner (2,2) — a vertex-only contact, the
-    // same ambiguous class as a vertex-crossing overlap.
+fn corner_touching_squares_touch() {
     let a = square(0.0, 0.0, 2.0);
     let b = square(2.0, 2.0, 2.0);
-    assert_eq!(touches(&a, &b), Err(OverlayError::Unsupported));
-    assert_eq!(overlaps(&a, &b), Err(OverlayError::Unsupported));
+    assert!(touches(&a, &b).unwrap());
+    assert!(!overlaps(&a, &b).unwrap());
 }
 
 #[test]
@@ -118,4 +112,36 @@ fn representative_point_is_interior() {
     ]];
     let p = point_on_surface(&u).unwrap();
     assert!(within(&p, &u));
+}
+
+#[test]
+fn representative_point_rejects_degenerate_surfaces() {
+    assert!(point_on_surface(&Polygon::<P>::new(Ring::new())).is_none());
+    assert!(
+        point_on_surface(&Polygon::new(Ring::<P>::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(1.0, 0.0),
+        ])))
+        .is_none()
+    );
+    assert!(
+        point_on_surface(&Polygon::new(Ring::<P>::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(1.0, 0.0),
+            P::new(2.0, 0.0),
+        ])))
+        .is_none()
+    );
+
+    let with_empty_hole: Polygon<P> = Polygon::with_inners(
+        Ring::<P>::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(0.0, 2.0),
+            P::new(2.0, 2.0),
+            P::new(2.0, 0.0),
+            P::new(0.0, 0.0),
+        ]),
+        vec![Ring::<P>::new()],
+    );
+    assert!(point_on_surface(&with_empty_hole).is_some());
 }

@@ -17,6 +17,7 @@ degree variant and a radian variant of the same family share one impl.
 |---|---|
 | `src/system.rs` | `Cartesian`, `Spherical<U>`, `Geographic<U>`, `Polar<U>`, `CoordinateSystem` trait |
 | `src/family.rs` | `CartesianFamily`, `SphericalFamily`, `GeographicFamily`, `PolarFamily` |
+| `src/spheroidal.rs` | Canonical spheroidal box-coordinate intervals |
 | `src/unit.rs` | `Degree`, `Radian` angle-unit tags, `AngleUnit`, `FromF64` |
 | `src/spheroid.rs` | `Spheroid` — reference ellipsoid (e.g. WGS84) for geographic strategies |
 | `src/lib.rs` | Re-exports only |
@@ -35,6 +36,8 @@ degree variant and a radian variant of the same family share one impl.
 * **`Degree` / `Radian`** — zero-sized angle-unit tags implementing `AngleUnit`.
 * **`Spheroid`** — semi-major/semi-minor axis pair; WGS84 constant lives
   wherever the geographic strategies need it (`geometry-strategy::geographic`).
+* **`normalize_spheroidal_box_coordinates`** — canonicalizes degree or radian
+  box corners across the antimeridian, full bands, and poles.
 
 ## Who depends on this
 

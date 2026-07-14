@@ -605,7 +605,7 @@ fn isqrt_ceil(n: usize) -> usize {
 #[cfg(test)]
 #[allow(clippy::float_cmp, reason = "exact integer-valued point coordinates")]
 mod tests {
-    use super::{FrontierNode, Rtree};
+    use super::{FrontierNode, Rtree, isqrt_ceil};
     use crate::bounds::{Bounds, union_all};
     use crate::indexable::Indexable;
     use crate::nearest_bound::{NearestBound, NearestBoundMetrics};
@@ -1410,6 +1410,72 @@ mod tests {
         let t: Rtree<P> = Rtree::new();
         assert!(t.is_empty());
         assert_eq!(t.len(), 0);
+    }
+
+    #[test]
+    fn private_metric_helpers_handle_empty_queries_and_small_integer_roots() {
+        assert_eq!(isqrt_ceil(0), 0);
+        assert_eq!(isqrt_ceil(1), 1);
+        assert_eq!(isqrt_ceil(2), 2);
+        assert_eq!(isqrt_ceil(4), 2);
+
+        let values = vec![P::new(0.0, 0.0), P::new(1.0, 1.0)];
+        assert_eq!(LeafProbe::packed_group(&values, 0).len(), 2);
+
+        let first = PackedFrontierEntry {
+            dist: 1.0,
+            item: PackedFrontierItem::Group(&values, 0),
+        };
+        let equal = PackedFrontierEntry {
+            dist: 1.0,
+            item: PackedFrontierItem::Value(&values[0]),
+        };
+        let farther = PackedFrontierEntry {
+            dist: 2.0,
+            item: PackedFrontierItem::Value(&values[1]),
+        };
+        assert!(first == equal);
+        assert!(first.partial_cmp(&farther).is_some());
+
+        let ordered_values: Vec<P> = (0..12).map(|x| P::new(f64::from(x), 0.0)).collect();
+        let mut ranks = NearestBound::new(1, 1);
+        let mut metrics = BoundedSearchMetrics::default();
+        record_distance_ordered_leaf_groups(
+            &ordered_values,
+            2,
+            [0.0, 0.0],
+            &mut ranks,
+            &mut metrics,
+        );
+        assert!(metrics.leaf_group_order_comparisons > 0);
+        assert!(metrics.leaf_groups_pruned > 0);
+
+        let tree = Rtree::<P>::new();
+        assert!(
+            nearest_with_metrics(&tree, [0.0, 0.0], 0, false, 8, false, 8)
+                .0
+                .is_empty()
+        );
+        assert!(
+            nearest_packed_frontier_with_metrics(&tree, [0.0, 0.0], 1)
+                .0
+                .is_empty()
+        );
+        assert!(
+            nearest_bounded_group_frontier_with_metrics(&tree, [0.0, 0.0], 0)
+                .0
+                .is_empty()
+        );
+        assert!(
+            nearest_distance_ordered_groups_with_metrics(&tree, [0.0, 0.0], 0, 8)
+                .0
+                .is_empty()
+        );
+        assert!(
+            nearest_depth_first_with_metrics(&tree, [0.0, 0.0], 0)
+                .0
+                .is_empty()
+        );
     }
 
     /// `Default` builds the same empty tree as `new()`.

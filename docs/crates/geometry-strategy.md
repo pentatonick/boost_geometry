@@ -36,6 +36,7 @@ kind and coordinate-system family — combine).
 | `envelope` | `EnvelopeStrategy`, `EnvelopeStrategyForKind` | `Envelope{Point,Segment,Linestring,Ring,Polygon,Box,MultiPoint,MultiLinestring,MultiPolygon}` — see [tag-dispatch pattern](../02-tag-dispatch-pattern.md) |
 | `within` | `WithinStrategy`, `WithinStrategyForKind` | `WithinRing`, `WithinPoly`, `WithinBox` |
 | `intersects` | `IntersectsStrategy`, `IntersectsPairStrategy` | `CartesianIntersects` |
+| `buffer` | data strategy bundle consumed by overlay | `BufferDistanceStrategy`, `BufferSideStrategy`, `BufferJoinStrategy`, `BufferEndStrategy`, `BufferPointStrategy`, `BufferSettings` |
 | `disjoint` | `DisjointStrategy` | `CartesianDisjoint` |
 | `equals` | `EqualsStrategy`, `EqualsPairStrategy` | `EqPointPoint`, `EqSegmentSegment`, `EqPolygonPolygon` |
 | `centroid` | `CentroidStrategy`, `CentroidStrategyForKind` | `Cartesian{Polygon,Ring,Linestring,Segment,Box,MultiPoint}Centroid` |
@@ -48,13 +49,15 @@ kind and coordinate-system family — combine).
 | `closest_points` | `ClosestPointsStrategy` | `CartesianClosestPoints` |
 
 `cartesian`, `spherical`, `geographic` are the per-family submodules that
-hold the concrete impls above; `normalise` is `pub(crate)` (angular
-normalisation helper, not part of the public surface).
+hold the concrete impls above. The geographic module also exposes Thomas,
+Vincenty, and Karney direct/inverse formulas, differential quantities,
+meridian/vertex formulas, and Gnomonic/Sjöberg intersection. `normalise` is
+`pub(crate)` (angular normalization machinery, not part of the public surface).
 
 ## Reverse dispatch
 
 For algorithms whose two arguments are symmetric, write one impl per tag
-pair `(A, B)` and the `Reversed<S>` blanket impl (in `distance::Reversed`)
+pair `(A, B)` and the shared `Reversed<S>` adapter (in `reversal`)
 picks up `(B, A)` automatically — the Rust analogue of Boost's
 `core/reverse_dispatch.hpp` partial specialisation, done once at the
 strategy-trait layer instead of per-algorithm.

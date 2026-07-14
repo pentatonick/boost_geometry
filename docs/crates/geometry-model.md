@@ -2,7 +2,8 @@
 
 **Layer 2 — concrete types.** Depends on `geometry-trait` (transitively tag/coords/cs). `#![no_std]` + `alloc`.
 
-Mirrors `boost/geometry/geometries/{point,segment,box,linestring,ring,polygon,multi_*}.hpp`
+Mirrors
+`boost/geometry/geometries/{point,segment,pointing_segment,box,linestring,ring,polygon,multi_*,infinite_line,helper_geometry,polyhedral_surface}.hpp`
 — Boost's `model::` namespace of stock geometries.
 
 ## Purpose
@@ -16,11 +17,15 @@ their own. Every type here implements the matching `geometry-trait` concept.
 |---|---|
 | `src/point.rs` | `Point<T, D, Cs>`, `Point2D`, `Point3D` |
 | `src/segment.rs` | `Segment` |
+| `src/pointing_segment.rs` | `PointingSegment` — segment borrowing two endpoints |
 | `src/boxg.rs` | `Box` |
+| `src/infinite_line.rs` | `InfiniteLine` and general-form line arithmetic |
+| `src/geometry_rebind.rs` | `Rebound` type-level stock-model selection |
 | `src/linestring.rs` | `Linestring` |
 | `src/ring.rs` | `Ring` |
 | `src/polygon.rs` | `Polygon` (exterior + interior rings) |
 | `src/multi.rs` | `MultiPoint`, `MultiLinestring`, `MultiPolygon` |
+| `src/polyhedral_surface.rs` | `PolyhedralSurface` face collection |
 | `src/dyn_geometry.rs` | `DynGeometry`, `DynKind` — runtime-tagged enum, one variant per OGC kind |
 | `src/dyn_collection.rs` | `DynGeometryCollection` |
 | `src/macros.rs` | `point!`, `linestring!`, `polygon!` — `#[macro_export]`ed literal constructors |
@@ -28,8 +33,9 @@ their own. Every type here implements the matching `geometry-trait` concept.
 ## Public surface
 
 `Box`, `DynGeometryCollection`, `DynGeometry`, `DynKind`, `Linestring`,
-`MultiLinestring`, `MultiPoint`, `MultiPolygon`, `Point`, `Point2D`,
-`Point3D`, `Polygon`, `Ring`, `Segment`.
+`InfiniteLine`, `MultiLinestring`, `MultiPoint`, `MultiPolygon`,
+`Point`, `Point2D`, `Point3D`, `PointingSegment`, `Polygon`,
+`PolyhedralSurface`, `RebindGeometry`, `Rebound`, `Ring`, `Segment`.
 
 ### `DynGeometry` — dynamic-kind geometry
 

@@ -1,11 +1,12 @@
 //! Public-facade tests for overlay-dependent algorithm entry points.
 
 use boost_geometry::model::{Point2D, Polygon, Ring};
+use boost_geometry::overlay::{OverlayError, traverse::TraversalError};
 use boost_geometry::prelude::{
     Cartesian, Dimension, JoinStrategy, PointStrategy, RelateError, ValidityFailure, buffer,
     is_valid, merge_elements, relate, relation, r#union,
 };
-use boost_geometry::trait_::MultiPolygon as _;
+use boost_geometry::trait_::{MultiPolygon as _, Polygon as _};
 
 type P = Point2D<f64, Cartesian>;
 
@@ -45,6 +46,7 @@ fn relation_matrix_and_relate_mask_are_distinct_public_entries() {
 #[test]
 fn generic_is_valid_reports_duplicate_points() {
     assert!(is_valid(&square(0.0, 0.0, 2.0)).is_ok());
+    assert!(is_valid(square(0.0, 0.0, 2.0).exterior()).is_ok());
 
     let duplicate: Polygon<P> = Polygon::new(Ring::from_vec(vec![
         P::new(0.0, 0.0),
@@ -95,4 +97,12 @@ fn merge_elements_exposes_the_areal_collection_entry() {
     .unwrap();
 
     assert_eq!(merged.polygons().count(), 2);
+}
+
+#[test]
+fn traversal_failures_convert_through_the_public_error_api() {
+    assert_eq!(
+        OverlayError::from(TraversalError::Unsupported),
+        OverlayError::Unsupported
+    );
 }

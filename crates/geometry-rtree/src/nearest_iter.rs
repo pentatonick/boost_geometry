@@ -228,7 +228,9 @@ impl<T> Ord for DistanceEntry<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_NODE_INLINE_CAPACITY, DEFAULT_VALUE_INLINE_CAPACITY, NearestMetrics};
+    use super::{
+        DEFAULT_NODE_INLINE_CAPACITY, DEFAULT_VALUE_INLINE_CAPACITY, DistanceEntry, NearestMetrics,
+    };
     use crate::{AsymmetricQuadratic, AsymmetricRStarSplit, Bounds, Rtree, SplitParameters};
     use core::mem::size_of;
 
@@ -238,6 +240,27 @@ mod tests {
     const N: usize = 50_000;
     const Q: usize = 100;
     const K: usize = 8;
+
+    #[test]
+    fn distance_entry_equality_is_distance_only() {
+        let first_value = 1_u8;
+        let second_value = 2_u8;
+        let first = DistanceEntry {
+            dist: 3.0,
+            item: &first_value,
+        };
+        let same_distance = DistanceEntry {
+            dist: 3.0,
+            item: &second_value,
+        };
+        let farther = DistanceEntry {
+            dist: 4.0,
+            item: &first_value,
+        };
+        assert!(first == same_distance);
+        assert!(first != farther);
+        assert_eq!(*first.item, first_value);
+    }
 
     struct Lcg {
         state: u64,

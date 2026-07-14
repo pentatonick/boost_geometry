@@ -641,13 +641,20 @@ mod tests {
     /// with its own sub-path.
     #[test]
     fn multipolygon_renders_a_path_per_member() {
-        let member = square();
+        let mut member = square();
+        member.inners.push(Ring::from_vec(vec![
+            Pt::new(2.0, 2.0),
+            Pt::new(2.0, 4.0),
+            Pt::new(4.0, 4.0),
+            Pt::new(4.0, 2.0),
+            Pt::new(2.0, 2.0),
+        ]));
         let mpg: MultiPolygon<Polygon<Pt>> = MultiPolygon(vec![member.clone(), member]);
         let mut mapper = SvgMapper::new(400, 400);
         mapper.add(&mpg, "fill:teal");
         let svg = mapper.to_svg();
 
         assert_eq!(svg.matches("<path").count(), 2);
-        assert_eq!(svg.matches("M ").count(), 2); // one exterior each
+        assert_eq!(svg.matches("M ").count(), 4); // one exterior and one hole each
     }
 }

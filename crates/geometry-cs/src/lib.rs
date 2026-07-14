@@ -18,10 +18,12 @@
 
 mod family;
 mod spheroid;
+mod spheroidal;
 mod system;
 mod unit;
 
 pub use family::{CartesianFamily, GeographicFamily, PolarFamily, SphericalFamily};
 pub use spheroid::Spheroid;
+pub use spheroidal::{SpheroidalScalar, SpheroidalUnits, normalize_spheroidal_box_coordinates};
 pub use system::{Cartesian, CoordinateSystem, Geographic, Polar, Spherical};
 pub use unit::{AngleUnit, Degree, FromF64, Radian};

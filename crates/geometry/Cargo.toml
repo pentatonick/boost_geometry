@@ -29,6 +29,12 @@ std = [
 libm = [
     "geometry-coords/libm",
     "geometry-cs/libm",
+    "geometry-trait/libm",
+    "geometry-model/libm",
+    "geometry-strategy/libm",
+    "geometry-algorithm/libm",
+    "geometry-adapt/libm",
+    "geometry-overlay/libm",
 ]
 
 [dependencies]

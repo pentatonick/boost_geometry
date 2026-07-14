@@ -361,7 +361,7 @@ mod tests {
             Point2D::new(2.0, 0.0),
             Point2D::new(1.0, 1.0),
         ]);
-        let got = ShoelaceArea.area(&r);
+        let got = accepts_readonly_point(&ShoelaceArea, &r);
         assert!((got - 2.0).abs() < 1e-12);
     }
 
@@ -491,7 +491,7 @@ mod tests {
     // KC1.T2 witness: proves this strategy accepts a geometry whose
     // `Point` is read-only (need not implement `PointMut`). If it
     // compiles, the read-only bound is locked.
-    fn _accepts_readonly_point<G, S>(s: &S, g: &G) -> S::Out
+    fn accepts_readonly_point<G, S>(s: &S, g: &G) -> S::Out
     where
         G: geometry_trait::Geometry,
         <G as geometry_trait::Geometry>::Point: geometry_trait::Point,

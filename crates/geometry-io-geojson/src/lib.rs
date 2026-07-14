@@ -104,4 +104,4 @@ mod write;
 
 pub use json::GeoJsonError;
 pub use parse::from_geojson;
-pub use write::{to_geojson, to_geojson_polygon};
+pub use write::{WriteGeoJson, to_geojson, to_geojson_polygon};

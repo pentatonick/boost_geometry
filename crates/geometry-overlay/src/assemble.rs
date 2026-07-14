@@ -14,8 +14,9 @@
 //! exactly one outer is that outer's hole. Containment is tested with
 //! [`within`](fn@geometry_algorithm::within) on a representative point, and
 //! ties broken toward the **smallest** container — Boost's
-//! `assign_parents` area-sorted containment search. Deeper nesting
-//! (islands inside holes) is a deferred case.
+//! `assign_parents` area-sorted containment search. Even containment depths
+//! become polygon exteriors and odd depths become holes, so islands nested
+//! inside holes are retained as separate polygon members.
 
 use alloc::vec::Vec;
 
@@ -69,12 +70,8 @@ where
     P::Scalar: CoordinateScalar,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    // Classify each ring by containment depth rather than by signed
-    // area: the overlay may emit rings in either winding, but a ring's
-    // role is unambiguous from *how many other rings contain it*. Depth
-    // 0 (contained by nothing) is an outer; depth 1 (contained by
-    // exactly one outer) is a hole of that outer. Deeper nesting
-    // (islands in holes) is a deferred case — see the module docs.
+    // Classify each ring by containment depth rather than by signed area:
+    // even depths are filled exteriors and odd depths are holes.
     let n = rings.len();
     let mut container_of: Vec<Option<usize>> = alloc::vec![None; n];
     for i in 0..n {
@@ -83,31 +80,63 @@ where
         };
         container_of[i] = smallest_ring_container(&rings, i, &rep);
     }
+    let depths: Vec<usize> = (0..n)
+        .map(|index| containment_depth(&container_of, index))
+        .collect();
 
     // Classification is done; extraction below moves each ring out of
     // its slot exactly once instead of cloning it.
     let mut slots: Vec<Option<Ring<P>>> = rings.into_iter().map(Some).collect();
 
-    // Outers are rings with no container; each becomes a polygon.
+    // Every even-depth ring is a filled component. Normalize its winding to
+    // the concrete model's default clockwise exterior declaration.
     let mut outer_slot: Vec<Option<usize>> = alloc::vec![None; n];
     let mut polygons: Vec<Polygon<P>> = Vec::new();
     for i in 0..n {
-        if container_of[i].is_none() {
+        if depths[i] % 2 == 0 {
             outer_slot[i] = Some(polygons.len());
-            polygons.push(Polygon::new(slots[i].take().unwrap()));
+            let mut outer = slots[i].take().unwrap();
+            orient_ring(&mut outer, true);
+            polygons.push(Polygon::new(outer));
         }
     }
 
-    // Holes attach to their (outer) container.
+    // Odd-depth rings attach to their immediate even-depth parent.
     for i in 0..n {
-        if let Some(parent_ring) = container_of[i] {
+        if depths[i] % 2 == 1 {
+            let Some(parent_ring) = container_of[i] else {
+                continue;
+            };
             if let Some(slot) = outer_slot[parent_ring] {
-                polygons[slot].inners.push(slots[i].take().unwrap());
+                let mut hole = slots[i].take().unwrap();
+                orient_ring(&mut hole, false);
+                polygons[slot].inners.push(hole);
             }
         }
     }
 
     MultiPolygon(polygons)
+}
+
+fn containment_depth(parents: &[Option<usize>], mut index: usize) -> usize {
+    let mut depth = 0;
+    while let Some(parent) = parents[index] {
+        depth += 1;
+        index = parent;
+    }
+    depth
+}
+
+fn orient_ring<P>(ring: &mut Ring<P>, clockwise: bool)
+where
+    P: PointTrait,
+    P::Scalar: CoordinateScalar,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    let is_clockwise = ring_area(ring) > P::Scalar::ZERO;
+    if is_clockwise != clockwise {
+        ring.0.reverse();
+    }
 }
 
 /// Index of the smallest *other* ring that contains ring `i`, or `None`
@@ -228,6 +257,13 @@ mod tests {
         assert_eq!(mp.polygons().count(), 1);
         let pg = mp.polygons().next().unwrap();
         assert_eq!(pg.interiors().count(), 0);
+    }
+
+    #[test]
+    fn degenerate_ring_falls_back_to_its_first_vertex() {
+        let ring: Ring<P> = Ring::from_vec(vec![P::new(1.0, 2.0)]);
+        let mp = assemble_multipolygon(vec![ring]);
+        assert_eq!(mp.polygons().count(), 1);
     }
 
     #[test]

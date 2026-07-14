@@ -49,6 +49,8 @@ use crate::relate::overlaps;
 /// let merged = merge_polygons(vec![a, b, far]).unwrap();
 /// assert_eq!(merged.polygons().count(), 2);
 /// ```
+#[inline]
+#[must_use = "merging can fail and the merged geometry should be used"]
 pub fn merge_polygons<P>(
     polygons: Vec<Polygon<P>>,
 ) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
@@ -106,6 +108,8 @@ where
 /// # Errors
 ///
 /// Propagates [`OverlayError`] from the underlying unions.
+#[inline]
+#[must_use = "merging can fail and the merged geometry should be used"]
 pub fn merge_multipolygon<P>(
     mp: MultiPolygon<Polygon<P>>,
 ) -> Result<MultiPolygon<Polygon<P>>, OverlayError>

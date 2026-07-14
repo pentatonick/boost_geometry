@@ -50,6 +50,8 @@ use geometry_trait::{
 
 use crate::within::{WithinPoly, WithinStrategy};
 
+pub use crate::reversal::Reversed;
+
 /// A strategy for "do these two geometries share at least one point?".
 ///
 /// Mirrors `boost::geometry::intersects(g1, g2)` from
@@ -83,34 +85,6 @@ where
     #[inline]
     fn intersects(&self, a: &A, b: &B) -> bool {
         <<A::Kind as IntersectsPairStrategy<B::Kind>>::S as Default>::default().intersects(a, b)
-    }
-}
-
-/// `Reversed<S>` lifts an `IntersectsStrategy<A, B>` to an
-/// `IntersectsStrategy<B, A>` by swapping the arguments.
-///
-/// Mirrors `boost::geometry::reverse_dispatch`
-/// (`core/reverse_dispatch.hpp`) together with the partial
-/// specialisation that uses it in
-/// `algorithms/detail/intersects/interface.hpp`. Boost has one such
-/// specialisation per algorithm; in Rust the symmetry is expressed
-/// once with the blanket impl below — every concrete intersects pair
-/// gets the swap for free.
-///
-/// Distinct from [`crate::distance::Reversed`] only because Rust does
-/// not let a single newtype carry two unrelated blanket impls without
-/// running into orphan / coherence collisions; we deliberately keep
-/// the two algorithms' adapters in their own namespaces.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Reversed<S>(pub S);
-
-impl<A, B, S> IntersectsStrategy<B, A> for Reversed<S>
-where
-    S: IntersectsStrategy<A, B>,
-{
-    #[inline]
-    fn intersects(&self, b: &B, a: &A) -> bool {
-        self.0.intersects(a, b)
     }
 }
 
@@ -488,13 +462,14 @@ where
 {
     let mut i = 0;
     while i < dim {
-        // const-generic indexed access — match on the small set we
-        // support (2 and 3 are the only dimensions used in practice).
+        // const-generic indexed access — match on every dimension supported
+        // by geometry_trait's stable-Rust dimension walkers.
         let eq = match i {
             0 => a.get::<0>() == b.get::<0>(),
             1 => a.get::<1>() == b.get::<1>(),
             2 => a.get::<2>() == b.get::<2>(),
-            _ => true,
+            3 => a.get::<3>() == b.get::<3>(),
+            _ => panic!("points_equal: dimension exceeds MAX_DIM (4)"),
         };
         if !eq {
             return false;

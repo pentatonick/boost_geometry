@@ -71,7 +71,7 @@ mod tests {
     extern crate alloc;
 
     use super::*;
-    use crate::point::{Point, PointMut};
+    use crate::point::Point;
     use alloc::vec;
     use alloc::vec::Vec;
     use geometry_cs::Cartesian;
@@ -91,16 +91,6 @@ mod tests {
 
         fn get<const D: usize>(&self) -> f64 {
             if D == 0 { self.0 } else { self.1 }
-        }
-    }
-
-    impl PointMut for Xy {
-        fn set<const D: usize>(&mut self, v: f64) {
-            if D == 0 {
-                self.0 = v;
-            } else {
-                self.1 = v;
-            }
         }
     }
 
@@ -169,6 +159,9 @@ mod tests {
 
         assert_eq!(poly.exterior().points().count(), 5);
         assert_eq!(poly.interiors().count(), 2);
+        let first = poly.exterior().points().next().unwrap();
+        assert_eq!(first.get::<0>().to_bits(), 0.0_f64.to_bits());
+        assert_eq!(first.get::<1>().to_bits(), 0.0_f64.to_bits());
 
         let inner_counts: Vec<usize> = poly.interiors().map(|r| r.points().count()).collect();
         assert_eq!(inner_counts, vec![5, 5]);
