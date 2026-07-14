@@ -85,6 +85,12 @@ point equality/intersection inspect the fourth ordinate instead of stopping at
 three, and the GeoJSON/WKB writer traits are publicly re-exported so downstream
 types can implement the bounds advertised by the public writer functions.
 
+A post-port no-std audit also restored every previously supported crate in the
+generated support table. Robust arithmetic and Cartesian overlay now dispatch
+their fused and transcendental floating-point operations through
+`geometry_coords::math`, selecting the standard library or `libm` without
+disabling the algorithms.
+
 Exactly six compiled functions remain uncalled in the all-features report:
 
 - two GeoJSON UTF-8 error closures whose byte slices are derived from an
@@ -124,6 +130,10 @@ if the scope or implementation changes:
    particular, revisit the three R-tree branches if leaves gain stored packed
    groups, and revisit the parser/fallback classifications if their input or
    seed construction changes.
+6. **The no-std table records build support, using `libm` when required.** It
+   does not claim that geographic strategies historically gated behind `std`
+   expose those transcendental methods in a core-only build. Revisit that API
+   boundary if geographic strategy execution becomes a no-std requirement.
 
 ## Index of maps (one file per C++ subsystem)
 

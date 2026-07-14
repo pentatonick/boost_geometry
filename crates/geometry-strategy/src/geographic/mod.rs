@@ -25,7 +25,9 @@ mod vertex;
 
 pub use area::{GeographicArea, GeographicPolygonArea};
 pub use azimuth::GeographicAzimuth;
-pub use differential::{DifferentialQuantities, differential_quantities};
+pub use differential::DifferentialQuantities;
+#[cfg(feature = "std")]
+pub use differential::differential_quantities;
 pub use direct::DirectResult;
 pub use direct_karney::KarneyDirect;
 pub use direct_thomas::ThomasDirect;
@@ -38,6 +40,7 @@ pub use inverse::InverseResult;
 pub use inverse_karney::{Karney, KarneyInverse};
 pub use length::{GeographicLength, GeographicPerimeter};
 pub use meridian::{Meridian, MeridianInverseResult, MeridianSegmentKind};
+#[cfg(feature = "std")]
 pub use vertex::{
     geographic_vertex_latitude, geographic_vertex_longitude, spherical_vertex_latitude,
     spherical_vertex_longitude,

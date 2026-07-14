@@ -71,7 +71,7 @@ pub fn two_diff(a: f64, b: f64) -> [f64; 2] {
 #[inline]
 #[must_use]
 pub fn two_product_tail(a: f64, b: f64, x: f64) -> f64 {
-    a.mul_add(b, -x)
+    crate::math::mul_add(a, b, -x)
 }
 
 /// Multiply `a * b`, returning `[rounded_product, exact_roundoff]`.

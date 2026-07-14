@@ -1,8 +1,10 @@
-//! The callable arithmetic surface of `CoordinateScalar`: `abs` is
-//! defined for every scalar (integers included — only `sqrt` is
-//! float-only, guarded by `Promote`).
+//! The callable arithmetic surface exposed by `geometry_coords`.
+//! `CoordinateScalar::abs` is defined for every scalar (integers included —
+//! only `sqrt` is float-only, guarded by `Promote`), while `math` provides
+//! the public `std`/`libm` dispatch boundary.
 
 use geometry_coords::CoordinateScalar;
+use geometry_coords::math::{atan2, ceil, cos, hypot, mul_add, sin};
 
 #[test]
 fn integer_abs_is_callable() {
@@ -21,4 +23,14 @@ fn float_abs_matches_std() {
 fn integer_square_root_rejects_unpromoted_arithmetic() {
     let panic = std::panic::catch_unwind(|| CoordinateScalar::sqrt(4_i32));
     assert!(panic.is_err());
+}
+
+#[test]
+fn public_math_dispatch_covers_robust_and_overlay_primitives() {
+    assert!((mul_add(2.0_f64, 3.0, 4.0) - 10.0).abs() < f64::EPSILON);
+    assert!((hypot(3.0_f64, 4.0) - 5.0).abs() < f64::EPSILON);
+    assert!((ceil(2.25_f64) - 3.0).abs() < f64::EPSILON);
+    assert!((sin(core::f64::consts::FRAC_PI_2) - 1.0).abs() < 1e-15);
+    assert!((cos(core::f64::consts::PI) + 1.0).abs() < 1e-15);
+    assert!((atan2(1.0_f64, 0.0) - core::f64::consts::FRAC_PI_2).abs() < 1e-15);
 }

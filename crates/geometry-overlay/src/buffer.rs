@@ -30,7 +30,10 @@
 
 use alloc::vec::Vec;
 
-use geometry_coords::CoordinateScalar;
+use geometry_coords::{
+    CoordinateScalar,
+    math::{atan2, ceil, cos, hypot, mul_add, sin},
+};
 use geometry_cs::{CartesianFamily, CoordinateSystem, FromF64};
 use geometry_model::{Linestring, MultiPolygon, Polygon, Ring};
 use geometry_strategy::buffer::{
@@ -680,7 +683,7 @@ where
             }
             BufferJoinStrategy::Miter { limit } => {
                 if let Some(point) = intersection {
-                    let miter_length = (point.0 - vertex.0).hypot(point.1 - vertex.1);
+                    let miter_length = hypot(point.0 - vertex.0, point.1 - vertex.1);
                     if point.0.is_finite()
                         && point.1.is_finite()
                         && miter_length <= limit.max(1.0) * distance.abs()
@@ -704,7 +707,7 @@ where
     }
     if distance < 0.0 {
         let clearance = distance.abs();
-        let tolerance = clearance.mul_add(1e-9, f64::EPSILON * 16.0);
+        let tolerance = mul_add(clearance, 1e-9, f64::EPSILON * 16.0);
         if boundary.iter().any(|point| {
             !point_in_or_on_ring(*point, &vertices)
                 || minimum_boundary_distance(*point, &vertices) + tolerance < clearance
@@ -804,7 +807,7 @@ fn offset_path(
         .map(|edge| {
             let dx = edge[1].0 - edge[0].0;
             let dy = edge[1].1 - edge[0].1;
-            let length = dx.hypot(dy);
+            let length = hypot(dx, dy);
             (-dy / length * side, dx / length * side)
         })
         .collect();
@@ -835,7 +838,7 @@ fn offset_path(
             (BufferJoinStrategy::Miter { limit }, Some(point))
                 if point.0.is_finite() && point.1.is_finite() =>
             {
-                let miter_length = (point.0 - vertex.0).hypot(point.1 - vertex.1);
+                let miter_length = hypot(point.0 - vertex.0, point.1 - vertex.1);
                 if distance == 0.0 || miter_length <= limit.max(1.0) * distance.abs() {
                     path.push(point);
                 } else {
@@ -904,8 +907,8 @@ fn push_arc_between(
     if radius == 0.0 {
         return;
     }
-    let start = (from.1 - center.1).atan2(from.0 - center.0);
-    let mut end = (to.1 - center.1).atan2(to.0 - center.0);
+    let start = atan2(from.1 - center.1, from.0 - center.0);
+    let mut end = atan2(to.1 - center.1, to.0 - center.0);
     if counterclockwise {
         while end < start {
             end += core::f64::consts::TAU;
@@ -916,14 +919,13 @@ fn push_arc_between(
         }
     }
     let sweep = end - start;
-    let steps = ((sweep.abs() / core::f64::consts::TAU) * points_per_circle as f64)
-        .ceil()
-        .max(1.0) as usize;
+    let steps =
+        ceil((sweep.abs() / core::f64::consts::TAU) * points_per_circle as f64).max(1.0) as usize;
     for step in 1..steps {
         let angle = start + sweep * step as f64 / steps as f64;
         output.push((
-            center.0 + radius * angle.cos(),
-            center.1 + radius * angle.sin(),
+            center.0 + radius * cos(angle),
+            center.1 + radius * sin(angle),
         ));
     }
 }
@@ -936,9 +938,8 @@ fn push_end_arc(
     points_per_circle: usize,
     clockwise: bool,
 ) {
-    let radius = (from.0 - center.0)
-        .hypot(from.1 - center.1)
-        .max((to.0 - center.0).hypot(to.1 - center.1));
+    let radius =
+        hypot(from.0 - center.0, from.1 - center.1).max(hypot(to.0 - center.0, to.1 - center.1));
     push_arc_between(
         output,
         center,
@@ -972,7 +973,7 @@ where
     let step = core::f64::consts::TAU / segments as f64;
     for k in 0..segments {
         let a = -step * k as f64;
-        pts.push(make_point(cx + r * a.cos(), cy + r * a.sin()));
+        pts.push(make_point(cx + r * cos(a), cy + r * sin(a)));
     }
     pts.push(pts[0]);
     Ring::from_vec(pts)
@@ -1027,7 +1028,7 @@ fn minimum_boundary_distance(point: (f64, f64), vertices: &[(f64, f64)]) -> f64 
                 .clamp(0.0, 1.0)
         };
         let nearest = (start.0 + fraction * delta.0, start.1 + fraction * delta.1);
-        minimum = minimum.min((point.0 - nearest.0).hypot(point.1 - nearest.1));
+        minimum = minimum.min(hypot(point.0 - nearest.0, point.1 - nearest.1));
     }
     minimum
 }

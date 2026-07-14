@@ -13,7 +13,10 @@
 
 use alloc::vec::Vec;
 
-use geometry_coords::CoordinateScalar;
+use geometry_coords::{
+    CoordinateScalar,
+    math::{atan2, hypot},
+};
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{MultiPolygon, Polygon, Ring, Segment};
 use geometry_tag::SameAs;
@@ -193,7 +196,7 @@ where
         let start = nodes[candidate.start].coordinate;
         let end = nodes[candidate.end].coordinate;
         let delta = (end.x - start.x, end.y - start.y);
-        let length = delta.0.hypot(delta.1);
+        let length = hypot(delta.0, delta.1);
         if length <= snap_tolerance {
             continue;
         }
@@ -320,7 +323,10 @@ where
 {
     let coordinate = Coordinate::from_point(&point);
     if let Some(index) = nodes.iter().position(|node| {
-        (node.coordinate.x - coordinate.x).hypot(node.coordinate.y - coordinate.y) <= tolerance
+        hypot(
+            node.coordinate.x - coordinate.x,
+            node.coordinate.y - coordinate.y,
+        ) <= tolerance
     }) {
         return index;
     }
@@ -401,7 +407,7 @@ fn turn_angle(incoming: (f64, f64), vertex: Coordinate, next: Coordinate) -> f64
     let outgoing = (next.x - vertex.x, next.y - vertex.y);
     let cross = incoming.0 * outgoing.1 - incoming.1 * outgoing.0;
     let dot = incoming.0 * outgoing.0 + incoming.1 * outgoing.1;
-    let angle = cross.atan2(dot);
+    let angle = atan2(cross, dot);
     if angle < 0.0 {
         angle + core::f64::consts::TAU
     } else {
