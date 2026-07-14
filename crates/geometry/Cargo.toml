@@ -35,7 +35,9 @@ libm = [
     "geometry-algorithm/libm",
     "geometry-adapt/libm",
     "geometry-overlay/libm",
+    "geometry-rtree/libm",
 ]
+serde = ["geometry-rtree/serde"]
 
 [dependencies]
 geometry-tag       = { version = "0.0.7", path = "../geometry-tag" }
@@ -53,6 +55,7 @@ geometry-derive    = { version = "0.0.7", path = "../geometry-derive" }
 [dev-dependencies]
 trybuild = "1"
 criterion = "0.5"
+serde_json = "1"
 
 [[bench]]
 name = "distance"

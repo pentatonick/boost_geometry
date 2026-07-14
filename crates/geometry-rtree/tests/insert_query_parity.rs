@@ -104,7 +104,7 @@ fn query_result_sets_are_the_same_points() {
     }
     let win = Bounds::new([10.0, 2.0], [15.0, 4.0]);
     let mut hits: Vec<(f64, f64)> = t
-        .query(Predicate::Within(win))
+        .query(Predicate::CoveredBy(win))
         .iter()
         .map(|p| (p.get::<0>(), p.get::<1>()))
         .collect();

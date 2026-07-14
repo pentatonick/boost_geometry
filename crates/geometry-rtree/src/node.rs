@@ -14,7 +14,7 @@ use crate::indexable::Indexable;
 /// A [`Node::Leaf`] stores the indexed values directly; a
 /// [`Node::Branch`] stores `(child_bounds, child_node)` pairs. Mirrors
 /// the leaf / internal split of Boost's rtree node variant.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Node<T> {
     /// Values at the bottom of the tree.
     Leaf(Vec<T>),

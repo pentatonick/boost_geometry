@@ -36,7 +36,7 @@ gating, divergence docs). Read it before writing any port.
 
 ## Current progress — 2026-07-14
 
-**The algorithms milestone is complete.** Every public entry header mapped in
+**The algorithms and R-tree milestones are complete.** Every public entry header mapped in
 [`algorithms.md`](./algorithms.md) now has a Rust home and is reachable through
 the `boost_geometry` public facade. Public-facade integration tests cover the
 entries and the workspace passes its full test suite, Clippy, strict rustdoc,
@@ -91,6 +91,30 @@ their fused and transcendental floating-point operations through
 `geometry_coords::math`, selecting the standard library or `libm` without
 disabling the algorithms.
 
+### R-tree closure
+
+The [`index/` R-tree map](./index_rtree.md) is now closed through the public
+`boost_geometry::rtree` facade. Public-API-first tests cover all seven Boost
+box predicates, logical `and`/`not` and `satisfies`, repeated condensing
+removal/root collapse under the default, linear, quadratic, and R\* split
+policies, count/range removal, bounds, clone, iteration/extend/clear, and serde
+round trips. Existing scan-oracle, exact-distance, lazy-iterator, and allocation
+budget suites remain green.
+
+The crate's `no_std` claim now covers its dependency graph rather than relying
+on dependencies' default `std` features. Both
+`cargo build -p geometry-rtree --no-default-features` and the same build with
+`--features serde` pass with `alloc` and the libm-backed coordinate kernel.
+
+The final `RTREE_PROFILING.md` default remains
+`AsymmetricRStarSplit<6, 2, 12, 4, 4, 4>`. The compact 18-row Callgrind matrix
+was rerun twice after the API closure: insertion build and all query-only kNN
+rows were instruction-identical, bulk build changed by +0.0003%, and both range
+totals stayed within 0.05% of the pre-port baseline—well inside the retained 1%
+gate. R\* forced reinsertion and the experimental k-means splitter are recorded
+as deliberate, revisitable non-ports rather than left as ambiguous missing
+work.
+
 Exactly six compiled functions remain uncalled in the all-features report:
 
 - two GeoJSON UTF-8 error closures whose byte slices are derived from an
@@ -134,6 +158,21 @@ if the scope or implementation changes:
    does not claim that geographic strategies historically gated behind `std`
    expose those transcendental methods in a core-only build. Revisit that API
    boundary if geographic strategy execution becomes a no-std requirement.
+7. **R-tree built-in relations are bounding-box relations.** They are exact for
+   points/boxes and candidate filters for non-rectangular application values;
+   revisit if `Indexable` exposes exact geometry.
+8. **R\* forced reinsertion is deliberately omitted.** Profiling isolated and
+   retained R\* split selection without reinsertion; revisit on a correctness
+   gap or a representative workload that fails the 1% performance gate.
+9. **R-tree removal condenses by reinserting values.** It preserves tree
+   invariants but not Boost's original-level subtree reinsertion cost model;
+   revisit if deletion throughput becomes a measured bottleneck.
+10. **R-tree serde stores values, not node topology.** Loading reconstructs an
+    STR-packed tree under the selected parameters so private layout is not a
+    wire-format commitment.
+11. **C++ inserter/adaptor and copy/destroy visitors are replaced by Rust
+    language facilities.** `Extend`/`FromIterator`, lazy iterators, `Clone`,
+    ownership, and `Drop` provide the corresponding public behavior.
 
 ## Index of maps (one file per C++ subsystem)
 
@@ -145,7 +184,7 @@ if the scope or implementation changes:
 | [`strategies.md`](./strategies.md) | `strategies/`, `strategy/`, `formulas/` | ◑ |
 | [`overlay.md`](./overlay.md) | `algorithms/detail/overlay,relate,buffer,...` | ◑ |
 | [`io.md`](./io.md) | `io/` (WKT, DSV, SVG) + geo I/O | ◑ |
-| [`index_rtree.md`](./index_rtree.md) | `index/` (R-tree) | ◑ |
+| [`index_rtree.md`](./index_rtree.md) | `index/` (R-tree) | ✅ |
 | [`srs_projections.md`](./srs_projections.md) | `srs/` (CRS, projections, transforms) | ◑ |
 | [`iterators_views.md`](./iterators_views.md) | `iterators/`, `views/` | 🚫 |
 | [`policies.md`](./policies.md) | `policies/` (robustness, interrupt, compare) | ◑ |
@@ -161,7 +200,7 @@ if the scope or implementation changes:
 | strategies / formulas | ● | ● | ● | |
 | overlay / relate / buffer | ● | ● | ● | |
 | I/O | ● | | ● | |
-| index (R-tree) | ● | ● | ● | |
+| index (R-tree) | ● | | | ● |
 | srs / projections | ● | ● | ● | ● |
 | iterators / views | | | | ● |
 | policies | ● | ● | ● | ● |
@@ -212,7 +251,7 @@ linked map.
 - [x] **`comparable_distance` / `expand` / `covered_by`** standalone entries
   ([`algorithms.md`](./algorithms.md))
 - [ ] **DSV write** (`io/dsv/write.hpp`) — low priority ([`io.md`](./io.md))
-- [ ] **R-tree** — quadratic/R*-split confirm, remove-visitor, serialization
+- [x] **R-tree** — quadratic/R\*-split confirmation, remove visitor, and serialization
   ([`index_rtree.md`](./index_rtree.md))
 - [ ] **Boost projections** — native ports of the 99 `srs/projections/proj/*`
   headers *if* `proj4rs` proves insufficient ([`srs_projections.md`](./srs_projections.md))

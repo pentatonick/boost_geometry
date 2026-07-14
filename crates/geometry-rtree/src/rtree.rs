@@ -15,10 +15,11 @@ use crate::indexable::Indexable;
 use crate::nearest_bound::NearestBound;
 use crate::nearest_iter::NearestIter;
 use crate::node::Node;
-use crate::predicate::Predicate;
-use crate::query_iter::QueryIter;
+use crate::predicate::{Predicate, QueryPredicate};
+use crate::query_iter::{QueryIter, QueryWithIter};
 use crate::search_frontier::SearchFrontier;
 use crate::split::{AsymmetricRStarSplit, SplitParameters};
+use crate::values::Values;
 
 /// A spatial index over `Indexable` values, parameterised by a split
 /// strategy.
@@ -61,6 +62,17 @@ impl<T: Indexable, Params: SplitParameters> Default for Rtree<T, Params> {
     }
 }
 
+impl<T: Indexable + Clone, Params: SplitParameters> Clone for Rtree<T, Params> {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            len: self.len,
+            height: self.height,
+            _params: PhantomData,
+        }
+    }
+}
+
 impl<T: Indexable, Params: SplitParameters> Rtree<T, Params> {
     /// An empty tree.
     #[must_use]
@@ -93,6 +105,33 @@ impl<T: Indexable, Params: SplitParameters> Rtree<T, Params> {
         self.height
     }
 
+    /// The bounding box covering every value, or `None` for an empty
+    /// tree.
+    #[must_use]
+    #[inline]
+    pub fn bounds(&self) -> Option<Bounds> {
+        self.root.bounds()
+    }
+
+    /// Iterate over every stored value in depth-first tree order.
+    #[must_use]
+    #[inline]
+    pub fn iter(&self) -> Values<'_, T> {
+        Values::new(
+            &self.root,
+            self.len,
+            self.height,
+            Params::BRANCH_MAX.max(Params::BULK_BRANCH_MAX),
+        )
+    }
+
+    /// Remove every value while retaining this tree's split strategy.
+    pub fn clear(&mut self) {
+        self.root = Node::Leaf(Vec::new());
+        self.len = 0;
+        self.height = 1;
+    }
+
     /// Insert one value.
     ///
     /// Descends by least-enlargement to a leaf, inserts, and splits and
@@ -119,6 +158,14 @@ impl<T: Indexable, Params: SplitParameters> Rtree<T, Params> {
         self.query_iter(predicate).collect()
     }
 
+    /// Every value accepted by a logical or user-defined predicate.
+    ///
+    /// This is the extensible companion to [`query`](Self::query).
+    #[must_use]
+    pub fn query_with<P: QueryPredicate<T>>(&self, predicate: P) -> Vec<&T> {
+        self.query_iter_with(predicate).collect()
+    }
+
     /// Lazily iterate the values whose bounds satisfy `predicate`.
     ///
     /// The pruning walk of `visitors/spatial_query.hpp` as a lazy
@@ -142,7 +189,27 @@ impl<T: Indexable, Params: SplitParameters> Rtree<T, Params> {
     /// ```
     #[must_use]
     pub fn query_iter(&self, predicate: Predicate) -> QueryIter<'_, T> {
-        QueryIter::new(&self.root, predicate, self.height(), Params::BRANCH_MAX)
+        QueryIter::new(
+            &self.root,
+            predicate,
+            self.height(),
+            Params::BRANCH_MAX.max(Params::BULK_BRANCH_MAX),
+        )
+    }
+
+    /// Lazily iterate values accepted by a logical or user-defined
+    /// predicate.
+    ///
+    /// Built-in spatial predicates should use [`query_iter`](Self::query_iter),
+    /// whose concrete iterator keeps that common path compact.
+    #[must_use]
+    pub fn query_iter_with<P: QueryPredicate<T>>(&self, predicate: P) -> QueryWithIter<'_, T, P> {
+        QueryWithIter::new(
+            &self.root,
+            predicate,
+            self.height(),
+            Params::BRANCH_MAX.max(Params::BULK_BRANCH_MAX),
+        )
     }
 
     /// Lazily iterate ALL values, nearest to `query` first — an
@@ -262,6 +329,148 @@ impl<T: Indexable, Params: SplitParameters> Rtree<T, Params> {
         }
         ranks.into_values()
     }
+
+    /// Count values equal to `value`.
+    ///
+    /// Mirrors `boost::geometry::index::rtree::count`. Equality is
+    /// evaluated with `T::eq`; the indexable bounds are not used as a
+    /// substitute for value equality.
+    #[must_use]
+    pub fn count(&self, value: &T) -> usize
+    where
+        T: PartialEq,
+    {
+        self.query_iter(Predicate::Intersects(value.bounds()))
+            .filter(|candidate| *candidate == value)
+            .count()
+    }
+
+    /// Remove one value equal to `value`, returning `1` when found and
+    /// `0` otherwise.
+    ///
+    /// Underfull nodes are detached and their remaining values are
+    /// reinserted, then a one-child root is collapsed. This is the
+    /// value-level analogue of Boost's `visitors/remove.hpp` condense
+    /// walk and preserves every configured minimum-fill invariant.
+    #[must_use]
+    pub fn remove(&mut self, value: &T) -> usize
+    where
+        T: PartialEq,
+    {
+        let mut orphans = Vec::new();
+        if !remove_from::<T, Params>(&mut self.root, value, &value.bounds(), &mut orphans) {
+            return 0;
+        }
+
+        self.len -= 1;
+        self.collapse_root();
+        for orphan in orphans {
+            self.insert_without_len(orphan);
+        }
+        debug_assert_eq!(self.root.value_count(), self.len);
+        debug_assert_eq!(self.root.height(), self.height);
+        1
+    }
+
+    /// Remove one occurrence of each supplied value and return the
+    /// number removed.
+    ///
+    /// This is the Rust iterator counterpart of Boost's range-removal
+    /// overload.
+    #[must_use]
+    pub fn remove_all<'a, I>(&mut self, values: I) -> usize
+    where
+        T: PartialEq + 'a,
+        I: IntoIterator<Item = &'a T>,
+    {
+        values.into_iter().map(|value| self.remove(value)).sum()
+    }
+
+    fn insert_without_len(&mut self, value: T) {
+        if let Some((b1, n1, b2, n2)) = insert_into::<T, Params>(&mut self.root, value) {
+            self.root = Node::Branch(Vec::from([(b1, n1), (b2, n2)]));
+            self.height += 1;
+        }
+    }
+
+    fn collapse_root(&mut self) {
+        loop {
+            let replacement = match &mut self.root {
+                Node::Branch(children) if children.is_empty() => Some(Node::Leaf(Vec::new())),
+                Node::Branch(children) if children.len() == 1 => {
+                    Some(children.pop().expect("one root child").1)
+                }
+                Node::Leaf(_) | Node::Branch(_) => None,
+            };
+            let Some(replacement) = replacement else {
+                break;
+            };
+            self.root = replacement;
+            self.height = self.root.height();
+        }
+        if self.len == 0 {
+            self.root = Node::Leaf(Vec::new());
+            self.height = 1;
+        }
+    }
+}
+
+fn remove_from<T, Params>(
+    node: &mut Node<T>,
+    value: &T,
+    value_bounds: &Bounds,
+    orphans: &mut Vec<T>,
+) -> bool
+where
+    T: Indexable + PartialEq,
+    Params: SplitParameters,
+{
+    match node {
+        Node::Leaf(values) => {
+            let Some(index) = values.iter().position(|candidate| candidate == value) else {
+                return false;
+            };
+            values.swap_remove(index);
+            true
+        }
+        Node::Branch(children) => {
+            for index in 0..children.len() {
+                if !children[index].0.contains(value_bounds) {
+                    continue;
+                }
+                if !remove_from::<T, Params>(&mut children[index].1, value, value_bounds, orphans) {
+                    continue;
+                }
+
+                let underfull = match &children[index].1 {
+                    Node::Leaf(values) => values.len() < Params::LEAF_MIN,
+                    Node::Branch(grandchildren) => grandchildren.len() < Params::BRANCH_MIN,
+                };
+                if underfull {
+                    let (_, removed) = children.swap_remove(index);
+                    append_values(removed, orphans);
+                } else {
+                    children[index].0 = children[index]
+                        .1
+                        .bounds()
+                        .expect("a retained child is non-empty");
+                }
+                return true;
+            }
+            false
+        }
+    }
+}
+
+fn append_values<T>(node: Node<T>, values: &mut Vec<T>) {
+    match node {
+        Node::Leaf(mut leaf) => values.append(&mut leaf),
+        Node::Branch(children) => {
+            for (_, child) in children {
+                append_values(child, values);
+            }
+        }
+    }
 }
 
 fn admit_nearest_values<'a, T: Indexable>(
@@ -309,6 +518,23 @@ impl<T: Indexable, Params: SplitParameters> FromIterator<T> for Rtree<T, Params>
             height,
             _params: PhantomData,
         }
+    }
+}
+
+impl<T: Indexable, Params: SplitParameters> Extend<T> for Rtree<T, Params> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        for value in iter {
+            self.insert(value);
+        }
+    }
+}
+
+impl<'a, T: Indexable, Params: SplitParameters> IntoIterator for &'a Rtree<T, Params> {
+    type Item = &'a T;
+    type IntoIter = Values<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
@@ -1542,7 +1768,7 @@ mod tests {
             }
         }
         // The window [2,5]×[2,5] contains a 4×4 block of points.
-        let hits = t.query(Predicate::Within(Bounds::new([2.0, 2.0], [5.0, 5.0])));
+        let hits = t.query(Predicate::CoveredBy(Bounds::new([2.0, 2.0], [5.0, 5.0])));
         assert_eq!(hits.len(), 16);
     }
 
@@ -2402,7 +2628,10 @@ mod tests {
                 .map(|p| [p.get::<0>(), p.get::<1>()])
                 .collect();
             expected.sort_by(coordinate_order);
-            for predicate in [Predicate::Intersects(leaf_box), Predicate::Within(leaf_box)] {
+            for predicate in [
+                Predicate::Intersects(leaf_box),
+                Predicate::CoveredBy(leaf_box),
+            ] {
                 let mut got: Vec<[f64; 2]> = tree
                     .query(predicate)
                     .iter()

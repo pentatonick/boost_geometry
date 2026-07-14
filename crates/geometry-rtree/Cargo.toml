@@ -12,16 +12,27 @@ readme = "README.md"
 
 [features]
 default = ["std"]
-std = []
+std = [
+    "geometry-coords/std",
+    "geometry-cs/std",
+    "geometry-trait/std",
+    "geometry-model/std",
+]
+libm = [
+    "geometry-coords/libm",
+    "geometry-cs/libm",
+    "geometry-trait/libm",
+    "geometry-model/libm",
+]
+serde = ["dep:serde", "geometry-model/serde"]
 
 [dependencies]
-geometry-tag       = { version = "0.0.7", path = "../geometry-tag" }
-geometry-coords    = { version = "0.0.7", path = "../geometry-coords" }
-geometry-cs        = { version = "0.0.7", path = "../geometry-cs" }
-geometry-trait     = { version = "0.0.7", path = "../geometry-trait" }
-geometry-model     = { version = "0.0.7", path = "../geometry-model" }
-geometry-algorithm = { version = "0.0.7", path = "../geometry-algorithm" }
-heapless           = "0.8"
+geometry-coords = { version = "0.0.7", path = "../geometry-coords", default-features = false, features = ["libm"] }
+geometry-cs     = { version = "0.0.7", path = "../geometry-cs",     default-features = false }
+geometry-trait  = { version = "0.0.7", path = "../geometry-trait",  default-features = false }
+geometry-model  = { version = "0.0.7", path = "../geometry-model",  default-features = false }
+heapless        = { version = "0.8", default-features = false }
+serde              = { version = "1", optional = true, default-features = false, features = ["alloc", "derive"] }
 
 # Workspace lints, except `unsafe_code` steps down from `forbid` to
 # `deny`: a Cargo-level forbid is a CLI lint that no source attribute

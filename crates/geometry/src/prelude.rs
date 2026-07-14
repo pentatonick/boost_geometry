@@ -55,7 +55,9 @@ pub use crate::overlay::{
     is_valid, is_valid_polygon, is_valid_ring, merge_elements, merge_multipolygon, merge_polygons,
     overlaps, point_on_surface, relate, relation, sym_difference, touches, r#union, union_poly,
 };
-pub use crate::rtree::{Bounds, Indexable, Linear, Predicate, Quadratic, Rtree};
+pub use crate::rtree::{
+    Bounds, Indexable, Linear, Predicate, Quadratic, QueryPredicate, Rtree, and, not, satisfies,
+};
 pub use crate::trait_::{
     Box, Geometry, GeometryCollection, Linestring, MultiLinestring, MultiPoint, MultiPolygon,
     Point, PointMut, PointOrder, Polygon, PolyhedralSurface, Ring, Segment,

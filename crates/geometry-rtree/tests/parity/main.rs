@@ -302,7 +302,7 @@ fn window_size_predicate_matrix_matches_scan() {
                 let point_hits = range_scan(&points, min, max);
                 for (predicate, oracle) in [
                     (Predicate::Intersects(window), point_hits.clone()),
-                    (Predicate::Within(window), point_hits.clone()),
+                    (Predicate::CoveredBy(window), point_hits.clone()),
                     (
                         Predicate::Contains(window),
                         contains_scan(&points, min, max),
@@ -320,7 +320,7 @@ fn window_size_predicate_matrix_matches_scan() {
 }
 
 #[test]
-fn contains_matches_a_degenerate_point_window() {
+fn covers_matches_a_degenerate_point_window() {
     let points = duplicates(4_000);
     let tree = boost_tree::<Quadratic>(&points);
     let target = points[0];
@@ -332,10 +332,11 @@ fn contains_matches_a_degenerate_point_window() {
         oracle.len()
     );
     assert_eq!(
-        boost_predicate_ids(&tree, Predicate::Contains(window)),
+        boost_predicate_ids(&tree, Predicate::Covers(window)),
         oracle,
-        "boost Contains diverges from scan oracle on a non-empty degenerate window"
+        "boost Covers diverges from scan oracle on a non-empty degenerate window"
     );
+    assert!(boost_predicate_ids(&tree, Predicate::Contains(window)).is_empty());
 }
 
 #[test]
