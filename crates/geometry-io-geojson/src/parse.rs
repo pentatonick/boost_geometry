@@ -29,7 +29,7 @@ use geometry_model::{
     DynGeometry, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D, Polygon, Ring,
 };
 
-use crate::json::{GeoJsonError, JsonValue, parse_json};
+use crate::json::{GeoJsonError, JsonValue, parse_geojson};
 
 /// A concrete 2D Cartesian point — the coordinate type every parsed
 /// geometry is built from.
@@ -69,7 +69,7 @@ type Pt = Point2D<f64, Cartesian>;
 /// assert_eq!(g.kind(), DynKind::Point);
 /// ```
 pub fn from_geojson<S: AsRef<str>>(input: S) -> Result<DynGeometry<f64, Cartesian>, GeoJsonError> {
-    let value = parse_json(input.as_ref())?;
+    let value = parse_geojson(input.as_ref())?;
     parse_geometry(&value)
 }
 
@@ -82,7 +82,7 @@ fn parse_geometry(value: &JsonValue) -> Result<DynGeometry<f64, Cartesian>, GeoJ
         .and_then(JsonValue::as_str)
         .ok_or(GeoJsonError::ExpectedType)?;
     match type_name {
-        "Point" => Ok(DynGeometry::Point(read_point(coords(value)?)?)),
+        "Point" => Ok(DynGeometry::Point(read_point_value(coordinate(value)?)?)),
         "LineString" => Ok(DynGeometry::LineString(Linestring(read_positions(
             coords(value)?,
         )?))),
@@ -105,9 +105,14 @@ fn parse_geometry(value: &JsonValue) -> Result<DynGeometry<f64, Cartesian>, GeoJ
 /// Borrow the `"coordinates"` array of a geometry object, or fail with
 /// [`GeoJsonError::MalformedCoordinates`].
 fn coords(value: &JsonValue) -> Result<&[JsonValue], GeoJsonError> {
+    coordinate(value)?
+        .as_array()
+        .ok_or(GeoJsonError::MalformedCoordinates)
+}
+
+fn coordinate(value: &JsonValue) -> Result<&JsonValue, GeoJsonError> {
     value
         .get("coordinates")
-        .and_then(JsonValue::as_array)
         .ok_or(GeoJsonError::MalformedCoordinates)
 }
 
@@ -127,14 +132,21 @@ fn read_point(position: &[JsonValue]) -> Result<Pt, GeoJsonError> {
     Ok(Point2D::new(x, y))
 }
 
+fn read_point_value(position: &JsonValue) -> Result<Pt, GeoJsonError> {
+    if let Some([x, y]) = position.as_position() {
+        return Ok(Point2D::new(x, y));
+    }
+    read_point(
+        position
+            .as_array()
+            .ok_or(GeoJsonError::MalformedCoordinates)?,
+    )
+}
+
 /// Read an array of positions `[[x, y], …]` into a `Vec` of points. Used
 /// by `LineString`, `MultiPoint`, and each ring of a `Polygon`.
 fn read_positions(positions: &[JsonValue]) -> Result<Vec<Pt>, GeoJsonError> {
-    positions
-        .iter()
-        .map(|p| p.as_array().ok_or(GeoJsonError::MalformedCoordinates))
-        .map(|p| p.and_then(read_point))
-        .collect()
+    positions.iter().map(read_point_value).collect()
 }
 
 /// Read a `Polygon`'s ring array `[[[x, y], …], …]`: the first ring is

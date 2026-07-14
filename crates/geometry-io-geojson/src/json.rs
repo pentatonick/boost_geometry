@@ -82,6 +82,11 @@ pub(crate) enum JsonValue {
     Str(String),
     /// A JSON array.
     Array(Vec<JsonValue>),
+    /// A two-number `GeoJSON` position kept inline to avoid one allocation
+    /// for every coordinate pair. The general JSON parser still emits
+    /// [`JsonValue::Array`]; this variant is enabled only by
+    /// [`parse_geojson`].
+    Position([f64; 2]),
     /// A JSON object as insertion-ordered `(key, value)` pairs.
     Object(Vec<(String, JsonValue)>),
 }
@@ -111,6 +116,14 @@ impl JsonValue {
         }
     }
 
+    /// Borrow an inline two-ordinate `GeoJSON` position.
+    pub(crate) fn as_position(&self) -> Option<[f64; 2]> {
+        match self {
+            JsonValue::Position(position) => Some(*position),
+            _ => None,
+        }
+    }
+
     /// Look up an object member by key, if this value is a
     /// [`JsonValue::Object`]. Returns the first match (`GeoJSON` objects do
     /// not carry duplicate keys).
@@ -134,10 +147,23 @@ impl JsonValue {
 ///
 /// Returns [`GeoJsonError::Json`] for a syntax error and
 /// [`GeoJsonError::UnexpectedEof`] when the input ends mid-value.
+#[cfg(test)]
 pub(crate) fn parse_json(input: &str) -> Result<JsonValue, GeoJsonError> {
+    parse_document(input, false)
+}
+
+/// Parse a `GeoJSON` document while storing exact two-number positions
+/// inline. General arrays, including positions with extra ordinates, retain
+/// the ordinary [`JsonValue::Array`] representation.
+pub(crate) fn parse_geojson(input: &str) -> Result<JsonValue, GeoJsonError> {
+    parse_document(input, true)
+}
+
+fn parse_document(input: &str, inline_positions: bool) -> Result<JsonValue, GeoJsonError> {
     let mut p = JsonParser {
         bytes: input.as_bytes(),
         pos: 0,
+        inline_positions,
     };
     p.skip_ws();
     let value = p.parse_value(0)?;
@@ -167,6 +193,7 @@ const MAX_DEPTH: usize = 128;
 struct JsonParser<'a> {
     bytes: &'a [u8],
     pos: usize,
+    inline_positions: bool,
 }
 
 impl JsonParser<'_> {
@@ -271,6 +298,11 @@ impl JsonParser<'_> {
             self.pos += 1;
             return Ok(JsonValue::Array(items));
         }
+        if self.inline_positions {
+            if let Some(position) = self.parse_position()? {
+                return Ok(JsonValue::Position(position));
+            }
+        }
         loop {
             self.skip_ws();
             items.push(self.parse_value(depth + 1)?);
@@ -287,6 +319,39 @@ impl JsonParser<'_> {
                 None => return Err(GeoJsonError::UnexpectedEof),
             }
         }
+    }
+
+    /// Parse an exact two-number array without allocating. Any other array
+    /// shape restores the cursor and falls back to the general array parser.
+    fn parse_position(&mut self) -> Result<Option<[f64; 2]>, GeoJsonError> {
+        let start = self.pos;
+        if !matches!(self.peek(), Some(b'-' | b'0'..=b'9')) {
+            return Ok(None);
+        }
+        let JsonValue::Number(x) = self.parse_number()? else {
+            unreachable!("parse_number always returns a number");
+        };
+        self.skip_ws();
+        if self.peek() != Some(b',') {
+            self.pos = start;
+            return Ok(None);
+        }
+        self.pos += 1;
+        self.skip_ws();
+        if !matches!(self.peek(), Some(b'-' | b'0'..=b'9')) {
+            self.pos = start;
+            return Ok(None);
+        }
+        let JsonValue::Number(y) = self.parse_number()? else {
+            unreachable!("parse_number always returns a number");
+        };
+        self.skip_ws();
+        if self.peek() == Some(b']') {
+            self.pos += 1;
+            return Ok(Some([x, y]));
+        }
+        self.pos = start;
+        Ok(None)
     }
 
     /// Parse a string literal, decoding the `\" \\ \/ \n \t \r \b \f`
@@ -384,7 +449,7 @@ mod tests {
         reason = "number literals in these fixtures are exact"
     )]
 
-    use super::{GeoJsonError, JsonValue, parse_json};
+    use super::{GeoJsonError, JsonValue, parse_geojson, parse_json};
     use alloc::string::ToString;
 
     #[test]
@@ -406,6 +471,22 @@ mod tests {
         let inner = outer[1].as_array().unwrap()[0].as_array().unwrap();
         assert_eq!(inner[0].as_f64(), Some(3.0));
         assert_eq!(inner[1].as_f64(), Some(4.0));
+    }
+
+    #[test]
+    fn geojson_positions_are_inline_with_general_array_fallback() {
+        assert_eq!(
+            parse_geojson("[1,2]").unwrap(),
+            JsonValue::Position([1.0, 2.0])
+        );
+        assert!(matches!(
+            parse_geojson("[1,2,3]").unwrap(),
+            JsonValue::Array(values) if values.len() == 3
+        ));
+        assert!(matches!(
+            parse_json("[1,2]").unwrap(),
+            JsonValue::Array(values) if values.len() == 2
+        ));
     }
 
     #[test]
