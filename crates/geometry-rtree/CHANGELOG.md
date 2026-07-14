@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/pentatonick/boost_geometry/compare/geometry-rtree-v0.0.6...geometry-rtree-v0.0.7) - 2026-07-14
+
+### Fixed
+
+- drop unread nearest-iter test metrics fields
+- drop redundant license-file key from crate manifests
+
+### Other
+
+- Merge branch 'test/coverage-category-d' into geojson-io-improvements
+- close category-D coverage gaps via public API
+- drop rstar comparison from geometry-rtree
+- drop duplicated iai-callgrind benches from geometry-rtree
+
 ## [0.0.6](https://github.com/pentatonick/boost_geometry/compare/geometry-rtree-v0.0.5...geometry-rtree-v0.0.6) - 2026-07-13
 
 ### Other
