@@ -84,6 +84,26 @@ pub fn to_wkb<G: Geometry + WriteWkb>(g: &G, order: ByteOrder) -> Vec<u8> {
     out
 }
 
+/// Serialise any polygon implementing [`PolygonTrait`] to OGC WKB.
+///
+/// This is the bring-your-own-type counterpart to [`to_wkb`]. It reads the
+/// polygon through the public geometry traits, including its interior rings,
+/// and writes a complete 2D Polygon record in the requested byte order.
+#[must_use]
+pub fn to_wkb_polygon<Pg>(polygon: &Pg, order: ByteOrder) -> Vec<u8>
+where
+    Pg: PolygonTrait,
+    Pg::Point: PointTrait<Scalar = f64>,
+{
+    let capacity = polygon_body_len(polygon)
+        .and_then(|body_len| HEADER_LEN.checked_add(body_len))
+        .unwrap_or(0);
+    let mut out = Vec::with_capacity(capacity);
+    write_header(WKB_POLYGON, order, &mut out);
+    write_polygon_body(polygon, order, &mut out);
+    out
+}
+
 /// The per-kind WKB emitter, implemented for every concrete model type
 /// and for [`DynGeometry`].
 ///
@@ -491,5 +511,24 @@ mod tests {
         let bytes = to_wkb(&Pt::new(1.0, 2.0), ByteOrder::BigEndian);
         // 0x00 flag, then type 1 in big-endian.
         assert_eq!(&bytes[0..5], &[0x00, 0x00, 0x00, 0x00, 0x01]);
+    }
+
+    #[test]
+    fn trait_polygon_entry_point_matches_model_writer() {
+        let polygon = Polygon::with_inners(
+            Ring::from_vec(vec![
+                Pt::new(0.0, 0.0),
+                Pt::new(0.0, 2.0),
+                Pt::new(2.0, 2.0),
+                Pt::new(2.0, 0.0),
+                Pt::new(0.0, 0.0),
+            ]),
+            vec![],
+        );
+
+        assert_eq!(
+            to_wkb_polygon(&polygon, ByteOrder::LittleEndian),
+            to_wkb(&polygon, ByteOrder::LittleEndian)
+        );
     }
 }

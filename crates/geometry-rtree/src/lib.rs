@@ -17,6 +17,61 @@
 //!
 //! Cartesian, 2D, `f64` for v1.
 //!
+//! ## Index polygons and query a point
+//!
+//! Implement [`Indexable`] for an application type by returning its
+//! axis-aligned bounds, then build an [`Rtree`] from an iterator. This example
+//! uses rectangular polygons, so a bounds intersection with a point is also an
+//! exact polygon intersection. For other polygon shapes, treat the result as a
+//! candidate set and apply an exact point-in-polygon test afterward.
+//!
+//! ```
+//! use geometry_rtree::{Bounds, Indexable, Predicate, Rtree};
+//!
+//! #[derive(Debug)]
+//! struct Parcel {
+//!     name: &'static str,
+//!     boundary: [[f64; 2]; 5],
+//!     bounds: Bounds,
+//! }
+//!
+//! impl Parcel {
+//!     fn rectangle(name: &'static str, min: [f64; 2], max: [f64; 2]) -> Self {
+//!         Self {
+//!             name,
+//!             boundary: [
+//!                 min,
+//!                 [min[0], max[1]],
+//!                 max,
+//!                 [max[0], min[1]],
+//!                 min,
+//!             ],
+//!             bounds: Bounds::new(min, max),
+//!         }
+//!     }
+//! }
+//!
+//! impl Indexable for Parcel {
+//!     fn bounds(&self) -> Bounds {
+//!         self.bounds
+//!     }
+//! }
+//!
+//! let parcels = [
+//!     Parcel::rectangle("park", [0.0, 0.0], [4.0, 3.0]),
+//!     Parcel::rectangle("school", [5.0, 0.0], [8.0, 2.0]),
+//!     Parcel::rectangle("lake", [1.0, 5.0], [3.0, 7.0]),
+//! ];
+//! let tree: Rtree<Parcel> = parcels.into_iter().collect();
+//!
+//! let point = Bounds::point([2.0, 1.0]);
+//! let hits = tree.query(Predicate::Intersects(point));
+//!
+//! assert_eq!(hits.len(), 1);
+//! assert_eq!(hits[0].name, "park");
+//! assert_eq!(hits[0].boundary[0], [0.0, 0.0]);
+//! ```
+//!
 //! Module layout:
 //!
 //! * [`bounds`] — the axis-aligned box arithmetic (area, enlargement,

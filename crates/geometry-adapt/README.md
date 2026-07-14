@@ -20,7 +20,7 @@ use geometry_cs::Cartesian;
 use geometry_tag::PointTag;
 use geometry_trait::{Geometry, Point, PointMut};
 
-##[derive(Default)]
+#[derive(Default)]
 struct MyPoint { x: f64, y: f64 }
 
 impl Geometry for MyPoint {
@@ -57,8 +57,8 @@ so downstream users only need a single dependency:
 use geometry::Point;             // the derive macro
 use geometry::prelude::*;        // brings in the `Point` trait + algorithms
 
-##[derive(Default, Point)]
-##[geometry(cs = "Cartesian", scalar = "f64")]
+#[derive(Default, Point)]
+#[geometry(cs = "Cartesian", scalar = "f64")]
 struct MyPoint { x: f64, y: f64 }
 
 let d = distance(&MyPoint { x: 0.0, y: 0.0 }, &MyPoint { x: 3.0, y: 4.0 });

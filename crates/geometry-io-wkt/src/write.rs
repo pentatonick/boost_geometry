@@ -70,6 +70,23 @@ pub fn to_wkt<G: Geometry + WriteWkt>(g: &G) -> String {
     out
 }
 
+/// Serialise any polygon implementing [`PolygonTrait`] to canonical WKT.
+///
+/// This is the bring-your-own-type counterpart to [`to_wkt`]. It reads the
+/// polygon through the public geometry traits, including its interior rings,
+/// without first converting it to a `geometry_model` type.
+#[must_use]
+pub fn to_wkt_polygon<Pg>(polygon: &Pg) -> String
+where
+    Pg: PolygonTrait,
+    Pg::Point: PointTrait<Scalar = f64>,
+{
+    let mut out = String::with_capacity(polygon_capacity(polygon).unwrap_or(0));
+    // Writing into a `String` never fails, so the `Result` is discarded.
+    let _ = write_polygon(polygon, &mut out);
+    out
+}
+
 /// Serialise a geometry into any [`core::fmt::Write`] sink.
 ///
 /// The streaming counterpart to [`to_wkt`]; use it to write straight
@@ -385,9 +402,10 @@ impl<P: PointTrait<Scalar = f64>> WriteWkt for Polygon<P, true, true> {
     }
 }
 
-fn write_polygon<P, W>(polygon: &Polygon<P, true, true>, out: &mut W) -> core::fmt::Result
+fn write_polygon<Pg, W>(polygon: &Pg, out: &mut W) -> core::fmt::Result
 where
-    P: PointTrait<Scalar = f64>,
+    Pg: PolygonTrait,
+    Pg::Point: PointTrait<Scalar = f64>,
     W: core::fmt::Write + ?Sized,
 {
     // A polygon with no exterior vertices is empty.
@@ -678,6 +696,7 @@ mod tests {
             to_wkt(&poly),
             "POLYGON((0 0,0 10,10 10,10 0,0 0),(2 2,2 4,4 4,4 2,2 2))"
         );
+        assert_eq!(to_wkt_polygon(&poly), to_wkt(&poly));
     }
 
     #[test]
