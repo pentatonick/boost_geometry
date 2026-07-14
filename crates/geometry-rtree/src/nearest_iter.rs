@@ -282,9 +282,6 @@ mod tests {
     use super::{DEFAULT_NODE_INLINE_CAPACITY, DEFAULT_VALUE_INLINE_CAPACITY, NearestMetrics};
     use crate::{AsymmetricQuadratic, AsymmetricRStarSplit, Bounds, Rtree, SplitParameters};
     use core::mem::size_of;
-    use rstar::primitives::GeomWithData;
-    use rstar::{ParentNode, PointDistance, RTree, RTreeNode};
-    use std::collections::BinaryHeap;
 
     const FIELD: f64 = 50_000.0;
     const CLUSTER_COUNT: usize = 16;
@@ -292,93 +289,6 @@ mod tests {
     const N: usize = 50_000;
     const Q: usize = 100;
     const K: usize = 8;
-
-    type RstarValue = GeomWithData<[f64; 2], u32>;
-
-    struct RstarEntry<'a> {
-        node: &'a RTreeNode<RstarValue>,
-        dist: f64,
-    }
-
-    impl PartialEq for RstarEntry<'_> {
-        fn eq(&self, other: &Self) -> bool {
-            self.dist.total_cmp(&other.dist).is_eq()
-        }
-    }
-
-    impl Eq for RstarEntry<'_> {}
-
-    impl PartialOrd for RstarEntry<'_> {
-        fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    impl Ord for RstarEntry<'_> {
-        fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-            other.dist.total_cmp(&self.dist)
-        }
-    }
-
-    #[derive(Default)]
-    struct RstarMetrics {
-        pushes: usize,
-        parent_pushes: usize,
-        leaf_pushes: usize,
-        pops: usize,
-        parent_expansions: usize,
-        leaf_parent_expansions: usize,
-        leaf_yields: usize,
-        high_water: usize,
-    }
-
-    fn extend_rstar<'a>(
-        parent: &'a ParentNode<RstarValue>,
-        query: &[f64; 2],
-        heap: &mut BinaryHeap<RstarEntry<'a>>,
-        metrics: &mut RstarMetrics,
-    ) {
-        for node in parent.children() {
-            match node {
-                RTreeNode::Parent(_) => metrics.parent_pushes += 1,
-                RTreeNode::Leaf(_) => metrics.leaf_pushes += 1,
-            }
-        }
-        heap.extend(parent.children().iter().map(|node| {
-            let dist = match node {
-                RTreeNode::Parent(parent) => parent.envelope().distance_2(query),
-                RTreeNode::Leaf(value) => value.distance_2(query),
-            };
-            RstarEntry { node, dist }
-        }));
-        metrics.pushes += parent.children().len();
-        metrics.high_water = metrics.high_water.max(heap.len());
-    }
-
-    fn measure_rstar(tree: &RTree<RstarValue>, query: [f64; 2]) -> RstarMetrics {
-        let mut metrics = RstarMetrics::default();
-        let mut heap = BinaryHeap::new();
-        extend_rstar(tree.root(), &query, &mut heap, &mut metrics);
-        while metrics.leaf_yields < K {
-            let current = heap.pop().expect("fixture tree contains K values");
-            metrics.pops += 1;
-            match current.node {
-                RTreeNode::Parent(parent) => {
-                    metrics.parent_expansions += 1;
-                    if parent
-                        .children()
-                        .first()
-                        .is_some_and(|child| matches!(child, RTreeNode::Leaf(_)))
-                    {
-                        metrics.leaf_parent_expansions += 1;
-                    }
-                    extend_rstar(parent, &query, &mut heap, &mut metrics);
-                }
-                RTreeNode::Leaf(_) => metrics.leaf_yields += 1,
-            }
-        }
-        metrics
-    }
 
     struct Lcg {
         state: u64,
@@ -534,23 +444,13 @@ mod tests {
     }
 
     #[test]
-    fn records_rstar_iterator_shape_comparison() {
+    fn records_iterator_shape() {
         for (distribution, points) in [("uniform", uniform(N)), ("clustered", clustered(N))] {
-            let boost: Rtree<(Bounds, u32), AsymmetricRStarSplit<8, 3, 32, 9>> = points
-                .iter()
-                .copied()
+            let tree: Rtree<(Bounds, u32), AsymmetricRStarSplit<8, 3, 32, 9>> = points
+                .into_iter()
                 .enumerate()
                 .map(|(i, point)| (Bounds::point(point), u32::try_from(i).expect("N fits u32")))
                 .collect();
-            let rstar = RTree::bulk_load(
-                points
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, point)| {
-                        GeomWithData::new(point, u32::try_from(i).expect("N fits u32"))
-                    })
-                    .collect(),
-            );
 
             let mut boost_pushes = 0;
             let mut boost_pops = 0;
@@ -566,16 +466,8 @@ mod tests {
             let mut boost_leaf_expansions_per_query = Vec::with_capacity(Q);
             let mut boost_node_high_water = 0;
             let mut boost_value_high_water = 0;
-            let mut rstar_pushes = 0;
-            let mut rstar_parent_pushes = 0;
-            let mut rstar_leaf_pushes = 0;
-            let mut rstar_pops = 0;
-            let mut rstar_parents = 0;
-            let mut rstar_leaf_parents = 0;
-            let mut rstar_high_water = 0;
-
             for query in queries(Q) {
-                let mut nearest = boost.nearest_iter(query);
+                let mut nearest = tree.nearest_iter(query);
                 assert_eq!(nearest.by_ref().take(K).count(), K);
                 let metrics = nearest.metrics();
                 boost_pushes += metrics.frontier.pushes;
@@ -595,16 +487,6 @@ mod tests {
                 }
                 boost_node_high_water = boost_node_high_water.max(metrics.node_high_water);
                 boost_value_high_water = boost_value_high_water.max(metrics.value_high_water);
-
-                let metrics = measure_rstar(&rstar, query);
-                assert_eq!(metrics.leaf_yields, K);
-                rstar_pushes += metrics.pushes;
-                rstar_parent_pushes += metrics.parent_pushes;
-                rstar_leaf_pushes += metrics.leaf_pushes;
-                rstar_pops += metrics.pops;
-                rstar_parents += metrics.parent_expansions;
-                rstar_leaf_parents += metrics.leaf_parent_expansions;
-                rstar_high_water = rstar_high_water.max(metrics.high_water);
             }
 
             boost_leaf_expansions_per_query.sort_unstable();
@@ -616,7 +498,7 @@ mod tests {
                 boost_leaf_expansions_per_query[Q - 1],
             );
             eprintln!(
-                "[rtree-rstar-iterator-shape] distribution={distribution} boost_pushes={boost_pushes} boost_pops={boost_pops} boost_branches={boost_branches} boost_leaves={boost_leaves} boost_node_pushes={boost_node_pushes} boost_value_pushes={boost_value_pushes} boost_node_pops={boost_node_pops} boost_value_pops={boost_value_pops} boost_node_high_water={boost_node_high_water} boost_value_high_water={boost_value_high_water} rstar_pushes={rstar_pushes} rstar_parent_pushes={rstar_parent_pushes} rstar_leaf_pushes={rstar_leaf_pushes} rstar_pops={rstar_pops} rstar_parents={rstar_parents} rstar_leaf_parents={rstar_leaf_parents} rstar_high_water={rstar_high_water}"
+                "[rtree-iterator-shape] distribution={distribution} pushes={boost_pushes} pops={boost_pops} branches={boost_branches} leaves={boost_leaves} node_pushes={boost_node_pushes} value_pushes={boost_value_pushes} node_pops={boost_node_pops} value_pops={boost_value_pops} node_high_water={boost_node_high_water} value_high_water={boost_value_high_water}"
             );
         }
     }

@@ -36,6 +36,13 @@ use geometry_trait::{
     Polygon as PolygonTrait, Ring as RingTrait,
 };
 
+/// Typical bytes reserved per 2D coordinate pair by [`to_wkt`].
+///
+/// This deliberately remains a hint rather than an upper bound: ordinary
+/// coordinates avoid geometric `String` growth while unusually long decimal
+/// spellings can still grow the buffer normally.
+const POINT_CAPACITY: usize = 16;
+
 /// Serialise a geometry to a canonical WKT [`String`].
 ///
 /// A thin wrapper over [`write_wkt`] that owns the output buffer. The
@@ -57,9 +64,9 @@ use geometry_trait::{
 /// ```
 #[must_use]
 pub fn to_wkt<G: Geometry + WriteWkt>(g: &G) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(g.wkt_capacity_hint().unwrap_or(0));
     // Writing into a `String` never fails, so the `Result` is discarded.
-    let _ = g.write_wkt(&mut out);
+    let _ = g.write_wkt_string(&mut out);
     out
 }
 
@@ -99,38 +106,163 @@ pub fn write_wkt<G: WriteWkt, W: core::fmt::Write>(g: &G, out: &mut W) -> core::
 /// stream inserters in `boost/geometry/io/wkt/write.hpp`.
 #[doc(hidden)]
 pub trait WriteWkt {
+    /// Approximate output capacity for the built-in geometry models.
+    ///
+    /// External implementations can keep the default and retain the previous
+    /// grow-on-demand behavior.
+    fn wkt_capacity_hint(&self) -> Option<usize> {
+        None
+    }
+
     /// Emit `self` as WKT into `out`.
     ///
     /// # Errors
     ///
     /// Propagates any [`core::fmt::Error`] from the sink.
     fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result;
+
+    /// Emit directly into the owned buffer used by [`to_wkt`].
+    ///
+    /// The default preserves external implementations. Built-in models with
+    /// hot coordinate-sequence paths override it so their scalar loop can be
+    /// monomorphized for [`String`] without changing the object-safe
+    /// streaming method.
+    fn write_wkt_string(&self, out: &mut String) -> core::fmt::Result {
+        self.write_wkt(out)
+    }
+}
+
+fn point_seq_capacity(point_count: usize) -> Option<usize> {
+    point_count.checked_mul(POINT_CAPACITY)
+}
+
+fn polygon_capacity<Pg>(polygon: &Pg) -> Option<usize>
+where
+    Pg: PolygonTrait,
+    Pg::Point: PointTrait<Scalar = f64>,
+{
+    let mut capacity =
+        32usize.checked_add(point_seq_capacity(polygon.exterior().points().len())?)?;
+    for ring in polygon.interiors() {
+        capacity = capacity.checked_add(point_seq_capacity(ring.points().len())?)?;
+    }
+    Some(capacity)
 }
 
 /// Format one `f64` the WKT way: integer-valued numbers lose their
 /// trailing `.0`, everything else uses Rust's shortest round-tripping
 /// representation. Keeps `POINT(10 10)` free of `.0` noise while still
 /// round-tripping fractional coordinates exactly.
-fn write_scalar(out: &mut dyn core::fmt::Write, v: f64) -> core::fmt::Result {
-    if v.is_finite() && v.fract() == 0.0 {
-        // `v as i64` is exact for integer-valued f64 within i64 range;
-        // fall back to the default format for out-of-range magnitudes.
-        if v.abs() < 9.007_199_254_740_992e15 {
-            #[allow(
-                clippy::cast_possible_truncation,
-                reason = "guarded by the magnitude check above; v is integer-valued"
-            )]
-            return write!(out, "{}", v as i64);
+fn write_scalar<W: core::fmt::Write + ?Sized>(out: &mut W, v: f64) -> core::fmt::Result {
+    if v == 0.0 {
+        return out.write_char('0');
+    }
+    if v.is_finite() && v > -9.007_199_254_740_992e15 && v < 9.007_199_254_740_992e15 {
+        // The bounded conversion is exact precisely when `v` is integral.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "guarded by the finite 2^53 magnitude range"
+        )]
+        let integer = v as i64;
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "all integers within the guarded 2^53 range are exactly representable"
+        )]
+        #[allow(
+            clippy::float_cmp,
+            reason = "exact equality intentionally identifies exactly representable integers"
+        )]
+        if v == integer as f64 {
+            return out.write_str(itoa::Buffer::new().format(integer));
         }
     }
-    write!(out, "{v}")
+    let mut buffer = ryu::Buffer::new();
+    let formatted = buffer.format(v);
+    let Some(exponent_pos) = formatted.find('e') else {
+        return out.write_str(formatted.strip_suffix(".0").unwrap_or(formatted));
+    };
+
+    write_expanded_scalar(
+        out,
+        &formatted[..exponent_pos],
+        &formatted[exponent_pos + 1..],
+    )
+}
+
+/// Expand Ryu's scientific notation to the non-exponent spelling used
+/// by `f64`'s `Display` implementation and by the existing WKT output.
+fn write_expanded_scalar<W: core::fmt::Write + ?Sized>(
+    out: &mut W,
+    mantissa: &str,
+    exponent: &str,
+) -> core::fmt::Result {
+    let (negative, mantissa) = match mantissa.strip_prefix('-') {
+        Some(unsigned) => (true, unsigned),
+        None => (false, mantissa),
+    };
+    let (exponent_negative, exponent) = match exponent.strip_prefix('-') {
+        Some(unsigned) => (true, unsigned),
+        None => (false, exponent.strip_prefix('+').unwrap_or(exponent)),
+    };
+    let mut exponent_value = 0i32;
+    for byte in exponent.bytes() {
+        exponent_value = exponent_value * 10 + i32::from(byte - b'0');
+    }
+    if exponent_negative {
+        exponent_value = -exponent_value;
+    }
+
+    let integer_digits = mantissa.find('.').unwrap_or(mantissa.len());
+    let mut digit_buffer = [0u8; 24];
+    let mut digit_count = 0;
+    for byte in mantissa.bytes() {
+        if byte != b'.' {
+            digit_buffer[digit_count] = byte;
+            digit_count += 1;
+        }
+    }
+    let digits = core::str::from_utf8(&digit_buffer[..digit_count])
+        .expect("Ryu always emits ASCII decimal digits");
+    let decimal_pos =
+        i32::try_from(integer_digits).expect("Ryu mantissa is short") + exponent_value;
+
+    if negative {
+        out.write_char('-')?;
+    }
+    if decimal_pos <= 0 {
+        out.write_str("0.")?;
+        write_zeroes(
+            out,
+            usize::try_from(-decimal_pos).expect("negative decimal position"),
+        )?;
+        return out.write_str(digits);
+    }
+
+    let decimal_pos = usize::try_from(decimal_pos).expect("positive decimal position");
+    if decimal_pos >= digit_count {
+        out.write_str(digits)?;
+        return write_zeroes(out, decimal_pos - digit_count);
+    }
+
+    out.write_str(&digits[..decimal_pos])?;
+    out.write_char('.')?;
+    out.write_str(&digits[decimal_pos..])
+}
+
+fn write_zeroes<W: core::fmt::Write + ?Sized>(out: &mut W, mut count: usize) -> core::fmt::Result {
+    const ZEROES: &str = "00000000000000000000000000000000";
+    while count >= ZEROES.len() {
+        out.write_str(ZEROES)?;
+        count -= ZEROES.len();
+    }
+    out.write_str(&ZEROES[..count])
 }
 
 /// Emit one point's ordinates as `x y` (no keyword, no parens). Shared
 /// by every coordinate-bearing kind. Only the first two dimensions are
 /// written — this is a 2D port.
-fn write_coords<P: PointTrait<Scalar = f64>>(
-    out: &mut dyn core::fmt::Write,
+fn write_coords<P: PointTrait<Scalar = f64>, W: core::fmt::Write + ?Sized>(
+    out: &mut W,
     p: &P,
 ) -> core::fmt::Result {
     write_scalar(out, p.get::<0>())?;
@@ -140,10 +272,11 @@ fn write_coords<P: PointTrait<Scalar = f64>>(
 
 /// Emit a comma-separated coordinate list `x y,x y,…` (no surrounding
 /// parens). Shared by linestrings and rings.
-fn write_point_seq<'a, P, I>(out: &mut dyn core::fmt::Write, points: I) -> core::fmt::Result
+fn write_point_seq<'a, P, I, W>(out: &mut W, points: I) -> core::fmt::Result
 where
     P: PointTrait<Scalar = f64> + 'a,
     I: Iterator<Item = &'a P>,
+    W: core::fmt::Write + ?Sized,
 {
     for (i, p) in points.enumerate() {
         if i > 0 {
@@ -156,10 +289,11 @@ where
 
 /// Emit `((outer),(hole),…)` for a polygon's rings (no keyword). Shared
 /// by `POLYGON` and each member of `MULTIPOLYGON`.
-fn write_polygon_rings<Pg>(out: &mut dyn core::fmt::Write, pg: &Pg) -> core::fmt::Result
+fn write_polygon_rings<Pg, W>(out: &mut W, pg: &Pg) -> core::fmt::Result
 where
     Pg: PolygonTrait,
     Pg::Point: PointTrait<Scalar = f64>,
+    W: core::fmt::Write + ?Sized,
 {
     out.write_char('(')?;
     out.write_char('(')?;
@@ -175,6 +309,10 @@ where
 }
 
 impl<Cs: CoordinateSystem> WriteWkt for Point<f64, 2, Cs> {
+    fn wkt_capacity_hint(&self) -> Option<usize> {
+        Some(64)
+    }
+
     fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
         out.write_str("POINT(")?;
         write_coords(out, self)?;
@@ -183,16 +321,32 @@ impl<Cs: CoordinateSystem> WriteWkt for Point<f64, 2, Cs> {
 }
 
 impl<P: PointTrait<Scalar = f64>> WriteWkt for Linestring<P> {
-    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
-        // OGC WKT spells an empty geometry `<TYPE> EMPTY`, not `<TYPE>()`
-        // — the latter is not grammar the reader (or Boost) accepts.
-        if self.points().next().is_none() {
-            return out.write_str("LINESTRING EMPTY");
-        }
-        out.write_str("LINESTRING(")?;
-        write_point_seq(out, self.points())?;
-        out.write_char(')')
+    fn wkt_capacity_hint(&self) -> Option<usize> {
+        32usize.checked_add(point_seq_capacity(self.points().len())?)
     }
+
+    fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
+        write_linestring(self, out)
+    }
+
+    fn write_wkt_string(&self, out: &mut String) -> core::fmt::Result {
+        write_linestring(self, out)
+    }
+}
+
+fn write_linestring<P, W>(linestring: &Linestring<P>, out: &mut W) -> core::fmt::Result
+where
+    P: PointTrait<Scalar = f64>,
+    W: core::fmt::Write + ?Sized,
+{
+    // OGC WKT spells an empty geometry `<TYPE> EMPTY`, not `<TYPE>()`
+    // — the latter is not grammar the reader (or Boost) accepts.
+    if linestring.points().next().is_none() {
+        return out.write_str("LINESTRING EMPTY");
+    }
+    out.write_str("LINESTRING(")?;
+    write_point_seq(out, linestring.points())?;
+    out.write_char(')')
 }
 
 // `Ring` / `Polygon` carry two const-generic booleans (clockwise,
@@ -201,6 +355,10 @@ impl<P: PointTrait<Scalar = f64>> WriteWkt for Linestring<P> {
 // keeps const-generic inference unambiguous at the `to_wkt(&ring)` call
 // site; a ring's serialisation does not depend on those flags anyway.
 impl<P: PointTrait<Scalar = f64>> WriteWkt for Ring<P, true, true> {
+    fn wkt_capacity_hint(&self) -> Option<usize> {
+        32usize.checked_add(point_seq_capacity(self.points().len())?)
+    }
+
     fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
         // A bare ring serialises as a single-ring polygon — the OGC WKT
         // grammar has no standalone RING keyword.
@@ -214,17 +372,37 @@ impl<P: PointTrait<Scalar = f64>> WriteWkt for Ring<P, true, true> {
 }
 
 impl<P: PointTrait<Scalar = f64>> WriteWkt for Polygon<P, true, true> {
+    fn wkt_capacity_hint(&self) -> Option<usize> {
+        polygon_capacity(self)
+    }
+
     fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
-        // A polygon with no exterior vertices is empty.
-        if self.exterior().points().next().is_none() {
-            return out.write_str("POLYGON EMPTY");
-        }
-        out.write_str("POLYGON")?;
-        write_polygon_rings(out, self)
+        write_polygon(self, out)
+    }
+
+    fn write_wkt_string(&self, out: &mut String) -> core::fmt::Result {
+        write_polygon(self, out)
     }
 }
 
+fn write_polygon<P, W>(polygon: &Polygon<P, true, true>, out: &mut W) -> core::fmt::Result
+where
+    P: PointTrait<Scalar = f64>,
+    W: core::fmt::Write + ?Sized,
+{
+    // A polygon with no exterior vertices is empty.
+    if polygon.exterior().points().next().is_none() {
+        return out.write_str("POLYGON EMPTY");
+    }
+    out.write_str("POLYGON")?;
+    write_polygon_rings(out, polygon)
+}
+
 impl<P: PointTrait<Scalar = f64>> WriteWkt for MultiPoint<P> {
+    fn wkt_capacity_hint(&self) -> Option<usize> {
+        32usize.checked_add(point_seq_capacity(self.points().len())?)
+    }
+
     fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
         if self.points().next().is_none() {
             return out.write_str("MULTIPOINT EMPTY");
@@ -247,6 +425,14 @@ where
     L: LinestringTrait,
     L::Point: PointTrait<Scalar = f64>,
 {
+    fn wkt_capacity_hint(&self) -> Option<usize> {
+        let mut capacity = 32usize;
+        for linestring in self.linestrings() {
+            capacity = capacity.checked_add(point_seq_capacity(linestring.points().len())?)?;
+        }
+        Some(capacity)
+    }
+
     fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
         if self.linestrings().next().is_none() {
             return out.write_str("MULTILINESTRING EMPTY");
@@ -269,6 +455,14 @@ where
     Pg: PolygonTrait,
     Pg::Point: PointTrait<Scalar = f64>,
 {
+    fn wkt_capacity_hint(&self) -> Option<usize> {
+        let mut capacity = 32usize;
+        for polygon in self.polygons() {
+            capacity = capacity.checked_add(polygon_capacity(polygon)?)?;
+        }
+        Some(capacity)
+    }
+
     fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
         if self.polygons().next().is_none() {
             return out.write_str("MULTIPOLYGON EMPTY");
@@ -285,6 +479,50 @@ where
 }
 
 impl<Cs: CoordinateSystem> WriteWkt for DynGeometry<f64, Cs> {
+    fn wkt_capacity_hint(&self) -> Option<usize> {
+        match self {
+            DynGeometry::Point(point) => point.wkt_capacity_hint(),
+            DynGeometry::LineString(linestring) => linestring.wkt_capacity_hint(),
+            DynGeometry::Polygon(polygon) => polygon.wkt_capacity_hint(),
+            DynGeometry::MultiPoint(multipoint) => multipoint.wkt_capacity_hint(),
+            DynGeometry::MultiLineString(multilinestring) => multilinestring.wkt_capacity_hint(),
+            DynGeometry::MultiPolygon(multipolygon) => multipolygon.wkt_capacity_hint(),
+            DynGeometry::GeometryCollection(items) => {
+                let mut capacity = 32usize;
+                let mut stack = alloc::vec::Vec::with_capacity(items.len());
+                stack.extend(items);
+                while let Some(geometry) = stack.pop() {
+                    match geometry {
+                        DynGeometry::Point(point) => {
+                            capacity = capacity.checked_add(point.wkt_capacity_hint()?)?;
+                        }
+                        DynGeometry::LineString(linestring) => {
+                            capacity = capacity.checked_add(linestring.wkt_capacity_hint()?)?;
+                        }
+                        DynGeometry::Polygon(polygon) => {
+                            capacity = capacity.checked_add(polygon.wkt_capacity_hint()?)?;
+                        }
+                        DynGeometry::MultiPoint(multipoint) => {
+                            capacity = capacity.checked_add(multipoint.wkt_capacity_hint()?)?;
+                        }
+                        DynGeometry::MultiLineString(multilinestring) => {
+                            capacity =
+                                capacity.checked_add(multilinestring.wkt_capacity_hint()?)?;
+                        }
+                        DynGeometry::MultiPolygon(multipolygon) => {
+                            capacity = capacity.checked_add(multipolygon.wkt_capacity_hint()?)?;
+                        }
+                        DynGeometry::GeometryCollection(nested) => {
+                            capacity = capacity.checked_add(32)?;
+                            stack.extend(nested);
+                        }
+                    }
+                }
+                Some(capacity)
+            }
+        }
+    }
+
     fn write_wkt(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
         // Only the `GeometryCollection` arm nests; the leaf/multi arms
         // delegate to their own non-recursive writers. Walk the nesting
@@ -381,6 +619,32 @@ mod tests {
     fn fractional_coord_round_trips() {
         let p = Pt::new(1.5, -2.25);
         assert_eq!(to_wkt(&p), "POINT(1.5 -2.25)");
+    }
+
+    #[test]
+    fn scalar_format_stays_compatible_with_rust_display() {
+        for value in [
+            -0.0,
+            1.0,
+            -2.25,
+            0.000_001,
+            1.0e-7,
+            1.234_567_890_123_456_7e100,
+            f64::MIN_POSITIVE,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ] {
+            let point = Pt::new(value, value);
+            let expected = if value == 0.0 {
+                "POINT(0 0)".into()
+            } else {
+                alloc::format!("POINT({value} {value})")
+            };
+            let observed = to_wkt(&point);
+            assert_eq!(observed, expected, "format changed for {value:?}");
+        }
     }
 
     #[test]

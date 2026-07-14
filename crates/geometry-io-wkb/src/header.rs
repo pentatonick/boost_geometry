@@ -124,18 +124,26 @@ impl<'a> Cursor<'a> {
         self.bytes.len().saturating_sub(self.pos)
     }
 
-    /// Read the next `N` bytes as a fixed-size array, advancing the
-    /// cursor. Fails with [`WkbError::UnexpectedEof`] if fewer than `N`
-    /// bytes remain.
-    fn read_array<const N: usize>(&mut self) -> Result<[u8; N], WkbError> {
-        let end = self.pos.checked_add(N).ok_or(WkbError::UnexpectedEof)?;
+    /// Read `len` bytes as one borrowed slice, advancing the cursor.
+    /// Point runs use this to validate their complete fixed-width body
+    /// once instead of repeating a bounds check for every ordinate.
+    pub(crate) fn read_slice(&mut self, len: usize) -> Result<&'a [u8], WkbError> {
+        let end = self.pos.checked_add(len).ok_or(WkbError::UnexpectedEof)?;
         let slice = self
             .bytes
             .get(self.pos..end)
             .ok_or(WkbError::UnexpectedEof)?;
+        self.pos = end;
+        Ok(slice)
+    }
+
+    /// Read the next `N` bytes as a fixed-size array, advancing the
+    /// cursor. Fails with [`WkbError::UnexpectedEof`] if fewer than `N`
+    /// bytes remain.
+    fn read_array<const N: usize>(&mut self) -> Result<[u8; N], WkbError> {
+        let slice = self.read_slice(N)?;
         let mut buf = [0u8; N];
         buf.copy_from_slice(slice);
-        self.pos = end;
         Ok(buf)
     }
 

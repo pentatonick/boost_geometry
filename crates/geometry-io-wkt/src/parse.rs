@@ -18,7 +18,7 @@ use geometry_model::{
     DynGeometry, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D, Polygon, Ring,
 };
 
-use crate::lexer::{Token, WktError, tokenize};
+use crate::lexer::{Lexer, Token, WktError};
 
 /// A concrete 2D Cartesian point — the coordinate type every parsed
 /// geometry is built from.
@@ -34,39 +34,41 @@ type Pt = Point2D<f64, Cartesian>;
 /// readers' cap; real WKT nests only a few levels deep.
 const MAX_DEPTH: usize = 128;
 
-/// A cursor over the token stream produced by
-/// [`crate::lexer::tokenize`]. Holds the position; every `parse_*`
-/// method advances it.
-struct Parser {
-    tokens: Vec<Token>,
-    pos: usize,
+/// A one-token lookahead cursor over the input. Every `parse_*` method
+/// advances it, and tokens are scanned only as the grammar consumes them.
+struct Parser<'a> {
+    lexer: Lexer<'a>,
+    current: Token,
 }
 
-impl Parser {
-    fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+impl<'a> Parser<'a> {
+    fn new(input: &'a str) -> Result<Self, WktError> {
+        let mut lexer = Lexer::new(input);
+        let current = lexer.next_token()?;
+        Ok(Self { lexer, current })
     }
 
     /// Borrow the current token without consuming it.
     fn peek(&self) -> &Token {
-        // `tokenize` always terminates the stream with `Eof`, so the
-        // index is in bounds for every position the parser reaches.
-        &self.tokens[self.pos]
+        &self.current
     }
 
     /// Consume and return the current token. The cursor is strictly
     /// monotonic, so the vacated slot is never read again; `Eof` is the
     /// placeholder because a stray re-read then fails exactly like
     /// running off the end of the stream.
-    fn next(&mut self) -> Token {
-        let t = core::mem::replace(&mut self.tokens[self.pos], Token::Eof);
-        self.pos += 1;
-        t
+    fn next(&mut self) -> Result<Token, WktError> {
+        let next = self.lexer.next_token()?;
+        Ok(core::mem::replace(&mut self.current, next))
+    }
+
+    fn advance(&mut self) -> Result<(), WktError> {
+        self.next().map(drop)
     }
 
     /// Consume a `(`, or fail.
     fn expect_left_paren(&mut self) -> Result<(), WktError> {
-        match self.next() {
+        match self.next()? {
             Token::LeftParen => Ok(()),
             other => Err(WktError::UnexpectedToken {
                 expected: "'('",
@@ -77,7 +79,7 @@ impl Parser {
 
     /// Consume a `)`, or fail.
     fn expect_right_paren(&mut self) -> Result<(), WktError> {
-        match self.next() {
+        match self.next()? {
             Token::RightParen => Ok(()),
             other => Err(WktError::UnexpectedToken {
                 expected: "')'",
@@ -88,7 +90,7 @@ impl Parser {
 
     /// Consume one `f64` numeric token, or fail.
     fn expect_number(&mut self) -> Result<f64, WktError> {
-        match self.next() {
+        match self.next()? {
             Token::Number(n) => Ok(n),
             Token::Eof => Err(WktError::UnexpectedEof),
             other => Err(WktError::UnexpectedToken {
@@ -104,12 +106,13 @@ impl Parser {
     /// coordinate scan. Mirrors Boost's handling of the dimension in
     /// `boost/geometry/io/wkt/read.hpp` (it likewise reads only the
     /// coordinates its point type declares).
-    fn skip_dimension_suffix(&mut self) {
+    fn skip_dimension_suffix(&mut self) -> Result<(), WktError> {
         if let Token::Ident(word) = self.peek() {
             if word == "Z" || word == "M" || word == "ZM" {
-                self.pos += 1;
+                self.advance()?;
             }
         }
+        Ok(())
     }
 
     /// Read exactly two ordinates into a 2D point. Any further ordinates
@@ -119,7 +122,7 @@ impl Parser {
         let y = self.expect_number()?;
         // Discard trailing Z / M ordinates for this 2D port.
         while let Token::Number(_) = self.peek() {
-            self.pos += 1;
+            self.advance()?;
         }
         Ok(Point2D::new(x, y))
     }
@@ -134,7 +137,7 @@ impl Parser {
             pts.push(self.parse_point_coords()?);
             match self.peek() {
                 Token::Comma => {
-                    self.pos += 1;
+                    self.advance()?;
                 }
                 _ => break,
             }
@@ -153,7 +156,7 @@ impl Parser {
             rings.push(self.parse_coord_list()?);
             match self.peek() {
                 Token::Comma => {
-                    self.pos += 1;
+                    self.advance()?;
                 }
                 _ => break,
             }
@@ -180,7 +183,7 @@ impl Parser {
     /// `LINESTRING` body: `(x y, …)` or `EMPTY`.
     fn parse_linestring_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(DynGeometry::LineString(Linestring(Vec::new())));
         }
         let pts = self.parse_coord_list()?;
@@ -196,7 +199,7 @@ impl Parser {
     /// The shared `POLYGON` value builder, reused by `MULTIPOLYGON`.
     fn parse_polygon_value(&mut self) -> Result<Polygon<Pt>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(Polygon::new(Ring::new()));
         }
         let mut rings = self.parse_coord_list_list()?.into_iter();
@@ -211,7 +214,7 @@ impl Parser {
     /// peeking past the outer `(` for a nested `(`.
     fn parse_multipoint_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(DynGeometry::MultiPoint(MultiPoint(Vec::new())));
         }
         self.expect_left_paren()?;
@@ -219,7 +222,7 @@ impl Parser {
         loop {
             if let Token::LeftParen = self.peek() {
                 // Parenthesised member: `(x y)`.
-                self.pos += 1;
+                self.advance()?;
                 pts.push(self.parse_point_coords()?);
                 self.expect_right_paren()?;
             } else {
@@ -228,7 +231,7 @@ impl Parser {
             }
             match self.peek() {
                 Token::Comma => {
-                    self.pos += 1;
+                    self.advance()?;
                 }
                 _ => break,
             }
@@ -240,7 +243,7 @@ impl Parser {
     /// `MULTILINESTRING` body: `((x y, …), …)` or `EMPTY`.
     fn parse_multilinestring_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(DynGeometry::MultiLineString(MultiLinestring(Vec::new())));
         }
         let lists = self.parse_coord_list_list()?;
@@ -251,7 +254,7 @@ impl Parser {
     /// `MULTIPOLYGON` body: `(((ring), …), …)` or `EMPTY`.
     fn parse_multipolygon_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(DynGeometry::MultiPolygon(MultiPolygon(Vec::new())));
         }
         self.expect_left_paren()?;
@@ -260,7 +263,7 @@ impl Parser {
             polys.push(self.parse_polygon_value()?);
             match self.peek() {
                 Token::Comma => {
-                    self.pos += 1;
+                    self.advance()?;
                 }
                 _ => break,
             }
@@ -277,7 +280,7 @@ impl Parser {
         depth: usize,
     ) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(DynGeometry::GeometryCollection(Vec::new()));
         }
         self.expect_left_paren()?;
@@ -286,7 +289,7 @@ impl Parser {
             items.push(self.parse_geometry(depth + 1)?);
             match self.peek() {
                 Token::Comma => {
-                    self.pos += 1;
+                    self.advance()?;
                 }
                 _ => break,
             }
@@ -305,7 +308,7 @@ impl Parser {
         if depth >= MAX_DEPTH {
             return Err(WktError::NestingTooDeep);
         }
-        let keyword = match self.next() {
+        let keyword = match self.next()? {
             Token::Ident(word) => word,
             Token::Eof => return Err(WktError::UnexpectedEof),
             other => {
@@ -315,7 +318,7 @@ impl Parser {
                 });
             }
         };
-        self.skip_dimension_suffix();
+        self.skip_dimension_suffix()?;
         match keyword.as_str() {
             "POINT" => self.parse_point_body(),
             "LINESTRING" => self.parse_linestring_body(),
@@ -365,8 +368,7 @@ impl Parser {
 /// assert_eq!(g.kind(), DynKind::Point);
 /// ```
 pub fn from_wkt<S: AsRef<str>>(input: S) -> Result<DynGeometry<f64, Cartesian>, WktError> {
-    let tokens = tokenize(input.as_ref())?;
-    let mut parser = Parser::new(tokens);
+    let mut parser = Parser::new(input.as_ref())?;
     let g = parser.parse_geometry(0)?;
     // Reject trailing garbage after a complete geometry.
     match parser.peek() {

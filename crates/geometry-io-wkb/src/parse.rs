@@ -105,10 +105,8 @@ fn base_type_code(tag: u32) -> Result<u32, WkbError> {
 /// inside a `MultiPoint` inside a `GeometryCollection`).
 const MAX_DEPTH: usize = 128;
 
-/// Smallest number of bytes a single point body occupies: two `f64`
-/// ordinates. A `numPoints`/`numRings`-style count cannot describe more
-/// points than `remaining / 16`, so a run's capacity is clamped to that.
-const MIN_POINT_BYTES: usize = 16;
+/// Bytes in one 2D point body: two `f64` ordinates.
+const POINT_BYTES: usize = 16;
 
 /// Smallest number of bytes a nested WKB record occupies: a one-byte
 /// byte-order flag plus a 4-byte type tag (§8.2.3–8.2.4). A multi /
@@ -152,10 +150,24 @@ impl<'a> Parser<'a> {
     /// Read a `uint32` count followed by that many point bodies.
     /// Used by `LineString` and by each ring of a `Polygon`.
     fn read_point_run(&mut self, order: ByteOrder) -> Result<Vec<Pt>, WkbError> {
-        let n = self.cursor.read_u32(order)?;
-        let mut pts = reserve_bounded(n, self.cursor.remaining(), MIN_POINT_BYTES);
-        for _ in 0..n {
-            pts.push(self.read_point(order)?);
+        let n = self.cursor.read_u32(order)? as usize;
+        let byte_len = n.checked_mul(POINT_BYTES).ok_or(WkbError::UnexpectedEof)?;
+        let bytes = self.cursor.read_slice(byte_len)?;
+        let mut pts = Vec::with_capacity(n);
+        for point in bytes.chunks_exact(POINT_BYTES) {
+            let x_bytes: [u8; 8] = point[..8]
+                .try_into()
+                .expect("a point chunk contains its x ordinate");
+            let y_bytes: [u8; 8] = point[8..]
+                .try_into()
+                .expect("a point chunk contains its y ordinate");
+            let (x, y) = match order {
+                ByteOrder::LittleEndian => {
+                    (f64::from_le_bytes(x_bytes), f64::from_le_bytes(y_bytes))
+                }
+                ByteOrder::BigEndian => (f64::from_be_bytes(x_bytes), f64::from_be_bytes(y_bytes)),
+            };
+            pts.push(Point2D::new(x, y));
         }
         Ok(pts)
     }
