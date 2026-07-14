@@ -245,6 +245,16 @@ mod tests {
     }
 
     #[test]
+    fn short_rings_preserve_their_available_vertices() {
+        let one: Ring<P> = Ring::from_vec(vec![P::new(1.0, 2.0)]);
+        let empty = Ring::<P>::new();
+        let enriched = enrich(&one, &empty, &[]);
+
+        assert_eq!(enriched.rings[0], vec![Node::Vertex(P::new(1.0, 2.0))]);
+        assert!(enriched.rings[1].is_empty());
+    }
+
+    #[test]
     fn enriched_ring_has_vertices_and_turns() {
         let a = square(0.0, 0.0, 2.0);
         let b = square(1.0, 1.0, 2.0);

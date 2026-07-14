@@ -78,7 +78,8 @@ where
                 0 => a.get::<0>() == b.get::<0>(),
                 1 => a.get::<1>() == b.get::<1>(),
                 2 => a.get::<2>() == b.get::<2>(),
-                _ => true,
+                3 => a.get::<3>() == b.get::<3>(),
+                _ => panic!("CartesianEquals: dimension exceeds MAX_DIM (4)"),
             };
             if !eq {
                 return false;

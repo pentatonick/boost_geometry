@@ -49,6 +49,8 @@ use crate::relate::overlaps;
 /// let merged = merge_polygons(vec![a, b, far]).unwrap();
 /// assert_eq!(merged.polygons().count(), 2);
 /// ```
+#[inline]
+#[must_use = "merging can fail and the merged geometry should be used"]
 pub fn merge_polygons<P>(
     polygons: Vec<Polygon<P>>,
 ) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
@@ -75,6 +77,28 @@ where
     Ok(MultiPolygon(work))
 }
 
+/// Merge the areal elements of a collection.
+///
+/// Mirrors the polygon arm of `boost::geometry::merge_elements` from
+/// `boost/geometry/algorithms/merge_elements.hpp:401-418`. Overlapping polygons
+/// are repeatedly unioned; disjoint polygons remain separate output members.
+///
+/// # Errors
+///
+/// Propagates [`OverlayError`] when an overlapping pair reaches a degenerate
+/// case outside the current areal overlay kernel.
+#[inline]
+#[must_use = "merging can fail and the merged geometry should be used"]
+pub fn merge_elements<P, I>(polygons: I) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+    I: IntoIterator<Item = Polygon<P>>,
+{
+    merge_polygons(polygons.into_iter().collect())
+}
+
 /// Merge every polygon of a [`MultiPolygon`], returning a `MultiPolygon`
 /// whose members pairwise do not overlap.
 ///
@@ -84,6 +108,8 @@ where
 /// # Errors
 ///
 /// Propagates [`OverlayError`] from the underlying unions.
+#[inline]
+#[must_use = "merging can fail and the merged geometry should be used"]
 pub fn merge_multipolygon<P>(
     mp: MultiPolygon<Polygon<P>>,
 ) -> Result<MultiPolygon<Polygon<P>>, OverlayError>

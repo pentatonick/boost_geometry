@@ -112,7 +112,8 @@ defining a second adapter.
 Coherence also forbids a blanket impl on foreign sequence types
 (`impl<P: Point, C: AsRef<[P]>> Linestring for C`). For that case,
 `geometry-adapt` ships declarative macros `register_linestring!`,
-`register_ring!`, and `register_polygon!`, mirroring
+`register_ring!`, `register_polygon!`, and the three `register_multi_*!`
+forms, mirroring
 `BOOST_GEOMETRY_REGISTER_LINESTRING` and siblings
 (`boost/geometry/geometries/register/linestring.hpp` and co.).
 

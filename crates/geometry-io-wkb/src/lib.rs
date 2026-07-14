@@ -100,4 +100,4 @@ mod write;
 
 pub use header::{ByteOrder, WkbError};
 pub use parse::from_wkb;
-pub use write::{to_wkb, to_wkb_polygon};
+pub use write::{WriteWkb, to_wkb, to_wkb_polygon};

@@ -180,11 +180,13 @@ fn geo_rect_set_indexed_updates_one_ordinate() {
     // Widen the max corner's x from 2 to 5; leave its y and both min
     // ordinates alone.
     rect.set_indexed::<1, 0>(5.0);
+    rect.set_indexed::<0, 1>(-1.0);
     assert_eq!(rect.get_indexed::<1, 0>(), 5.0);
     assert_eq!(rect.get_indexed::<1, 1>(), 2.0);
     assert_eq!(rect.get_indexed::<0, 0>(), 0.0);
+    assert_eq!(rect.get_indexed::<0, 1>(), -1.0);
     let inner = rect.into_inner();
-    assert_eq!(inner.min(), coord! { x: 0.0, y: 0.0 });
+    assert_eq!(inner.min(), coord! { x: 0.0, y: -1.0 });
     assert_eq!(inner.max(), coord! { x: 5.0, y: 2.0 });
 }
 

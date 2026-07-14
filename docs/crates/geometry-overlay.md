@@ -21,27 +21,28 @@ functions (`intersection`, `union`, `difference`, `sym_difference`), plus
 | `turn` (+ `info`, `get_turns`, `classify`) | OVL2 | The turn graph — where two boundaries meet, and what to do there |
 | `traverse` (+ `enrich`, `state`) | OVL3 | Weiler–Atherton-style ring traversal — walk the turn graph, assemble output rings |
 | `assemble` | OVL4 | Nest traversed rings into `Polygon`/`MultiPolygon` by containment |
-| `operation` | OVL5 | `intersection`, `union_poly`, `difference`, `sym_difference`, `OverlayError` |
-| `relate` | OVL6 | `De9im` matrix, `crosses`/`overlaps`/`touches`, `Dimension` |
-| `validity` | OVL6 | `is_valid_ring`/`is_valid_polygon`, `ValidityFailure` |
+| `operation` (+ `boolean`, `areal`) | OVL5 | split-edge arrangement; `intersection`, `r#union` (`union_poly` compatibility name), `difference`, `sym_difference`, `OverlayError` |
+| `relate` | OVL6 | point/linestring/polygon `relation` matrix, `relate` mask, `De9im`, `crosses`/`overlaps`/`touches`, `Dimension` |
+| `validity` | OVL6 | ring/polygon/multi-polygon `is_valid`, inter-ring/member topology, `ValidityFailure` |
 | `surface_point` | — | `point_on_surface` — a representative interior point, used by `assemble` and `relate` |
-| `buffer` | OVL7 | `buffer_point`, `buffer_convex_polygon`, `JoinStrategy`, `PointStrategy` |
-| `merge` | — | `merge_polygons`, `merge_multipolygon` |
+| `buffer` | OVL7 | Cartesian single/multi dispatch, `buffer`/`buffer_with`, signed areal offsets, linear ends, strategy compatibility enums |
+| `merge` | — | `merge_elements`, `merge_polygons`, `merge_multipolygon` |
 
 ## Robustness policy
 
-Exact `f64` arithmetic, no coordinate rescaling. `range_guard::SAFE_ABS_MAX`
-bounds the safe magnitude; out-of-range coordinates are **refused**, not
-silently miscomputed.
+Adaptive expansion predicates over the input `f64` coordinates, with no
+coordinate rescaling. `range_guard::SAFE_ABS_MAX` bounds the safe magnitude;
+out-of-range coordinates are **refused**, not silently miscomputed.
 
-## Scope (v1)
+## Scope
 
-Polygon × polygon, exterior ring only (no holes on the input side — holes
-in the *output* are fine, since assembly nests them). Clean transversal
-crossings only; clustered turns, self-intersections, and long collinear
-overlaps return `Unsupported`. See the [deep-dive](../03-overlay-engine.md#the-recurring-design-principle-refuse-dont-guess)
-for the "refuse, don't guess" design principle that runs through this
-entire crate.
+Boolean operations cover Cartesian polygon × polygon inputs with holes,
+containment, colocated vertices, shared edges, and collinear overlaps. Relate
+covers point, linestring, and polygon pairs. Buffer covers Cartesian point,
+segment, linestring, ring, polygon, box, and homogeneous multi kinds. Invalid
+self-intersecting overlay inputs, linear/pointlike set-operation output,
+geometry-collection relate, and non-Cartesian buffer specializations remain
+outside this scope.
 
 ## Why this is a separate crate, not part of `geometry-algorithm`
 

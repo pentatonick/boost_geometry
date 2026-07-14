@@ -5,17 +5,15 @@ Part of the [boost_geometry](https://crates.io/crates/boost_geometry) workspace 
 Free-function algorithm entry points users actually call.
 
 Each function mirrors the matching free function in
-`boost/geometry/algorithms/`. T23 lands the strategy-dispatch layer
-for `distance` / `comparable_distance`; subsequent tasks add
-`length`, `area`, `envelope`, `within`, `intersects`, … on the same
-pattern (a strategy-less default plus a `_with` explicit-strategy
-companion).
+`boost/geometry/algorithms/`. Strategy-driven algorithms expose a
+strategy-less default plus a `_with` explicit-strategy companion. Algorithms
+that require the overlay engine live in `geometry-overlay` to preserve the
+workspace's one-way dependency graph.
 
 ## References
 
-* `boost/geometry/algorithms/distance.hpp`
-* `boost/geometry/algorithms/comparable_distance.hpp`
-* `boost/geometry/algorithms/detail/distance/interface.hpp`
+* `boost/geometry/algorithms/`
+* `boost/geometry/algorithms/detail/`
 
 ## License
 

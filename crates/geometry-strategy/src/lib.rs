@@ -103,6 +103,7 @@ extern crate alloc;
 
 pub mod area;
 pub mod azimuth;
+pub mod buffer;
 pub mod cartesian;
 pub mod centroid;
 pub mod closest_points;
@@ -117,6 +118,7 @@ pub mod intersects;
 pub mod length;
 pub mod line_interpolate;
 pub(crate) mod normalise;
+mod reversal;
 pub mod simplify;
 pub mod spherical;
 pub mod transform;
@@ -127,6 +129,10 @@ pub use area::{
     ShoelaceMultiPolygonArea, ShoelacePolygonArea,
 };
 pub use azimuth::{AzimuthStrategy, CartesianAzimuth, DefaultAzimuth, DefaultAzimuthStrategy};
+pub use buffer::{
+    BufferDistanceStrategy, BufferEndStrategy, BufferJoinStrategy, BufferPointStrategy,
+    BufferSettings, BufferSideStrategy,
+};
 pub use cartesian::{ComparablePythagoras, PointToSegment, Pythagoras};
 pub use centroid::{
     CartesianBoxCentroid, CartesianLinestringCentroid, CartesianMultiPointCentroid,
@@ -137,7 +143,7 @@ pub use closest_points::{CartesianClosestPoints, ClosestPointsStrategy};
 pub use convex_hull::{ConvexHullStrategy, MonotoneChain};
 pub use densify::{CartesianDensify, DensifyStrategy};
 pub use disjoint::{CartesianDisjoint, DisjointStrategy};
-pub use distance::{DefaultDistance, DefaultDistanceStrategy, DistanceStrategy, Reversed};
+pub use distance::{DefaultDistance, DefaultDistanceStrategy, DistanceStrategy};
 pub use envelope::{
     EnvelopeBox, EnvelopeLinestring, EnvelopeMultiLinestring, EnvelopeMultiPoint,
     EnvelopeMultiPolygon, EnvelopePoint, EnvelopePolygon, EnvelopeRing, EnvelopeSegment,
@@ -147,14 +153,17 @@ pub use equals::{
     EqPointPoint, EqPolygonPolygon, EqSegmentSegment, EqualsPairStrategy, EqualsStrategy,
 };
 pub use geographic::{
-    Andoyer, GeographicArea, GeographicAzimuth, GeographicLength, GeographicPerimeter,
-    GeographicPolygonArea, Thomas, Vincenty,
+    Andoyer, DirectResult, GeographicArea, GeographicAzimuth, GeographicLength,
+    GeographicPerimeter, GeographicPolygonArea, InverseResult, Karney, KarneyDirect, KarneyInverse,
+    Thomas, ThomasDirect, Vincenty, VincentyDirect,
 };
 pub use intersects::{CartesianIntersects, IntersectsPairStrategy, IntersectsStrategy};
 pub use length::{
-    CartesianLength, CartesianPerimeter, DefaultLength, DefaultLengthStrategy, LengthStrategy,
+    CartesianLength, CartesianPerimeter, DefaultLength, DefaultLengthStrategy, DefaultPerimeter,
+    DefaultPerimeterStrategy, LengthStrategy,
 };
 pub use line_interpolate::{CartesianLineInterpolate, LineInterpolateStrategy};
+pub use reversal::Reversed;
 pub use simplify::{DouglasPeucker, SimplifyStrategy};
 pub use spherical::{
     ComparableHaversine, Haversine, SphericalArea, SphericalAzimuth, SphericalLength,

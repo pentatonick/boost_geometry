@@ -666,6 +666,21 @@ mod tests {
     }
 
     #[test]
+    fn scientific_notation_expansion_covers_each_decimal_position() {
+        let mut out = String::new();
+        write_expanded_scalar(&mut out, "1", "-7").unwrap();
+        assert_eq!(out, "0.0000001");
+
+        out.clear();
+        write_expanded_scalar(&mut out, "-1.25", "+5").unwrap();
+        assert_eq!(out, "-125000");
+
+        out.clear();
+        write_expanded_scalar(&mut out, "1.234", "2").unwrap();
+        assert_eq!(out, "123.4");
+    }
+
+    #[test]
     fn linestring_canonical() {
         let ls = Linestring(vec![
             Pt::new(10.0, 10.0),

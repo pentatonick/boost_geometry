@@ -4,8 +4,11 @@
 //! Direct counterpart to `boost::geometry::select_most_precise`
 //! (`boost/geometry/util/select_most_precise.hpp`) and the
 //! `calculation_type::geometric::binary` helper
-//! (`boost/geometry/util/calculation_type.hpp`).
+//! (`boost/geometry/util/calculation_type.hpp`). The unary
+//! [`PromoteIntegral`] counterpart mirrors
+//! `boost/geometry/util/promote_integral.hpp`.
 
+use crate::rational::{Rational, RationalInteger};
 use crate::scalar::CoordinateScalar;
 
 /// "Pick the wider of two scalar types."
@@ -44,6 +47,97 @@ pub trait Promote<Other> {
     /// `calculation_type::geometric::binary<..>::type` directly.
     type Out: CoordinateScalar;
 }
+
+/// Promote a calculation type to an integer with roughly twice its bit width.
+///
+/// Mirrors `boost::geometry::promote_integral<T,
+/// PromoteUnsignedToUnsigned>` from `util/promote_integral.hpp:113-159`.
+/// Signed inputs promote to the first wider signed primitive. Unsigned inputs
+/// promote to a signed primitive with room for a sign bit by default; setting
+/// `PRESERVE_UNSIGNED` selects an unsigned result instead. Floating-point
+/// inputs pass through unchanged, matching Boost's non-integral arm.
+///
+/// # Fixed-width policy
+///
+/// Rust exposes `i128` and `u128` on every supported target, so they are always
+/// candidates here; Boost only considers its 128-bit extension when configured
+/// with `BOOST_GEOMETRY_ENABLE_INT128`. Like Boost when multiprecision is
+/// disabled, an input for which no wider fixed-width primitive exists is
+/// returned unchanged (`util/promote_integral.hpp:80-96,138-146`).
+pub trait PromoteIntegral<const PRESERVE_UNSIGNED: bool = false> {
+    /// The promoted calculation type.
+    ///
+    /// Mirrors `promote_integral::type` from
+    /// `util/promote_integral.hpp:272-297` and `344-367`.
+    type Out;
+}
+
+macro_rules! impl_signed_integral_promotion {
+    ($($input:ty => $output:ty),* $(,)?) => {
+        $(
+            impl PromoteIntegral<false> for $input {
+                type Out = $output;
+            }
+            impl PromoteIntegral<true> for $input {
+                type Out = $output;
+            }
+        )*
+    };
+}
+
+impl_signed_integral_promotion!(
+    i8 => i16,
+    i16 => i32,
+    i32 => i64,
+    i64 => i128,
+    i128 => i128,
+);
+
+#[cfg(target_pointer_width = "32")]
+impl_signed_integral_promotion!(isize => i64);
+#[cfg(target_pointer_width = "64")]
+impl_signed_integral_promotion!(isize => i128);
+
+macro_rules! impl_unsigned_integral_promotion {
+    ($($input:ty => $signed:ty, $unsigned:ty),* $(,)?) => {
+        $(
+            impl PromoteIntegral<false> for $input {
+                type Out = $signed;
+            }
+            impl PromoteIntegral<true> for $input {
+                type Out = $unsigned;
+            }
+        )*
+    };
+}
+
+impl_unsigned_integral_promotion!(
+    u8 => i32, u16,
+    u16 => i64, u32,
+    u32 => i128, u64,
+    u64 => u64, u128,
+    u128 => u128, u128,
+);
+
+#[cfg(target_pointer_width = "32")]
+impl_unsigned_integral_promotion!(usize => i128, u64);
+#[cfg(target_pointer_width = "64")]
+impl_unsigned_integral_promotion!(usize => usize, u128);
+
+macro_rules! impl_non_integral_promotion {
+    ($($input:ty),* $(,)?) => {
+        $(
+            impl PromoteIntegral<false> for $input {
+                type Out = $input;
+            }
+            impl PromoteIntegral<true> for $input {
+                type Out = $input;
+            }
+        )*
+    };
+}
+
+impl_non_integral_promotion!(f32, f64);
 
 // ---- float × float -------------------------------------------------
 impl Promote<f32> for f32 {
@@ -105,3 +199,34 @@ impl Promote<f32> for i64 {
 impl Promote<i64> for f32 {
     type Out = f64;
 }
+
+// ---- exact rational coordinates ------------------------------------
+//
+// Mirrors the `select_most_precise` specializations registered for
+// `boost::rational` by `util/rational.hpp:73-100`. Rational × rational
+// promotes the integer storage; rational × floating-point retains the exact
+// rational type, as exercised by `test/util/rational.cpp:106-118`.
+impl<I, J> Promote<Rational<J>> for Rational<I>
+where
+    I: RationalInteger + Promote<J>,
+    J: RationalInteger,
+    <I as Promote<J>>::Out: RationalInteger,
+{
+    type Out = Rational<<I as Promote<J>>::Out>;
+}
+
+macro_rules! impl_rational_float_promotion {
+    ($($float:ty),* $(,)?) => {
+        $(
+            impl<I: RationalInteger> Promote<$float> for Rational<I> {
+                type Out = Rational<I>;
+            }
+
+            impl<I: RationalInteger> Promote<Rational<I>> for $float {
+                type Out = Rational<I>;
+            }
+        )*
+    };
+}
+
+impl_rational_float_promotion!(f32, f64);

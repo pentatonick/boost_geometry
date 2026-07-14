@@ -13,6 +13,7 @@
 ///
 /// Mirrors the minimum bounding rectangle stored at every node of a
 /// Boost rtree.
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
     /// Lower corner `[x_min, y_min]`.
@@ -81,11 +82,56 @@ impl Bounds {
             && self.max[1] >= other.max[1]
     }
 
+    /// Whether `self` is covered by `other`, including coincident
+    /// boundaries and degenerate boxes.
+    ///
+    /// This is Boost.Geometry's box-level `covered_by` relation.
+    #[must_use]
+    #[inline]
+    pub fn covered_by(&self, other: &Bounds) -> bool {
+        other.contains(self)
+    }
+
+    /// Whether `self` is within `other` under Boost.Geometry's box
+    /// semantics.
+    ///
+    /// Boundaries may coincide, but the geometry on the within side
+    /// must have a non-empty two-dimensional interior. This is the
+    /// distinction between `within` and [`covered_by`](Self::covered_by)
+    /// for point-like boxes.
+    #[must_use]
+    #[inline]
+    pub fn within(&self, other: &Bounds) -> bool {
+        self.min[0] < self.max[0] && self.min[1] < self.max[1] && self.covered_by(other)
+    }
+
+    /// Whether the two closed boxes have no point in common.
+    #[must_use]
+    #[inline]
+    pub fn disjoint(&self, other: &Bounds) -> bool {
+        !self.intersects(other)
+    }
+
+    /// Whether the interiors overlap in two dimensions while neither
+    /// box covers the other.
+    ///
+    /// Touching only at a boundary and containment are not overlaps.
+    #[must_use]
+    #[inline]
+    pub fn overlaps(&self, other: &Bounds) -> bool {
+        self.min[0] < other.max[0]
+            && self.max[0] > other.min[0]
+            && self.min[1] < other.max[1]
+            && self.max[1] > other.min[1]
+            && !self.contains(other)
+            && !other.contains(self)
+    }
+
     /// The minimum distance from a query point to this box (0 inside).
     /// Used by nearest-neighbour pruning.
     #[must_use]
     pub fn min_distance_to(&self, p: [f64; 2]) -> f64 {
-        self.comparable_min_distance_to(p).sqrt()
+        geometry_coords::math::sqrt(self.comparable_min_distance_to(p))
     }
 
     /// The SQUARED minimum distance from a query point to this box —

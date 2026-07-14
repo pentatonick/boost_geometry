@@ -133,7 +133,28 @@ impl<T> NearestBound<T> {
 #[cfg(test)]
 #[allow(clippy::float_cmp, reason = "exact rank distances, no arithmetic")]
 mod tests {
-    use super::NearestBound;
+    use super::{NearestBound, Ranked};
+
+    #[test]
+    fn ranked_equality_uses_distance_and_admission_order() {
+        let first = Ranked {
+            dist: 1.0,
+            ordinal: 2,
+            value: (),
+        };
+        let same = Ranked {
+            dist: 1.0,
+            ordinal: 2,
+            value: (),
+        };
+        let later = Ranked {
+            dist: 1.0,
+            ordinal: 3,
+            value: (),
+        };
+        assert!(first == same);
+        assert!(first != later);
+    }
 
     #[test]
     fn unfull_bound_is_infinity() {

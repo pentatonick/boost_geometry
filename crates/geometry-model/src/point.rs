@@ -148,6 +148,45 @@ impl<T: CoordinateScalar, Cs: CoordinateSystem> Point<T, 2, Cs> {
             _cs: PhantomData,
         }
     }
+
+    /// Return the x ordinate.
+    ///
+    /// Mirrors `model::d2::point_xy::x() const` from
+    /// `geometries/point_xy.hpp:67-68`.
+    #[inline]
+    #[must_use]
+    pub const fn x(&self) -> T {
+        self.coords[0]
+    }
+
+    /// Return the y ordinate.
+    ///
+    /// Mirrors `model::d2::point_xy::y() const` from
+    /// `geometries/point_xy.hpp:71-72`.
+    #[inline]
+    #[must_use]
+    pub const fn y(&self) -> T {
+        self.coords[1]
+    }
+
+    /// Set the x ordinate.
+    ///
+    /// Mirrors the setter overload `model::d2::point_xy::x(v)` from
+    /// `geometries/point_xy.hpp:75-76`. Rust uses a distinct method name
+    /// because it has no inherent-method overloading.
+    #[inline]
+    pub fn set_x(&mut self, value: T) {
+        self.coords[0] = value;
+    }
+
+    /// Set the y ordinate.
+    ///
+    /// Mirrors the setter overload `model::d2::point_xy::y(v)` from
+    /// `geometries/point_xy.hpp:79-80`.
+    #[inline]
+    pub fn set_y(&mut self, value: T) {
+        self.coords[1] = value;
+    }
 }
 
 impl<T: CoordinateScalar, Cs: CoordinateSystem> Point<T, 3, Cs> {
@@ -161,6 +200,64 @@ impl<T: CoordinateScalar, Cs: CoordinateSystem> Point<T, 3, Cs> {
             coords: [v0, v1, v2],
             _cs: PhantomData,
         }
+    }
+
+    /// Return the x ordinate.
+    ///
+    /// Mirrors `model::d3::point_xyz::x() const` from
+    /// `geometries/point_xyz.hpp:55-56`.
+    #[inline]
+    #[must_use]
+    pub const fn x(&self) -> T {
+        self.coords[0]
+    }
+
+    /// Return the y ordinate.
+    ///
+    /// Mirrors `model::d3::point_xyz::y() const` from
+    /// `geometries/point_xyz.hpp:59-60`.
+    #[inline]
+    #[must_use]
+    pub const fn y(&self) -> T {
+        self.coords[1]
+    }
+
+    /// Return the z ordinate.
+    ///
+    /// Mirrors `model::d3::point_xyz::z() const` from
+    /// `geometries/point_xyz.hpp:63-64`.
+    #[inline]
+    #[must_use]
+    pub const fn z(&self) -> T {
+        self.coords[2]
+    }
+
+    /// Set the x ordinate.
+    ///
+    /// Mirrors the setter overload `model::d3::point_xyz::x(v)` from
+    /// `geometries/point_xyz.hpp:67-68`. Rust uses a distinct name because
+    /// it has no inherent-method overloading.
+    #[inline]
+    pub fn set_x(&mut self, value: T) {
+        self.coords[0] = value;
+    }
+
+    /// Set the y ordinate.
+    ///
+    /// Mirrors the setter overload `model::d3::point_xyz::y(v)` from
+    /// `geometries/point_xyz.hpp:71-72`.
+    #[inline]
+    pub fn set_y(&mut self, value: T) {
+        self.coords[1] = value;
+    }
+
+    /// Set the z ordinate.
+    ///
+    /// Mirrors the setter overload `model::d3::point_xyz::z(v)` from
+    /// `geometries/point_xyz.hpp:75-76`.
+    #[inline]
+    pub fn set_z(&mut self, value: T) {
+        self.coords[2] = value;
     }
 }
 

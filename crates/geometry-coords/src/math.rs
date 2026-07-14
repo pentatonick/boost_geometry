@@ -1,5 +1,5 @@
-//! Per-scalar math primitives (`sqrt`, `abs`) dispatched across
-//! `std` and `libm` according to the active cargo feature.
+//! Per-scalar math primitives dispatched across `std` and `libm` according
+//! to the active cargo feature.
 //!
 //! Mirrors the role of `boost/geometry/util/math.hpp`: a thin layer of
 //! type-generic primitives that the rest of the geometry kernel calls
@@ -13,7 +13,7 @@
 #[cfg(not(any(feature = "std", feature = "libm")))]
 compile_error!(
     "geometry-coords requires either the `std` (default) or `libm` cargo feature \
-     to be enabled so that `sqrt` and `abs` have an implementation."
+     to be enabled so that floating-point math primitives have an implementation."
 );
 
 /// Square root of a floating-point coordinate.
@@ -46,8 +46,49 @@ pub fn abs<T: Float>(value: T) -> T {
     value.abs()
 }
 
+/// Fused multiply-add of floating-point coordinates.
+///
+/// Computes `(value * multiplier) + addend` with a single rounding step,
+/// dispatching to the standard library or `libm` according to the active
+/// feature. Counterpart to `std::fma` used by Boost's precise-math kernel.
+///
+/// # Examples
+///
+/// ```
+/// use geometry_coords::math::mul_add;
+/// assert_eq!(mul_add(2.0_f64, 3.0, 4.0), 10.0);
+/// ```
+pub fn mul_add<T: Float>(value: T, multiplier: T, addend: T) -> T {
+    value.mul_add(multiplier, addend)
+}
+
+/// Sine of a floating-point coordinate in radians.
+pub fn sin<T: Float>(value: T) -> T {
+    value.sin()
+}
+
+/// Cosine of a floating-point coordinate in radians.
+pub fn cos<T: Float>(value: T) -> T {
+    value.cos()
+}
+
+/// Four-quadrant arctangent of `y` and `x`.
+pub fn atan2<T: Float>(y: T, x: T) -> T {
+    y.atan2(x)
+}
+
+/// Length of the hypotenuse formed by `x` and `y`.
+pub fn hypot<T: Float>(x: T, y: T) -> T {
+    x.hypot(y)
+}
+
+/// Smallest integer-valued coordinate greater than or equal to `value`.
+pub fn ceil<T: Float>(value: T) -> T {
+    value.ceil()
+}
+
 /// Sealed marker for the floating-point types this crate dispatches
-/// `sqrt` / `abs` over (`f32`, `f64`).
+/// math primitives over (`f32`, `f64`).
 ///
 /// The trait is sealed (the sub-bound on `private::Sealed` cannot be
 /// implemented downstream) so that adding a new floating type stays a
@@ -69,6 +110,24 @@ pub trait Float: private::Sealed + Copy {
     /// `value.abs()` dispatched onto `std` or `libm`.
     #[must_use]
     fn abs(self) -> Self;
+    /// `value.mul_add(multiplier, addend)` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn mul_add(self, multiplier: Self, addend: Self) -> Self;
+    /// `value.sin()` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn sin(self) -> Self;
+    /// `value.cos()` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn cos(self) -> Self;
+    /// `value.atan2(other)` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn atan2(self, other: Self) -> Self;
+    /// `value.hypot(other)` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn hypot(self, other: Self) -> Self;
+    /// `value.ceil()` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn ceil(self) -> Self;
 }
 
 impl Float for f32 {
@@ -93,6 +152,72 @@ impl Float for f32 {
     fn abs(self) -> Self {
         libm::fabsf(self)
     }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn mul_add(self, multiplier: Self, addend: Self) -> Self {
+        f32::mul_add(self, multiplier, addend)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn mul_add(self, multiplier: Self, addend: Self) -> Self {
+        libm::fmaf(self, multiplier, addend)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn sin(self) -> Self {
+        f32::sin(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn sin(self) -> Self {
+        libm::sinf(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn cos(self) -> Self {
+        f32::cos(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn cos(self) -> Self {
+        libm::cosf(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn atan2(self, other: Self) -> Self {
+        f32::atan2(self, other)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn atan2(self, other: Self) -> Self {
+        libm::atan2f(self, other)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn hypot(self, other: Self) -> Self {
+        f32::hypot(self, other)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn hypot(self, other: Self) -> Self {
+        libm::hypotf(self, other)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn ceil(self) -> Self {
+        f32::ceil(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn ceil(self) -> Self {
+        libm::ceilf(self)
+    }
 }
 
 impl Float for f64 {
@@ -116,6 +241,72 @@ impl Float for f64 {
     #[inline]
     fn abs(self) -> Self {
         libm::fabs(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn mul_add(self, multiplier: Self, addend: Self) -> Self {
+        f64::mul_add(self, multiplier, addend)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn mul_add(self, multiplier: Self, addend: Self) -> Self {
+        libm::fma(self, multiplier, addend)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn sin(self) -> Self {
+        f64::sin(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn sin(self) -> Self {
+        libm::sin(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn cos(self) -> Self {
+        f64::cos(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn cos(self) -> Self {
+        libm::cos(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn atan2(self, other: Self) -> Self {
+        f64::atan2(self, other)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn atan2(self, other: Self) -> Self {
+        libm::atan2(self, other)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn hypot(self, other: Self) -> Self {
+        f64::hypot(self, other)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn hypot(self, other: Self) -> Self {
+        libm::hypot(self, other)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn ceil(self) -> Self {
+        f64::ceil(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn ceil(self) -> Self {
+        libm::ceil(self)
     }
 }
 

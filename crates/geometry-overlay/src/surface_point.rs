@@ -41,6 +41,7 @@ use geometry_trait::{Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait
 /// assert!(p.get::<0>() > 0.0 && p.get::<0>() < 4.0);
 /// assert!(p.get::<1>() > 0.0 && p.get::<1>() < 4.0);
 /// ```
+#[inline]
 #[must_use]
 pub fn point_on_surface<G, P>(polygon: &G) -> Option<P>
 where

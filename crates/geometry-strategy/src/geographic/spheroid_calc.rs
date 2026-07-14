@@ -70,4 +70,11 @@ mod tests {
         // Reference e² for WGS84: 0.006_694_379_990_141_316
         assert!((c.e2 - 0.006_694_379_990_141_316).abs() < 1e-15);
     }
+
+    #[test]
+    fn second_eccentricity_matches_its_definition() {
+        let calc = SpheroidCalc::from(Spheroid::WGS84);
+        let expected = calc.e2 / (1.0 - calc.e2);
+        assert!((calc.second_eccentricity_squared() - expected).abs() < f64::EPSILON);
+    }
 }

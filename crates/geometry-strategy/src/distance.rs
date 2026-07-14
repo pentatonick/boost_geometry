@@ -30,6 +30,8 @@ use geometry_coords::CoordinateScalar;
 use geometry_cs::CoordinateSystem;
 use geometry_trait::{Geometry, Point};
 
+pub use crate::reversal::Reversed;
+
 /// A strategy for computing the distance between two geometries.
 ///
 /// Mirrors the per-CS strategy concept declared in
@@ -167,51 +169,6 @@ pub type DefaultDistanceStrategy<A, B> =
     <<<<A as Geometry>::Point as Point>::Cs as CoordinateSystem>::Family as DefaultDistance<
         <<<B as Geometry>::Point as Point>::Cs as CoordinateSystem>::Family,
     >>::Strategy;
-
-/// `Reversed<S>` lifts a `DistanceStrategy<A, B>` into a
-/// `DistanceStrategy<B, A>` by calling the inner strategy with the
-/// arguments swapped.
-///
-/// Replaces `boost::geometry::reverse_dispatch`
-/// (`boost/geometry/core/reverse_dispatch.hpp`) together with the
-/// partial specialisation that uses it in
-/// `boost/geometry/algorithms/detail/distance/interface.hpp:53-77`.
-/// Boost has one such specialisation *per algorithm*; in Rust the
-/// symmetry is expressed once, at the strategy-trait layer, with a
-/// single blanket impl below — every algorithm that goes through a
-/// `DistanceStrategy<A, B>` automatically gets the swap.
-///
-/// # Cost
-///
-/// `#[repr(transparent)]` is deliberately *not* applied — `Reversed`
-/// is a one-field tuple struct and monomorphisation collapses the
-/// indirection. There is no runtime overhead: the wrapper exists
-/// solely to give the trait system a *different* `Self` type to
-/// dispatch on, the same way `boost::geometry::detail::distance::
-/// reverse_dispatch_call` exists in C++ only to give the partial
-/// specialisation something to bind to.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Reversed<S>(pub S);
-
-impl<A, B, S> DistanceStrategy<B, A> for Reversed<S>
-where
-    A: Geometry,
-    B: Geometry,
-    S: DistanceStrategy<A, B>,
-{
-    type Out = S::Out;
-    type Comparable = Reversed<S::Comparable>;
-
-    #[inline]
-    fn distance(&self, b: &B, a: &A) -> S::Out {
-        self.0.distance(a, b)
-    }
-
-    #[inline]
-    fn comparable(&self) -> Self::Comparable {
-        Reversed(self.0.comparable())
-    }
-}
 
 #[cfg(test)]
 mod tests {

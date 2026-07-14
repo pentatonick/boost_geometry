@@ -155,9 +155,11 @@ pub mod tag {
 ///
 /// Re-exports every item from [`geometry-coords`](geometry_coords):
 /// the [`CoordinateScalar`](geometry_coords::CoordinateScalar) trait,
-/// the [`Promote`](geometry_coords::Promote) type-widening
-/// metafunction, the [`Comparable`](geometry_coords::Comparable)
-/// newtype, and the `math` numeric shim.
+/// the [`Promote`](geometry_coords::Promote) and
+/// [`PromoteIntegral`](geometry_coords::PromoteIntegral) type-widening
+/// metafunctions, the exact [`Rational`](geometry_coords::Rational) coordinate,
+/// the [`Comparable`](geometry_coords::Comparable) newtype, and the `math`
+/// numeric shim.
 pub mod coords {
     pub use geometry_coords::*;
 }
@@ -186,7 +188,8 @@ pub mod trait_ {
 /// Re-exports every item from [`geometry-model`](geometry_model):
 /// `Point<T, D, Cs>`, `Point2D`, `Point3D`, `Segment`, `Box`,
 /// `Linestring`, `Ring`, `Polygon`, `MultiPoint`, `MultiLinestring`,
-/// `MultiPolygon`. The declarative macros `point!`, `linestring!`,
+/// `MultiPolygon`, `PointingSegment`, `InfiniteLine`, and
+/// `PolyhedralSurface`. The declarative macros `point!`, `linestring!`,
 /// and `polygon!` are `#[macro_export]`ed by `geometry-model` and so
 /// appear at the crate root of `geometry` itself, not under
 /// `boost_geometry::model`.
@@ -215,8 +218,8 @@ pub mod algorithm {
 /// the `register_*!` macros.
 ///
 /// Re-exports every item from [`geometry-adapt`](geometry_adapt).
-/// The `register_linestring!`, `register_ring!`, and
-/// `register_polygon!` macros are `#[macro_export]`ed and so live at
+/// The `register_linestring!`, `register_ring!`, `register_polygon!`, and
+/// `register_multi_*!` macros are `#[macro_export]`ed and so live at
 /// the crate root of `geometry` itself, not under
 /// `boost_geometry::adapt`.
 pub mod adapt {

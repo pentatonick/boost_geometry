@@ -4,13 +4,12 @@
 //! against candidate values during a query walk; the tree prunes any
 //! subtree whose bounds cannot satisfy the predicate.
 //!
-//! v1 ships the box-level predicates the pruning walk needs directly —
-//! [`Predicate::Intersects`], [`Predicate::Within`],
-//! [`Predicate::Contains`]. The interior/boundary DE-9IM predicates
-//! (`covered_by`, `overlaps`) layer on top once the value type carries a
-//! full geometry rather than only its bounds.
+//! The built-in [`Predicate`] covers Boost's box-query relations. The
+//! [`QueryPredicate`] trait also supports Boost's logical `and`, `not`,
+//! and `satisfies` predicates without giving up subtree pruning.
 
 use crate::bounds::Bounds;
+use crate::indexable::Indexable;
 
 /// A spatial query against the index, expressed on bounding boxes.
 ///
@@ -21,22 +20,43 @@ pub enum Predicate {
     /// Values whose bounds intersect the query box. Boost's
     /// `index::intersects`.
     Intersects(Bounds),
-    /// Values whose bounds are fully inside the query box. Boost's
-    /// `index::within`.
+    /// Values whose non-degenerate bounds are fully inside the query
+    /// box. Boost's `index::within`.
     Within(Bounds),
-    /// Values whose bounds fully contain the query box. Boost's
+    /// Values whose bounds contain a non-degenerate query box. Boost's
     /// `index::contains`.
     Contains(Bounds),
+    /// Values whose bounds are inside the query box, including
+    /// degenerate values and coincident boundaries. Boost's
+    /// `index::covered_by`.
+    CoveredBy(Bounds),
+    /// Values whose bounds contain the query box, including a
+    /// degenerate query. Boost's `index::covers`.
+    Covers(Bounds),
+    /// Values whose bounds share no point with the query box. Boost's
+    /// `index::disjoint`.
+    Disjoint(Bounds),
+    /// Values whose bounds overlap the query box without either box
+    /// covering the other. Boost's `index::overlaps`.
+    Overlaps(Bounds),
 }
 
 impl Predicate {
     /// Whether a leaf value with box `value` satisfies this predicate.
     #[must_use]
+    #[inline]
     pub fn matches(&self, value: &Bounds) -> bool {
+        if let Predicate::Intersects(query) = self {
+            return query.intersects(value);
+        }
         match self {
-            Predicate::Intersects(q) => q.intersects(value),
-            Predicate::Within(q) => q.contains(value),
-            Predicate::Contains(q) => value.contains(q),
+            Predicate::Intersects(_) => unreachable!("intersects returned above"),
+            Predicate::Within(q) => value.within(q),
+            Predicate::Contains(q) => q.within(value),
+            Predicate::CoveredBy(q) => value.covered_by(q),
+            Predicate::Covers(q) => q.covered_by(value),
+            Predicate::Disjoint(q) => q.disjoint(value),
+            Predicate::Overlaps(q) => q.overlaps(value),
         }
     }
 
@@ -44,13 +64,20 @@ impl Predicate {
     /// value — the pruning test. A subtree is skipped when this is
     /// `false`.
     #[must_use]
+    #[inline]
     pub fn could_match(&self, node: &Bounds) -> bool {
+        if let Predicate::Intersects(query) = self {
+            return query.intersects(node);
+        }
         match self {
-            // Intersect / within candidates must overlap the query box.
-            Predicate::Intersects(q) | Predicate::Within(q) => q.intersects(node),
-            // A value containing the query box must itself have a box
-            // overlapping the query, and the subtree must cover it.
-            Predicate::Contains(q) => node.intersects(q),
+            Predicate::Intersects(_) => unreachable!("intersects returned above"),
+            Predicate::Within(q) | Predicate::CoveredBy(q) | Predicate::Overlaps(q) => {
+                q.intersects(node)
+            }
+            Predicate::Contains(q) | Predicate::Covers(q) => node.contains(q),
+            // If the whole node is covered by q, every value below it
+            // intersects q and none can be disjoint.
+            Predicate::Disjoint(q) => !node.covered_by(q),
         }
     }
 
@@ -58,16 +85,179 @@ impl Predicate {
     /// match — the containment fast path. A covered subtree is dumped
     /// without per-node or per-value tests.
     ///
-    /// Sound because a value's box ⊆ its node's box: for `Intersects`
-    /// and `Within`, `q.contains(node)` implies every value below
-    /// matches. `Contains` needs value ⊇ q, which node ⊆ q says nothing
-    /// about, so it never takes the fast path.
+    /// Sound because a value's box is contained in its node's box:
+    /// `Intersects` and `CoveredBy` can dump a node covered by the
+    /// query, while `Disjoint` can dump one wholly apart from it.
+    /// `Within` cannot use the covered-node shortcut because a subtree
+    /// may contain degenerate values.
     #[must_use]
-    pub(crate) fn covers_all(&self, node: &Bounds) -> bool {
-        match self {
-            Predicate::Intersects(q) | Predicate::Within(q) => q.contains(node),
-            Predicate::Contains(_) => false,
+    #[inline]
+    pub fn covers_all(&self, node: &Bounds) -> bool {
+        if let Predicate::Intersects(query) = self {
+            return query.contains(node);
         }
+        match self {
+            Predicate::Intersects(_) => unreachable!("intersects returned above"),
+            Predicate::CoveredBy(q) => q.contains(node),
+            Predicate::Disjoint(q) => q.disjoint(node),
+            Predicate::Within(_)
+            | Predicate::Contains(_)
+            | Predicate::Covers(_)
+            | Predicate::Overlaps(_) => false,
+        }
+    }
+
+    /// Combine this spatial predicate with another condition.
+    #[must_use]
+    #[inline]
+    pub fn and<P>(self, other: P) -> AndPredicate<Self, P> {
+        and(self, other)
+    }
+}
+
+impl core::ops::Not for Predicate {
+    type Output = NotPredicate<Self>;
+
+    #[inline]
+    fn not(self) -> Self::Output {
+        not(self)
+    }
+}
+
+/// A predicate accepted by [`Rtree::query_with`](crate::Rtree::query_with).
+///
+/// `matches` decides leaf values. `could_match` and `covers_all` are
+/// conservative subtree tests: false from the former prunes a subtree;
+/// true from the latter yields it without further predicate calls.
+pub trait QueryPredicate<T: Indexable> {
+    /// Whether one indexed value satisfies the predicate.
+    fn matches(&self, value: &T) -> bool;
+
+    /// Whether a subtree may contain a match.
+    fn could_match(&self, node: &Bounds) -> bool;
+
+    /// Whether every value in a subtree is guaranteed to match.
+    fn covers_all(&self, node: &Bounds) -> bool;
+}
+
+impl<T: Indexable> QueryPredicate<T> for Predicate {
+    #[inline]
+    fn matches(&self, value: &T) -> bool {
+        self.matches(&value.bounds())
+    }
+
+    #[inline]
+    fn could_match(&self, node: &Bounds) -> bool {
+        self.could_match(node)
+    }
+
+    #[inline]
+    fn covers_all(&self, node: &Bounds) -> bool {
+        self.covers_all(node)
+    }
+}
+
+/// The conjunction of two query predicates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AndPredicate<Left, Right> {
+    left: Left,
+    right: Right,
+}
+
+/// Combine two query predicates with logical conjunction.
+#[must_use]
+#[inline]
+pub fn and<Left, Right>(left: Left, right: Right) -> AndPredicate<Left, Right> {
+    AndPredicate { left, right }
+}
+
+impl<T, Left, Right> QueryPredicate<T> for AndPredicate<Left, Right>
+where
+    T: Indexable,
+    Left: QueryPredicate<T>,
+    Right: QueryPredicate<T>,
+{
+    #[inline]
+    fn matches(&self, value: &T) -> bool {
+        self.left.matches(value) && self.right.matches(value)
+    }
+
+    #[inline]
+    fn could_match(&self, node: &Bounds) -> bool {
+        self.left.could_match(node) && self.right.could_match(node)
+    }
+
+    #[inline]
+    fn covers_all(&self, node: &Bounds) -> bool {
+        self.left.covers_all(node) && self.right.covers_all(node)
+    }
+}
+
+/// The logical negation of a query predicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotPredicate<Inner> {
+    inner: Inner,
+}
+
+/// Negate a query predicate.
+#[must_use]
+#[inline]
+pub fn not<Inner>(inner: Inner) -> NotPredicate<Inner> {
+    NotPredicate { inner }
+}
+
+impl<T, Inner> QueryPredicate<T> for NotPredicate<Inner>
+where
+    T: Indexable,
+    Inner: QueryPredicate<T>,
+{
+    #[inline]
+    fn matches(&self, value: &T) -> bool {
+        !self.inner.matches(value)
+    }
+
+    #[inline]
+    fn could_match(&self, node: &Bounds) -> bool {
+        !self.inner.covers_all(node)
+    }
+
+    #[inline]
+    fn covers_all(&self, node: &Bounds) -> bool {
+        !self.inner.could_match(node)
+    }
+}
+
+/// A value-level query condition corresponding to Boost's
+/// `index::satisfies` predicate.
+pub struct Satisfies<F> {
+    condition: F,
+}
+
+/// Build a value-level `satisfies` query predicate.
+#[must_use]
+#[inline]
+pub fn satisfies<F>(condition: F) -> Satisfies<F> {
+    Satisfies { condition }
+}
+
+impl<T, F> QueryPredicate<T> for Satisfies<F>
+where
+    T: Indexable,
+    F: Fn(&T) -> bool,
+{
+    #[inline]
+    fn matches(&self, value: &T) -> bool {
+        (self.condition)(value)
+    }
+
+    #[inline]
+    fn could_match(&self, _node: &Bounds) -> bool {
+        true
+    }
+
+    #[inline]
+    fn covers_all(&self, _node: &Bounds) -> bool {
+        false
     }
 }
 
@@ -119,10 +309,10 @@ mod tests {
     }
 
     #[test]
-    fn covers_all_within() {
+    fn covers_all_within_never_assumes_value_dimension() {
         let p = Predicate::Within(QUERY);
-        assert!(p.covers_all(&CONTAINED));
-        assert!(p.covers_all(&QUERY));
+        assert!(!p.covers_all(&CONTAINED));
+        assert!(!p.covers_all(&QUERY));
         assert!(!p.covers_all(&OVERLAPPING));
         assert!(!p.covers_all(&DISJOINT));
     }

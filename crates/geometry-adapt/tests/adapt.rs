@@ -130,6 +130,27 @@ fn adapt_tuple_3d_round_trip() {
     assert_eq!(a.get::<2>(), 3.0);
 }
 
+#[test]
+fn tuple_adapters_reject_out_of_range_public_access() {
+    let mut two = Adapt((0.0_f64, 0.0));
+    assert!(std::panic::catch_unwind(|| two.get::<2>()).is_err());
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            two.set::<2>(1.0);
+        }))
+        .is_err()
+    );
+
+    let mut three = Adapt((0.0_f64, 0.0, 0.0));
+    assert!(std::panic::catch_unwind(|| three.get::<3>()).is_err());
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            three.set::<3>(1.0);
+        }))
+        .is_err()
+    );
+}
+
 // --- Concept-check helpers from T15 ---------------------------------
 
 #[test]

@@ -46,7 +46,7 @@ mod tests {
     extern crate alloc;
 
     use super::*;
-    use crate::point::{Point, PointMut};
+    use crate::point::Point;
     use alloc::vec;
     use alloc::vec::Vec;
     use geometry_cs::Cartesian;
@@ -66,16 +66,6 @@ mod tests {
 
         fn get<const D: usize>(&self) -> f64 {
             if D == 0 { self.0 } else { self.1 }
-        }
-    }
-
-    impl PointMut for Xy {
-        fn set<const D: usize>(&mut self, v: f64) {
-            if D == 0 {
-                self.0 = v;
-            } else {
-                self.1 = v;
-            }
         }
     }
 

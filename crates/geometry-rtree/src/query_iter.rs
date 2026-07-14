@@ -1,69 +1,116 @@
-//! Lazy spatial-query iteration — the walk behind
-//! [`Rtree::query_iter`](crate::rtree::Rtree::query_iter).
+//! Lazy spatial-query iteration.
 //!
-//! The pruning walk of `visitors/spatial_query.hpp`, unrolled from
-//! recursion onto an explicit node stack so it can pause between
-//! yields: a consumer that stops early performs no traversal past the
-//! value it stopped at. [`Rtree::query`](crate::rtree::Rtree::query)
-//! collects this iterator, so the crate has exactly one query walk.
+//! [`QueryIter`] preserves the compact hot path for built-in
+//! [`Predicate`] queries. [`QueryWithIter`] runs the same pruning walk
+//! for logical and user-defined [`QueryPredicate`] values. Both mirror
+//! Boost's `visitors/spatial_query.hpp` and pause without traversing
+//! beyond the last yielded value.
 
 use alloc::vec::Vec;
 use core::iter::FusedIterator;
 
+use crate::bounds::Bounds;
 use crate::indexable::Indexable;
 use crate::node::Node;
-use crate::predicate::Predicate;
+use crate::predicate::{Predicate, QueryPredicate};
 
-/// How the cursor drains the current leaf: `Filtered` tests each value
-/// with [`Predicate::matches`]; `DumpAll` yields every value of a leaf
-/// whose subtree box the predicate [`covers_all`](Predicate::covers_all)
-/// — each one is a guaranteed match.
 enum LeafMode {
     Filtered,
     DumpAll,
 }
 
-/// A lazy iterator over the values whose bounds satisfy a
-/// [`Predicate`], in depth-first tree order.
+fn stack_capacity(height: usize, max_fanout: usize) -> usize {
+    height.saturating_sub(1) * max_fanout.saturating_sub(1) + max_fanout
+}
+
+/// A lazy iterator over values whose bounds satisfy a built-in
+/// [`Predicate`].
 ///
-/// Created by [`Rtree::query_iter`](crate::rtree::Rtree::query_iter).
-/// Holds the unvisited subtrees on an explicit stack plus a cursor into
-/// the current leaf; each [`next`](Iterator::next) drains the cursor,
-/// then pops the stack — a popped leaf installs a new cursor, a popped
-/// branch pushes the children that pass
-/// [`Predicate::could_match`] (reversed, so pops visit them
-/// first-to-last, the recursive walk's order). Each stack entry carries
-/// a `covered` flag — set once `Predicate::covers_all` holds for a
-/// subtree's box — under which children are pushed and leaves dumped
-/// without further predicate tests, still one value per `next` call.
-/// One `Vec` allocation per iterator, none per element.
+/// Created by [`Rtree::query_iter`](crate::Rtree::query_iter). A
+/// subtree that cannot match is skipped, while one wholly covered by
+/// the predicate is drained without further relation tests.
 pub struct QueryIter<'a, T> {
-    predicate: Predicate,
-    stack: Vec<(&'a Node<T>, bool)>,
-    leaf: core::slice::Iter<'a, T>,
-    leaf_mode: LeafMode,
+    inner: QueryIterInner<'a, T>,
+}
+
+enum QueryIterInner<'a, T> {
+    Intersects(QueryWithIter<'a, T, IntersectsPredicate>),
+    Other(QueryWithIter<'a, T, Predicate>),
+}
+
+struct IntersectsPredicate(Bounds);
+
+impl<T: Indexable> QueryPredicate<T> for IntersectsPredicate {
+    #[inline]
+    fn matches(&self, value: &T) -> bool {
+        self.0.intersects(&value.bounds())
+    }
+
+    #[inline]
+    fn could_match(&self, node: &Bounds) -> bool {
+        self.0.intersects(node)
+    }
+
+    #[inline]
+    fn covers_all(&self, node: &Bounds) -> bool {
+        self.0.contains(node)
+    }
 }
 
 impl<'a, T> QueryIter<'a, T> {
-    /// `max_fanout` is the split strategy's branch maximum
-    /// (`Params::BRANCH_MAX`): the
-    /// stack's worst case is every level's unvisited siblings pending
-    /// at once — the root pop pushes up to `max_fanout` entries, each
-    /// deeper branch pop nets up to `max_fanout − 1` more, peaking at
-    /// `(height − 1)·(max_fanout − 1) + 1` — so sizing to `height`
-    /// alone under-allocates and reallocates on descent (a
-    /// tree-size-dependent number of times, since `height` itself grows
-    /// with tree size); the capacity below over-provisions that peak by
-    /// one level of slack and keeps the one allocation constant across
-    /// tree sizes at a fixed fanout (lazy R4).
     pub(crate) fn new(
         root: &'a Node<T>,
         predicate: Predicate,
         height: usize,
         max_fanout: usize,
     ) -> Self {
-        let capacity = height.saturating_sub(1) * max_fanout.saturating_sub(1) + max_fanout;
-        let mut stack = Vec::with_capacity(capacity);
+        let inner = match predicate {
+            Predicate::Intersects(bounds) => QueryIterInner::Intersects(QueryWithIter::new(
+                root,
+                IntersectsPredicate(bounds),
+                height,
+                max_fanout,
+            )),
+            other => QueryIterInner::Other(QueryWithIter::new(root, other, height, max_fanout)),
+        };
+        Self { inner }
+    }
+}
+
+impl<'a, T: Indexable> Iterator for QueryIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            QueryIterInner::Intersects(iter) => iter.next(),
+            QueryIterInner::Other(iter) => iter.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match &self.inner {
+            QueryIterInner::Intersects(iter) => iter.size_hint(),
+            QueryIterInner::Other(iter) => iter.size_hint(),
+        }
+    }
+}
+
+impl<T: Indexable> FusedIterator for QueryIter<'_, T> {}
+
+/// A lazy iterator over values accepted by a logical or user-defined
+/// [`QueryPredicate`].
+///
+/// Created by [`Rtree::query_iter_with`](crate::Rtree::query_iter_with).
+pub struct QueryWithIter<'a, T, P> {
+    predicate: P,
+    stack: Vec<(&'a Node<T>, bool)>,
+    leaf: core::slice::Iter<'a, T>,
+    leaf_mode: LeafMode,
+}
+
+impl<'a, T, P> QueryWithIter<'a, T, P> {
+    pub(crate) fn new(root: &'a Node<T>, predicate: P, height: usize, max_fanout: usize) -> Self {
+        let mut stack = Vec::with_capacity(stack_capacity(height, max_fanout));
         stack.push((root, false));
         Self {
             predicate,
@@ -74,15 +121,19 @@ impl<'a, T> QueryIter<'a, T> {
     }
 }
 
-impl<'a, T: Indexable> Iterator for QueryIter<'a, T> {
+impl<'a, T, P> Iterator for QueryWithIter<'a, T, P>
+where
+    T: Indexable,
+    P: QueryPredicate<T>,
+{
     type Item = &'a T;
 
-    fn next(&mut self) -> Option<&'a T> {
+    fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.leaf_mode {
                 LeafMode::Filtered => {
                     for value in self.leaf.by_ref() {
-                        if self.predicate.matches(&value.bounds()) {
+                        if self.predicate.matches(value) {
                             return Some(value);
                         }
                     }
@@ -120,11 +171,14 @@ impl<'a, T: Indexable> Iterator for QueryIter<'a, T> {
         }
     }
 
-    /// `(0, None)`: a predicate cannot bound its match count without
-    /// doing the walk.
     fn size_hint(&self) -> (usize, Option<usize>) {
         (0, None)
     }
 }
 
-impl<T: Indexable> FusedIterator for QueryIter<'_, T> {}
+impl<T, P> FusedIterator for QueryWithIter<'_, T, P>
+where
+    T: Indexable,
+    P: QueryPredicate<T>,
+{
+}

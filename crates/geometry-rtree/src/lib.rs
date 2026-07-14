@@ -2,9 +2,10 @@
 //!
 //! Mirrors `boost/geometry/index/rtree.hpp` and the support headers
 //! under `boost/geometry/index/detail/`. Stores any [`Indexable`] value
-//! (a value with an axis-aligned bounding box) and answers spatial
-//! queries — intersects / within / contains — and k-nearest-neighbour
-//! search, pruning the tree with each node's bounding box.
+//! (a value with an axis-aligned bounding box) and answers Boost's box
+//! predicates plus logical/satisfies queries and k-nearest-neighbour
+//! search. It also provides insertion, condensing removal, count,
+//! iteration, clear, bulk packing, and opt-in serde persistence.
 //!
 //! The split strategy is a type parameter of [`Rtree`]. The default is
 //! [`AsymmetricRStarSplit`] with six-child branches and 12-value
@@ -79,13 +80,15 @@
 //! * [`indexable`] — the [`Indexable`] trait.
 //! * [`node`] — the leaf / branch [`Node`](node::Node) enum.
 //! * [`split`] — the [`SplitParameters`] strategies.
-//! * [`predicate`] — the query [`Predicate`]s.
-//! * [`rtree`](mod@rtree) — the [`Rtree`] and its insert / query /
-//!   nearest / bulk load.
-//! * [`query_iter`] — [`QueryIter`], the lazy
-//!   spatial-query walk.
+//! * [`predicate`] — built-in and composable query predicates.
+//! * [`rtree`](mod@rtree) — the [`Rtree`] and its mutation / query /
+//!   nearest / bulk-load operations.
+//! * [`query_iter`] — [`QueryIter`] and [`QueryWithIter`], the lazy
+//!   spatial-query walks.
 //! * [`nearest_iter`] — [`NearestIter`], the
 //!   unbounded nearest-first stream.
+//! * [`values`] — iteration over every stored value.
+//! * `serialization` (feature-gated) — serde value-sequence persistence.
 //! * `search_frontier` / `nearest_bound` (crate-internal) — the nearest
 //!   search's stack-first frontier and k-th-best rank buffer.
 //!
@@ -98,6 +101,8 @@ extern crate alloc;
 
 mod nearest_bound;
 mod search_frontier;
+#[cfg(feature = "serde")]
+mod serialization;
 
 pub mod bounds;
 pub mod indexable;
@@ -107,13 +112,17 @@ pub mod predicate;
 pub mod query_iter;
 pub mod rtree;
 pub mod split;
+pub mod values;
 
 pub use bounds::Bounds;
 pub use indexable::Indexable;
 pub use nearest_iter::NearestIter;
-pub use predicate::Predicate;
-pub use query_iter::QueryIter;
+pub use predicate::{
+    AndPredicate, NotPredicate, Predicate, QueryPredicate, Satisfies, and, not, satisfies,
+};
+pub use query_iter::{QueryIter, QueryWithIter};
 pub use rtree::Rtree;
 pub use split::{
     AsymmetricQuadratic, AsymmetricRStarSplit, Linear, Quadratic, RStarSplit, SplitParameters,
 };
+pub use values::Values;

@@ -25,10 +25,90 @@
 /// API — users never name this path.
 #[doc(hidden)]
 pub mod __macros {
-    pub use geometry_tag::{LinestringTag, PolygonTag, RingTag};
-    pub use geometry_trait::{Geometry, Linestring, Polygon, Ring};
+    pub use geometry_tag::{
+        LinestringTag, MultiLinestringTag, MultiPointTag, MultiPolygonTag, PolygonTag, RingTag,
+    };
+    pub use geometry_trait::{
+        Geometry, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Polygon, Ring,
+    };
 
     pub use geometry_trait::{Closure, PointOrder};
+}
+
+/// Register a user-owned multi-point container.
+///
+/// Emits the `Geometry<Kind = MultiPointTag>` and [`geometry_trait::MultiPoint`]
+/// impls needed to expose the supplied point iterator. Mirrors
+/// `BOOST_GEOMETRY_REGISTER_MULTI_POINT` from
+/// `geometries/register/multi_point.hpp:36-40`; Rust additionally accepts the
+/// iterator expression because native containers do not share a Boost.Range
+/// base class.
+#[macro_export]
+macro_rules! register_multi_point {
+    ($Ty:ty, $Point:ty, |$value:ident| $iter:expr) => {
+        impl $crate::__macros::Geometry for $Ty {
+            type Kind = $crate::__macros::MultiPointTag;
+            type Point = $Point;
+        }
+
+        impl $crate::__macros::MultiPoint for $Ty {
+            type ItemPoint = $Point;
+
+            fn points(&self) -> impl ::core::iter::ExactSizeIterator<Item = &$Point> {
+                let $value = self;
+                $iter
+            }
+        }
+    };
+}
+
+/// Register a user-owned multi-linestring container.
+///
+/// Mirrors `BOOST_GEOMETRY_REGISTER_MULTI_LINESTRING` from
+/// `geometries/register/multi_linestring.hpp:36-40`. The item type and
+/// iterator are explicit on Rust's side because there is no common
+/// Boost.Range-style container base.
+#[macro_export]
+macro_rules! register_multi_linestring {
+    ($Ty:ty, $Point:ty, item = $Item:ty, |$value:ident| $iter:expr) => {
+        impl $crate::__macros::Geometry for $Ty {
+            type Kind = $crate::__macros::MultiLinestringTag;
+            type Point = $Point;
+        }
+
+        impl $crate::__macros::MultiLinestring for $Ty {
+            type ItemLinestring = $Item;
+
+            fn linestrings(&self) -> impl ::core::iter::ExactSizeIterator<Item = &$Item> {
+                let $value = self;
+                $iter
+            }
+        }
+    };
+}
+
+/// Register a user-owned multi-polygon container.
+///
+/// Mirrors `BOOST_GEOMETRY_REGISTER_MULTI_POLYGON` from
+/// `geometries/register/multi_polygon.hpp:36-40`. The item type and iterator
+/// make the collection shape explicit in the generated Rust concept impl.
+#[macro_export]
+macro_rules! register_multi_polygon {
+    ($Ty:ty, $Point:ty, item = $Item:ty, |$value:ident| $iter:expr) => {
+        impl $crate::__macros::Geometry for $Ty {
+            type Kind = $crate::__macros::MultiPolygonTag;
+            type Point = $Point;
+        }
+
+        impl $crate::__macros::MultiPolygon for $Ty {
+            type ItemPolygon = $Item;
+
+            fn polygons(&self) -> impl ::core::iter::ExactSizeIterator<Item = &$Item> {
+                let $value = self;
+                $iter
+            }
+        }
+    };
 }
 
 /// Register a user-owned linestring type whose storage is iterable as

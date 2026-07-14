@@ -9,8 +9,10 @@
 //! points are exact).
 
 use geometry_cs::Cartesian;
-use geometry_model::{Point2D, Polygon, polygon};
-use geometry_overlay::turn::{Method, OperationType, get_turns_polygon_polygon};
+use geometry_model::{Point2D, Polygon, Ring, polygon};
+use geometry_overlay::turn::{
+    Method, OperationType, RingKind, get_turns_polygon_polygon, get_turns_ring_ring,
+};
 use geometry_trait::Point as _;
 
 type P = Point2D<f64, Cartesian>;
@@ -99,4 +101,66 @@ fn every_turn_references_both_inputs() {
         assert_eq!(t.operations[0].seg_id.source_index, 0);
         assert_eq!(t.operations[1].seg_id.source_index, 1);
     }
+}
+
+#[test]
+fn shared_edges_are_reported_as_collinear_turns() {
+    let a: Polygon<P> = polygon![[(0.0, 0.0), (3.0, 0.0), (3.0, 2.0), (0.0, 2.0), (0.0, 0.0)]];
+    let b: Polygon<P> = polygon![[(1.0, 0.0), (2.0, 0.0), (2.0, -2.0), (1.0, -2.0), (1.0, 0.0)]];
+    let turns = get_turns_polygon_polygon(&a, &b);
+    assert!(turns.iter().any(|turn| turn.method == Method::Collinear));
+}
+
+#[test]
+fn short_and_open_rings_use_the_public_ring_entry() {
+    let short: Ring<P> = Ring::from_vec(vec![P::new(0.0, 0.0)]);
+    let square: Ring<P> = Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(2.0, 0.0),
+        P::new(2.0, 2.0),
+        P::new(0.0, 2.0),
+        P::new(0.0, 0.0),
+    ]);
+    assert!(
+        get_turns_ring_ring(
+            &short,
+            0,
+            RingKind::Exterior,
+            &square,
+            1,
+            RingKind::Exterior,
+        )
+        .is_empty()
+    );
+
+    // The source omits the repeated first point. The turn builder must add
+    // its closing segment before classifying intersections.
+    let open: Ring<P> = Ring::from_vec(vec![P::new(-1.0, 1.0), P::new(1.0, 3.0), P::new(3.0, 1.0)]);
+    assert!(
+        !get_turns_ring_ring(&open, 0, RingKind::Exterior, &square, 1, RingKind::Exterior,)
+            .is_empty()
+    );
+}
+
+#[test]
+fn polygon_hole_turns_retain_the_interior_ring_identity() {
+    let donut: Polygon<P> = polygon![
+        [
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+            (0.0, 0.0)
+        ],
+        [(3.0, 3.0), (7.0, 3.0), (7.0, 7.0), (3.0, 7.0), (3.0, 3.0)]
+    ];
+    let crossing: Polygon<P> =
+        polygon![[(2.0, 4.0), (8.0, 4.0), (8.0, 6.0), (2.0, 6.0), (2.0, 4.0)]];
+
+    let turns = get_turns_polygon_polygon(&donut, &crossing);
+    assert!(turns.iter().any(|turn| {
+        turn.operations
+            .iter()
+            .any(|operation| operation.seg_id.ring == RingKind::Interior(0))
+    }));
 }

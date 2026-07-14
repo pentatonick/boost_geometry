@@ -7,16 +7,18 @@
 //! spikes; no self-intersections; the expected ring orientation; and,
 //! for polygons, every interior ring covered by the exterior.
 //!
-//! **Deferred:** ring×ring edge-crossing detection (a hole whose
-//! representative vertex is covered by the exterior but whose edges
-//! cross the exterior or another hole; Boost's polygon-level
-//! `failure_self_intersections`) and consecutive duplicate points
-//! (Boost's `failure_duplicate_points`) are not checked.
+//! Polygon-level ring pairs and distinct multi-polygon members are checked
+//! after their individual rings pass, including nested holes, disconnected
+//! interiors, and intersecting member interiors.
 //!
-//! v1 scope: `Ring` and `Polygon` (areal). The linear / multi cases
-//! reuse the same primitives and are added alongside the linear
-//! overlay. Coordinate validity (NaN / infinity) is checked because the
-//! robustness gate depends on finite input.
+//! Scope: `Ring`, `Polygon`, and `MultiPolygon` validation.
+//! Coordinate validity (NaN / infinity) is checked because the robustness
+//! gate depends on finite input.
+//!
+//! Unlike Boost's default validity policy, which permits consecutive repeated
+//! points, this Rust entry selects Boost's strict-policy behavior and returns
+//! [`ValidityFailure::DuplicatePoints`]. Boost exercises that policy in
+//! `test/algorithms/is_valid.cpp:1626-1634`.
 
 use alloc::vec::Vec;
 
@@ -24,8 +26,11 @@ use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::Segment;
 use geometry_strategy::{AreaStrategy, ShoelaceArea, WithinRing, WithinStrategy};
-use geometry_tag::SameAs;
-use geometry_trait::{Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait};
+use geometry_tag::{MultiPolygonTag, PolygonTag, RingTag, SameAs};
+use geometry_trait::{
+    Geometry, MultiPolygon as MultiPolygonTrait, Point, PointMut, Polygon as PolygonTrait,
+    Ring as RingTrait,
+};
 
 use crate::predicate::range_guard::coordinate_in_range;
 use crate::predicate::segment_intersection::{SegmentIntersection, segment_intersection};
@@ -33,7 +38,7 @@ use crate::predicate::segment_intersection::{SegmentIntersection, segment_inters
 /// Why a geometry failed [`is_valid_ring`] / [`is_valid_polygon`].
 ///
 /// Mirrors the subset of Boost's `validity_failure_type`
-/// (`algorithms/validity_failure_type.hpp`) that the v1 areal validator
+/// (`algorithms/validity_failure_type.hpp:33-106`) that the areal validator
 /// can produce. The numeric groupings (few-points, not-closed,
 /// self-intersections, …) match Boost's categories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +46,9 @@ pub enum ValidityFailure {
     /// Fewer than the 4 points a closed ring needs (3 distinct + the
     /// repeated closing vertex). Boost's `failure_few_points`.
     FewPoints,
+    /// Two consecutive vertices are equal. Boost's
+    /// `failure_duplicate_points`.
+    DuplicatePoints,
     /// The ring's first and last vertices differ — it is not closed.
     /// Boost's `failure_not_closed`.
     NotClosed,
@@ -71,6 +79,155 @@ pub enum ValidityFailure {
     /// in their declared order (strategy-level signed area positive);
     /// interior rings the opposite. Boost's `failure_wrong_orientation`.
     WrongOrientation,
+    /// One interior ring is contained by another interior ring. Boost's
+    /// `failure_nested_interior_rings`.
+    NestedInteriorRings,
+    /// Ring contacts split the polygon's filled interior into disconnected
+    /// pieces. Boost's `failure_disconnected_interior`.
+    DisconnectedInterior,
+    /// Distinct multi-polygon members overlap in area or share a boundary
+    /// curve. Boost's `failure_intersecting_interiors`.
+    IntersectingInteriors,
+}
+
+/// Per-kind validity implementation selected by [`is_valid`].
+///
+/// Rust tag-dispatch adapter for `boost::geometry::is_valid` from
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+#[doc(hidden)]
+pub trait ValidityStrategy<G> {
+    fn apply(&self, geometry: &G) -> Result<(), ValidityFailure>;
+}
+
+/// Tag-to-validity implementation picker.
+///
+/// Rust counterpart to the geometry-kind resolution behind
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+#[doc(hidden)]
+pub trait ValidityStrategyForKind {
+    type S: Default;
+}
+
+/// Ring validity implementation.
+///
+/// Implements the ring arm selected by the entry at
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RingValidity;
+
+/// Polygon validity implementation.
+///
+/// Implements the polygon arm selected by the entry at
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PolygonValidity;
+
+/// Multi-polygon validity implementation.
+///
+/// Implements the multi-polygon arm selected by the entry at
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MultiPolygonValidity;
+
+/// Selects Boost's ring validity dispatch behind
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl ValidityStrategyForKind for RingTag {
+    type S = RingValidity;
+}
+
+/// Selects Boost's polygon validity dispatch behind
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl ValidityStrategyForKind for PolygonTag {
+    type S = PolygonValidity;
+}
+
+/// Selects Boost's multi-polygon validity dispatch behind
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl ValidityStrategyForKind for MultiPolygonTag {
+    type S = MultiPolygonValidity;
+}
+
+/// Validate an areal geometry through its public geometry-kind tag.
+///
+/// Mirrors `boost::geometry::is_valid` from
+/// `boost/geometry/algorithms/detail/is_valid/interface.hpp:155-202`.
+/// Rings, polygons, and
+/// multi-polygons use their corresponding validators; unsupported kinds fail
+/// at compile time instead of returning an uninformative runtime value.
+///
+/// # Errors
+///
+/// Returns the first [`ValidityFailure`] detected by the selected areal
+/// validator.
+#[inline]
+#[must_use = "validity failures must be handled"]
+pub fn is_valid<G>(geometry: &G) -> Result<(), ValidityFailure>
+where
+    G: Geometry,
+    G::Kind: ValidityStrategyForKind,
+    <G::Kind as ValidityStrategyForKind>::S: ValidityStrategy<G>,
+{
+    <<G::Kind as ValidityStrategyForKind>::S as Default>::default().apply(geometry)
+}
+
+/// Implements the ring validity arm selected by
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl<G, P> ValidityStrategy<G> for RingValidity
+where
+    G: RingTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn apply(&self, ring: &G) -> Result<(), ValidityFailure> {
+        is_valid_ring(ring)
+    }
+}
+
+/// Implements the polygon validity arm selected by
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl<G, P> ValidityStrategy<G> for PolygonValidity
+where
+    G: PolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn apply(&self, polygon: &G) -> Result<(), ValidityFailure> {
+        is_valid_polygon(polygon)
+    }
+}
+
+/// Implements the multi-polygon validity arm selected by
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl<G, P> ValidityStrategy<G> for MultiPolygonValidity
+where
+    G: MultiPolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn apply(&self, multi_polygon: &G) -> Result<(), ValidityFailure> {
+        let polygons: Vec<_> = multi_polygon.polygons().collect();
+        for polygon in &polygons {
+            is_valid_polygon(*polygon)?;
+        }
+        for first in 0..polygons.len() {
+            for second in (first + 1)..polygons.len() {
+                let matrix = crate::relate::relate(polygons[first], polygons[second])
+                    .map_err(|_| ValidityFailure::SelfIntersection)?;
+                if matrix.interior_interior() == crate::relate::Dimension::Area
+                    || matrix.boundary_boundary() == crate::relate::Dimension::Curve
+                {
+                    return Err(ValidityFailure::IntersectingInteriors);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Validate a single ring.
@@ -85,7 +242,7 @@ pub enum ValidityFailure {
 ///
 /// # Errors
 ///
-/// A [`ValidityFailure`] describing the first rule the ring violates,
+/// Returns a [`ValidityFailure`] describing the first rule the ring violates,
 /// including [`ValidityFailure::Spikes`] and
 /// [`ValidityFailure::WrongOrientation`].
 ///
@@ -102,6 +259,8 @@ pub enum ValidityFailure {
 /// ]);
 /// assert!(is_valid_ring(&square).is_ok());
 /// ```
+#[inline]
+#[must_use = "validity failures must be handled"]
 pub fn is_valid_ring<R, P>(ring: &R) -> Result<(), ValidityFailure>
 where
     R: RingTrait<Point = P>,
@@ -156,6 +315,10 @@ where
         return Err(ValidityFailure::NotClosed);
     }
 
+    if pts.windows(2).any(|pair| same_point(&pair[0], &pair[1])) {
+        return Err(ValidityFailure::DuplicatePoints);
+    }
+
     // A vertex triple that folds back on itself along one line — Boost's
     // failure_spikes. Checked before self-intersection so spike inputs
     // report a deterministic error (matches Boost's check order).
@@ -188,21 +351,17 @@ where
 
 /// Validate a polygon: its exterior ring (with exterior orientation
 /// expectations), each interior ring (with interior orientation
-/// expectations), and that every interior ring's representative vertex
-/// is covered by the exterior.
+/// expectations), and all exterior/interior and interior/interior ring-pair
+/// topology constraints.
 ///
 /// Mirrors the polygon arm of `boost::geometry::is_valid`
-/// (`detail/is_valid/polygon.hpp`). Hole↔exterior and hole↔hole
-/// *edge-crossing* detection, and consecutive duplicate points, remain
-/// deferred with the rest of the multi/degenerate overlay — a hole
-/// whose representative vertex is covered by the exterior but whose
-/// edges cross the exterior boundary is not detected.
+/// (`detail/is_valid/polygon.hpp`).
 ///
 /// # Errors
 ///
-/// A [`ValidityFailure`] describing the first rule the polygon
-/// violates, including [`ValidityFailure::InteriorRingOutside`] when a
-/// hole's representative vertex lies strictly outside the exterior.
+/// Returns a [`ValidityFailure`] describing the first rule the polygon
+/// violates, including failures for outside, nested, crossing, or
+/// disconnecting interior rings.
 ///
 /// # Examples
 ///
@@ -215,6 +374,8 @@ where
 /// let pg: Polygon<P> = polygon![[(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (0.0, 0.0)]];
 /// assert!(is_valid_polygon(&pg).is_ok());
 /// ```
+#[inline]
+#[must_use = "validity failures must be handled"]
 pub fn is_valid_polygon<G, P>(polygon: &G) -> Result<(), ValidityFailure>
 where
     G: PolygonTrait<Point = P>,
@@ -223,22 +384,99 @@ where
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     validate_ring(polygon.exterior(), false)?;
-    for inner in polygon.interiors() {
-        validate_ring(inner, true)?;
-        // Containment: the hole's first vertex must not lie strictly
-        // outside the exterior. `covered_by` (interior OR boundary)
-        // deliberately admits an isolated boundary touch — Boost
-        // permits those; only `failure_interior_rings_outside` is
-        // detectable without ring×ring turn analysis. A hole whose
-        // first vertex is inside but whose edges cross the exterior
-        // remains undetected — deferred (module docs).
+    let inners: Vec<_> = polygon.interiors().collect();
+    for inner in &inners {
+        validate_ring(*inner, true)?;
         if let Some(rep) = inner.points().next() {
             if !WithinRing.covered_by(rep, polygon.exterior()) {
                 return Err(ValidityFailure::InteriorRingOutside);
             }
         }
+        let interaction = ring_pair_interaction(polygon.exterior(), *inner);
+        if interaction.proper_crossing {
+            return Err(ValidityFailure::SelfIntersection);
+        }
+        if interaction.overlap || interaction.contacts.len() > 1 {
+            return Err(ValidityFailure::DisconnectedInterior);
+        }
+    }
+
+    for first in 0..inners.len() {
+        for second in (first + 1)..inners.len() {
+            let interaction = ring_pair_interaction(inners[first], inners[second]);
+            if interaction.proper_crossing || interaction.overlap {
+                return Err(ValidityFailure::SelfIntersection);
+            }
+            if interaction.contacts.len() > 1 {
+                return Err(ValidityFailure::DisconnectedInterior);
+            }
+            if interaction.contacts.is_empty()
+                && (ring_first_point_within(inners[first], inners[second])
+                    || ring_first_point_within(inners[second], inners[first]))
+            {
+                return Err(ValidityFailure::NestedInteriorRings);
+            }
+        }
     }
     Ok(())
+}
+
+#[derive(Default)]
+struct RingPairInteraction<P> {
+    proper_crossing: bool,
+    overlap: bool,
+    contacts: Vec<P>,
+}
+
+fn ring_pair_interaction<R1, R2, P>(first: &R1, second: &R2) -> RingPairInteraction<P>
+where
+    R1: RingTrait<Point = P>,
+    R2: RingTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+{
+    let first_points: Vec<P> = first.points().copied().collect();
+    let second_points: Vec<P> = second.points().copied().collect();
+    let mut interaction = RingPairInteraction::default();
+    for first_pair in first_points.windows(2) {
+        let first_segment = Segment::new(first_pair[0], first_pair[1]);
+        for second_pair in second_points.windows(2) {
+            let second_segment = Segment::new(second_pair[0], second_pair[1]);
+            match segment_intersection(&first_segment, &second_segment) {
+                SegmentIntersection::Disjoint | SegmentIntersection::OutOfRange => {}
+                SegmentIntersection::Collinear { .. } => interaction.overlap = true,
+                SegmentIntersection::Single(point) => {
+                    let endpoint_contact = first_pair.iter().any(|value| same_point(value, &point))
+                        || second_pair.iter().any(|value| same_point(value, &point));
+                    if !endpoint_contact {
+                        interaction.proper_crossing = true;
+                    }
+                    if !interaction
+                        .contacts
+                        .iter()
+                        .any(|value| same_point(value, &point))
+                    {
+                        interaction.contacts.push(point);
+                    }
+                }
+            }
+        }
+    }
+    interaction
+}
+
+fn ring_first_point_within<R1, R2, P>(inner: &R1, outer: &R2) -> bool
+where
+    R1: RingTrait<Point = P>,
+    R2: RingTrait<Point = P>,
+    P: Point,
+    P::Scalar: CoordinateScalar,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    inner
+        .points()
+        .next()
+        .is_some_and(|point| WithinRing.within(point, outer))
 }
 
 /// Whether any two non-adjacent edges of the vertex ring intersect. The
