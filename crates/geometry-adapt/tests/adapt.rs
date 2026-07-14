@@ -139,3 +139,16 @@ fn concept_checks_pass() {
     check_point::<Adapt<(f64, f64)>>();
     check_point::<Adapt<(f64, f64, f64)>>();
 }
+
+/// `Adapt::new` wraps a value and `into_inner` recovers it unchanged —
+/// the named constructor/destructor equivalent of the `Adapt(...)` /
+/// `.0` tuple syntax used everywhere else.
+#[test]
+fn adapt_new_and_into_inner_round_trip() {
+    let a = Adapt::new([3.0_f64, 4.0]);
+    // The wrapper exposes the geometry concept over the constructed value.
+    assert_eq!(a.get::<0>(), 3.0);
+    assert_eq!(a.get::<1>(), 4.0);
+    // And `into_inner` returns the exact array it was built from.
+    assert_eq!(a.into_inner(), [3.0, 4.0]);
+}

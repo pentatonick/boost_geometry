@@ -602,4 +602,52 @@ mod tests {
         assert_eq!(svg.matches("<circle").count(), 3);
         assert_coords_in_canvas(&svg, 300.0, 300.0);
     }
+
+    /// A bare `Ring` renders as a single-ring polygon `<path>` with one
+    /// sub-path (`M`) and the even-odd fill rule.
+    #[test]
+    fn bare_ring_renders_as_single_ring_polygon() {
+        let ring: Ring<Pt> = Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(0.0, 10.0),
+            Pt::new(10.0, 10.0),
+            Pt::new(10.0, 0.0),
+            Pt::new(0.0, 0.0),
+        ]);
+        let mut mapper = SvgMapper::new(300, 300);
+        mapper.add(&ring, "fill:purple");
+        let svg = mapper.to_svg();
+
+        assert!(svg.contains("<path"));
+        assert_eq!(svg.matches("M ").count(), 1); // one ring, one sub-path
+        assert!(svg.contains("fill-rule=\"evenodd\""));
+    }
+
+    /// A `MultiLineString` renders one `<polyline>` per member.
+    #[test]
+    fn multilinestring_renders_a_polyline_per_member() {
+        let mls: MultiLinestring<Linestring<Pt>> = MultiLinestring(vec![
+            Linestring(vec![Pt::new(0.0, 0.0), Pt::new(5.0, 5.0)]),
+            Linestring(vec![Pt::new(1.0, 9.0), Pt::new(9.0, 1.0)]),
+        ]);
+        let mut mapper = SvgMapper::new(300, 300);
+        mapper.add(&mls, "stroke:black;fill:none");
+        let svg = mapper.to_svg();
+
+        assert_eq!(svg.matches("<polyline").count(), 2);
+    }
+
+    /// A `MultiPolygon` renders one polygon `<path>` per member, each
+    /// with its own sub-path.
+    #[test]
+    fn multipolygon_renders_a_path_per_member() {
+        let member = square();
+        let mpg: MultiPolygon<Polygon<Pt>> = MultiPolygon(vec![member.clone(), member]);
+        let mut mapper = SvgMapper::new(400, 400);
+        mapper.add(&mpg, "fill:teal");
+        let svg = mapper.to_svg();
+
+        assert_eq!(svg.matches("<path").count(), 2);
+        assert_eq!(svg.matches("M ").count(), 2); // one exterior each
+    }
 }

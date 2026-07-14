@@ -81,4 +81,45 @@ mod tests {
         let ls: Linestring<Pt> = linestring![(0., 0.), (2., 0.), (2., 3.)];
         assert!(close(line_interpolate(&ls, 0.6), 2., 1.));
     }
+
+    /// An empty linestring returns the default point (the degenerate
+    /// guard); a single-point linestring returns that point.
+    #[test]
+    fn degenerate_inputs() {
+        let empty: Linestring<Pt> = linestring![];
+        assert!(close(line_interpolate(&empty, 0.5), 0., 0.));
+        let single: Linestring<Pt> = linestring![(3., 4.)];
+        assert!(close(line_interpolate(&single, 0.5), 3., 4.));
+    }
+
+    /// A 3D linestring blends the third ordinate too (the `2 =>` arms
+    /// of the strategy's per-dimension blend).
+    #[test]
+    #[allow(clippy::float_cmp, reason = "midpoint ordinates are exact literals")]
+    fn three_d_midpoint_blends_z() {
+        use geometry_model::Point3D;
+        type P3 = Point3D<f64, Cartesian>;
+        let ls: Linestring<P3> =
+            Linestring::from_vec(alloc::vec![P3::new(0., 0., 0.), P3::new(10., 0., 4.)]);
+        let p = line_interpolate(&ls, 0.5);
+        assert_eq!(p.get::<0>(), 5.0);
+        assert_eq!(p.get::<2>(), 2.0);
+    }
+
+    /// A 4D linestring blends the fourth ordinate (the `3 =>` arms).
+    #[test]
+    #[allow(clippy::float_cmp, reason = "midpoint ordinates are exact literals")]
+    fn four_d_midpoint_blends_all_ordinates() {
+        use geometry_model::Point;
+        use geometry_trait::PointMut as _;
+        type P4 = Point<f64, 4, Cartesian>;
+        let mut a = P4::default();
+        a.set::<3>(8.0);
+        let mut b = P4::default();
+        b.set::<0>(10.0);
+        let ls: Linestring<P4> = Linestring::from_vec(alloc::vec![a, b]);
+        let p = line_interpolate(&ls, 0.5);
+        assert_eq!(p.get::<0>(), 5.0);
+        assert_eq!(p.get::<3>(), 4.0);
+    }
 }

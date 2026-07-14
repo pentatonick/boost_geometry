@@ -110,4 +110,77 @@ mod tests {
         );
         assert_2d(&envelope(&s), 1.0, 3.0, 1.0, 3.0);
     }
+
+    /// `envelope.cpp:48-51` — a standalone ring envelopes like the
+    /// polygon built from it (orientation/closure insensitive).
+    #[test]
+    fn ring_envelope_direct() {
+        let r: geometry_model::Ring<P> = geometry_model::Ring::from_vec(vec![
+            Point2D::new(4.0, 1.0),
+            Point2D::new(0.0, 7.0),
+            Point2D::new(7.0, 9.0),
+            Point2D::new(4.0, 1.0),
+        ]);
+        assert_2d(&envelope(&r), 0.0, 7.0, 1.0, 9.0);
+    }
+
+    /// Multi-point with all-negative coordinates proves the box is
+    /// seeded from the first real point, not from zero; an empty
+    /// multi-point returns the degenerate origin box (the documented
+    /// divergence from Boost's inverted empty envelope).
+    #[test]
+    fn multi_point_envelope() {
+        let mp = geometry_model::MultiPoint(vec![
+            Point2D::<f64, Cartesian>::new(-3.0, -1.0),
+            Point2D::<f64, Cartesian>::new(-1.0, -4.0),
+        ]);
+        assert_2d(&envelope(&mp), -3.0, -1.0, -4.0, -1.0);
+        let empty = geometry_model::MultiPoint::<P>(vec![]);
+        assert_2d(&envelope(&empty), 0.0, 0.0, 0.0, 0.0);
+    }
+
+    /// Multi-linestring: bounds span every member.
+    #[test]
+    fn multi_linestring_envelope_spans_members() {
+        let mls = geometry_model::MultiLinestring::<Linestring<P>>(vec![
+            linestring![(1.0, 1.0), (2.0, 2.0)],
+            linestring![(-5.0, 4.0), (0.0, 0.0)],
+        ]);
+        assert_2d(&envelope(&mls), -5.0, 2.0, 0.0, 4.0);
+    }
+
+    /// Multi-polygon: bounds span every member's exterior.
+    #[test]
+    fn multi_polygon_envelope_spans_members() {
+        let mpg = geometry_model::MultiPolygon::<Polygon<P>>(vec![
+            polygon![[(1.0, 1.0), (1.0, 3.0), (3.0, 3.0), (3.0, 1.0), (1.0, 1.0)]],
+            polygon![[(10.0, -2.0), (10.0, 0.0), (12.0, 0.0), (10.0, -2.0)]],
+        ]);
+        assert_2d(&envelope(&mpg), 1.0, 12.0, -2.0, 3.0);
+    }
+
+    /// A 3D segment envelope carries the third ordinate (the `2 =>`
+    /// arms of the strategy's per-dimension walk).
+    #[test]
+    fn three_d_segment_envelope() {
+        use geometry_model::Point3D;
+        type P3 = Point3D<f64, Cartesian>;
+        let s = Segment::new(P3::new(1.0, 2.0, 9.0), P3::new(3.0, 0.0, -1.0));
+        let b = envelope(&s);
+        assert_eq!(b.get_indexed::<0, 2>().to_bits(), (-1.0_f64).to_bits());
+        assert_eq!(b.get_indexed::<1, 2>().to_bits(), 9.0_f64.to_bits());
+    }
+
+    /// A 4D point envelope carries the fourth ordinate (the `3 =>` arms).
+    #[test]
+    fn four_d_point_envelope() {
+        use geometry_model::Point;
+        use geometry_trait::PointMut as _;
+        type P4 = Point<f64, 4, Cartesian>;
+        let mut p = P4::default();
+        p.set::<3>(7.0);
+        let b = envelope(&p);
+        assert_eq!(b.get_indexed::<0, 3>().to_bits(), 7.0_f64.to_bits());
+        assert_eq!(b.get_indexed::<1, 3>().to_bits(), 7.0_f64.to_bits());
+    }
 }

@@ -51,4 +51,71 @@ mod tests {
         let b: Polygon<P> = polygon![[(4.0, 4.0), (0.0, 4.0), (0.0, 0.0), (4.0, 0.0), (4.0, 4.0)]];
         assert!(equals(&a, &b));
     }
+
+    /// Point equality compares all three ordinates in 3D — the `2 =>`
+    /// arm. Points equal in x,y but differing in z are not equal.
+    #[test]
+    fn equals_point_in_three_dimensions() {
+        use geometry_model::Point3D;
+        type P3 = Point3D<f64, Cartesian>;
+        let a = P3::new(1.0, 2.0, 3.0);
+        assert!(equals(&a, &P3::new(1.0, 2.0, 3.0)));
+        assert!(!equals(&a, &P3::new(1.0, 2.0, 9.0)));
+    }
+
+    /// Two polygons with matching holes (given in a different order) are
+    /// equal — the interior-ring permutation match with a `break`.
+    #[test]
+    fn equals_polygon_with_holes_matched_by_permutation() {
+        let a: Polygon<P> = polygon![
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
+            [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 1.0)],
+            [(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 5.0)]
+        ];
+        // Same polygon, holes listed in the opposite order.
+        let b: Polygon<P> = polygon![
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
+            [(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 5.0)],
+            [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 1.0)]
+        ];
+        assert!(equals(&a, &b));
+    }
+
+    /// Polygons whose exteriors match but whose hole *counts* differ are
+    /// not equal (the count-mismatch short-circuit).
+    #[test]
+    fn polygon_not_equals_on_different_hole_count() {
+        let a: Polygon<P> = polygon![
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
+            [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 1.0)]
+        ];
+        let b: Polygon<P> =
+            polygon![[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]];
+        assert!(!equals(&a, &b));
+    }
+
+    /// Polygons with the same hole count but a hole that has no match are
+    /// not equal (the `if !found { return false }` arm).
+    #[test]
+    fn polygon_not_equals_when_a_hole_has_no_match() {
+        let a: Polygon<P> = polygon![
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
+            [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 1.0)]
+        ];
+        let b: Polygon<P> = polygon![
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
+            [(7.0, 7.0), (8.0, 7.0), (8.0, 8.0), (7.0, 7.0)]
+        ];
+        assert!(!equals(&a, &b));
+    }
+
+    /// Polygons whose exterior rings differ in vertex count are not equal
+    /// (the `av.len() != bv.len()` short-circuit in `rings_equal`).
+    #[test]
+    fn polygon_not_equals_on_different_vertex_count() {
+        let a: Polygon<P> = polygon![[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 0.0)]]; // triangle
+        let b: Polygon<P> =
+            polygon![[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)]]; // square
+        assert!(!equals(&a, &b));
+    }
 }

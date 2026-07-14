@@ -124,3 +124,102 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Drive `expand` directly over well-formed and malformed token
+    //! streams. The generated code is checked by its stringified form:
+    //! a success emits the three impls with the expected `Scalar`/`Cs`;
+    //! each malformed input emits a `compile_error!` with a specific
+    //! message.
+
+    use super::expand;
+    use quote::quote;
+
+    /// A well-formed struct with no `#[geometry]` attribute defaults to
+    /// `Cartesian` / `f64` and emits all three impls plus the field's
+    /// dimension index.
+    #[test]
+    fn default_attributes_emit_cartesian_f64_impls() {
+        let out = expand(quote! {
+            struct P { x: f64, y: f64 }
+        })
+        .to_string();
+        assert!(out.contains("Geometry"));
+        assert!(out.contains("PointMut"));
+        assert!(out.contains("Cartesian"));
+        assert!(out.contains("f64"));
+        assert!(out.contains("const DIM : usize = 2"));
+        assert!(!out.contains("compile_error"));
+    }
+
+    /// `#[geometry(cs = "…", scalar = "…")]` overrides both defaults; the
+    /// chosen coordinate system and scalar appear in the output.
+    #[test]
+    fn attribute_overrides_cs_and_scalar() {
+        let out = expand(quote! {
+            #[geometry(cs = "Spherical<Degree>", scalar = "f32")]
+            struct P { lon: f32, lat: f32 }
+        })
+        .to_string();
+        assert!(out.contains("Spherical"));
+        assert!(out.contains("f32"));
+        assert!(!out.contains("compile_error"));
+    }
+
+    /// An unrecognised `#[geometry(...)]` key yields a `compile_error!`
+    /// naming the accepted keys.
+    #[test]
+    fn unknown_attribute_key_is_a_compile_error() {
+        let out = expand(quote! {
+            #[geometry(bogus = "x")]
+            struct P { x: f64 }
+        })
+        .to_string();
+        assert!(out.contains("compile_error"));
+        assert!(out.contains("unknown"));
+    }
+
+    /// A tuple struct (unnamed fields) is rejected with the named-fields
+    /// message.
+    #[test]
+    fn tuple_struct_is_rejected() {
+        let out = expand(quote! {
+            struct P(f64, f64);
+        })
+        .to_string();
+        assert!(out.contains("compile_error"));
+        assert!(out.contains("named fields"));
+    }
+
+    /// A non-struct item (here an enum) is rejected with the
+    /// only-supports-structs message.
+    #[test]
+    fn enum_is_rejected() {
+        let out = expand(quote! {
+            enum E { A, B }
+        })
+        .to_string();
+        assert!(out.contains("compile_error"));
+        assert!(out.contains("only supports structs"));
+    }
+
+    /// A struct with no fields (zero dimensions) is rejected.
+    #[test]
+    fn empty_struct_is_rejected() {
+        let out = expand(quote! {
+            struct P {}
+        })
+        .to_string();
+        assert!(out.contains("compile_error"));
+        assert!(out.contains("at least one field"));
+    }
+
+    /// Input that does not even parse as a `DeriveInput` returns the
+    /// parser's own `compile_error!` rather than panicking.
+    #[test]
+    fn unparseable_input_returns_compile_error() {
+        let out = expand(quote! { this is not valid rust }).to_string();
+        assert!(out.contains("compile_error"));
+    }
+}

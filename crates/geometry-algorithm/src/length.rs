@@ -223,4 +223,17 @@ mod tests {
         let via_default = length(&ls);
         assert!((via_with - via_default).abs() < 1e-9);
     }
+
+    /// `length.hpp:89` — an empty or single-point linestring has length
+    /// 0 (Boost's default-constructed sum), and so does a degenerate
+    /// open ring's perimeter.
+    #[test]
+    fn degenerate_inputs_have_zero_length() {
+        let empty: Linestring<Point2D<f64, Cartesian>> = linestring![];
+        assert_eq!(length(&empty), 0.0);
+        let single: Linestring<Point2D<f64, Cartesian>> = linestring![(3.0, 4.0)];
+        assert_eq!(length(&single), 0.0);
+        let empty_ring = Ring::<Point2D<f64, Cartesian>, true, false>::new();
+        assert_eq!(ring_perimeter(&empty_ring), 0.0);
+    }
 }

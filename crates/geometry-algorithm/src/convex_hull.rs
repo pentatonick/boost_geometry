@@ -83,4 +83,68 @@ mod tests {
             .any(|p| p.get::<0>() == 2.0 && p.get::<1>() == 1.0);
         assert!(!has_reflex);
     }
+
+    /// A 0-, 1-, or 2-point input passes through the degenerate guard
+    /// unchanged.
+    #[test]
+    fn hull_of_fewer_than_three_points_is_the_input() {
+        let empty = MultiPoint::<Pt>(alloc::vec![]);
+        assert_eq!(convex_hull(&empty).points().count(), 0);
+        let one = MultiPoint(alloc::vec![Pt::new(3., 4.)]);
+        let hull = convex_hull(&one);
+        assert_eq!(hull.points().count(), 1);
+        assert_eq!(hull.0[0].get::<0>(), 3.0);
+        let two = MultiPoint(alloc::vec![Pt::new(0., 0.), Pt::new(1., 1.)]);
+        assert_eq!(convex_hull(&two).points().count(), 2);
+    }
+
+    /// The hull of a linestring: only its convex corners survive.
+    #[test]
+    fn hull_of_linestring() {
+        use geometry_model::{Linestring, linestring};
+        let ls: Linestring<Pt> = linestring![(0., 0.), (4., 0.), (4., 4.), (2., 2.)];
+        let hull = convex_hull(&ls);
+        // Triangle (0,0)(4,0)(4,4) + closing duplicate = 4 stored.
+        assert_eq!(hull.points().count(), 4);
+    }
+
+    /// The hull of a standalone ring drops its reflex vertex.
+    #[test]
+    fn hull_of_ring() {
+        use geometry_model::Ring;
+        let r: Ring<Pt> = Ring::from_vec(alloc::vec![
+            Pt::new(0., 0.),
+            Pt::new(4., 0.),
+            Pt::new(2., 1.), // reflex vertex — dropped by the hull
+            Pt::new(4., 4.),
+            Pt::new(0., 4.),
+            Pt::new(0., 0.),
+        ]);
+        let hull = convex_hull(&r);
+        assert_eq!(hull.points().count(), 5); // 4 corners + closing dup
+        assert!(
+            !hull
+                .0
+                .iter()
+                .any(|p| p.get::<0>() == 2.0 && p.get::<1>() == 1.0)
+        );
+    }
+
+    /// Only the exterior ring feeds a polygon's hull — interior-ring
+    /// points never appear.
+    #[test]
+    fn hull_of_polygon_ignores_holes() {
+        let pg: Polygon<Pt> = polygon![
+            [(0., 0.), (4., 0.), (4., 4.), (0., 4.), (0., 0.)],
+            [(1., 1.), (2., 1.), (2., 2.), (1., 2.), (1., 1.)],
+        ];
+        let hull = convex_hull(&pg);
+        assert_eq!(hull.points().count(), 5);
+        assert!(
+            !hull
+                .0
+                .iter()
+                .any(|p| p.get::<0>() == 1.0 && p.get::<1>() == 1.0)
+        );
+    }
 }

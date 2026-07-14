@@ -433,4 +433,59 @@ mod tests {
             "GEOMETRYCOLLECTION(POINT(10 10),LINESTRING(10 10,20 20))"
         );
     }
+
+    /// Each empty container serialises to the OGC `<TYPE> EMPTY` form,
+    /// never `<TYPE>()`.
+    #[test]
+    fn empty_containers_use_the_empty_keyword() {
+        use geometry_model::{MultiLinestring, MultiPolygon, Polygon, Ring};
+        assert_eq!(to_wkt(&Linestring::<Pt>(vec![])), "LINESTRING EMPTY");
+        assert_eq!(to_wkt(&Ring::<Pt>::from_vec(vec![])), "POLYGON EMPTY");
+        assert_eq!(
+            to_wkt(&Polygon::<Pt>::new(Ring::from_vec(vec![]))),
+            "POLYGON EMPTY"
+        );
+        assert_eq!(to_wkt(&MultiPoint::<Pt>(vec![])), "MULTIPOINT EMPTY");
+        assert_eq!(
+            to_wkt(&MultiLinestring::<Linestring<Pt>>(vec![])),
+            "MULTILINESTRING EMPTY"
+        );
+        assert_eq!(
+            to_wkt(&MultiPolygon::<Polygon<Pt>>(vec![])),
+            "MULTIPOLYGON EMPTY"
+        );
+        assert_eq!(
+            to_wkt(&DynGeometry::<f64, Cartesian>::GeometryCollection(vec![])),
+            "GEOMETRYCOLLECTION EMPTY"
+        );
+    }
+
+    /// A bare, non-empty `Ring` serialises as a single-ring polygon
+    /// (there is no standalone `RING` keyword in OGC WKT).
+    #[test]
+    fn bare_ring_serialises_as_single_ring_polygon() {
+        use geometry_model::Ring;
+        let ring: Ring<Pt> = Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(1.0, 0.0),
+            Pt::new(1.0, 1.0),
+            Pt::new(0.0, 0.0),
+        ]);
+        assert_eq!(to_wkt(&ring), "POLYGON((0 0,1 0,1 1,0 0))");
+    }
+
+    /// An integer-valued coordinate too large for the `i64` fast path
+    /// falls back to the default float format (which keeps `.0`-free
+    /// scientific/decimal form as Rust prints it), still round-tripping.
+    #[test]
+    fn huge_integer_coordinate_uses_the_float_fallback() {
+        // 1e16 is integer-valued but exceeds the 2^53 fast-path guard.
+        let p = Pt::new(1e16, 0.0);
+        let s = to_wkt(&p);
+        // The x ordinate is emitted via the float path; parse it back to
+        // confirm the value survives.
+        let inner = s.trim_start_matches("POINT(").trim_end_matches(')');
+        let x: f64 = inner.split(' ').next().unwrap().parse().unwrap();
+        assert_eq!(x, 1e16);
+    }
 }

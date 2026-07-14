@@ -522,4 +522,123 @@ mod tests {
             }
         );
     }
+
+    // ---- Building blocks for nested records --------------------------
+
+    /// A little-endian `Point(1, 2)` WKB record (21 bytes).
+    fn le_point_record() -> Vec<u8> {
+        let mut b = vec![0x01, 0x01, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&F1);
+        b.extend_from_slice(&F2);
+        b
+    }
+
+    /// A little-endian empty `LineString` WKB record.
+    fn le_empty_linestring_record() -> Vec<u8> {
+        vec![0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    }
+
+    /// A little-endian empty `Polygon` WKB record (zero rings).
+    fn le_empty_polygon_record() -> Vec<u8> {
+        vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    }
+
+    /// A valid `MultiPoint` of two members parses to a two-point
+    /// multipoint (the happy `pts.push` arm).
+    #[test]
+    fn le_multipoint_two_members() {
+        let mut b = vec![0x01, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_point_record());
+        b.extend_from_slice(&le_point_record());
+        let g = from_wkb(&b).unwrap();
+        assert_eq!(g.kind(), DynKind::MultiPoint);
+        let DynGeometry::MultiPoint(mp) = g else {
+            unreachable!()
+        };
+        assert_eq!(mp.0.len(), 2);
+        assert_eq!(mp.0[0].get::<0>(), 1.0);
+    }
+
+    /// A valid `MultiLineString` of one empty member parses (the happy
+    /// `lines.push` arm).
+    #[test]
+    fn le_multilinestring_one_member() {
+        let mut b = vec![0x01, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_empty_linestring_record());
+        let g = from_wkb(&b).unwrap();
+        assert_eq!(g.kind(), DynKind::MultiLineString);
+        let DynGeometry::MultiLineString(mls) = g else {
+            unreachable!()
+        };
+        assert_eq!(mls.0.len(), 1);
+    }
+
+    /// A valid `MultiPolygon` of one empty member parses (the happy
+    /// `polys.push` arm).
+    #[test]
+    fn le_multipolygon_one_member() {
+        let mut b = vec![0x01, 0x06, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_empty_polygon_record());
+        let g = from_wkb(&b).unwrap();
+        assert_eq!(g.kind(), DynKind::MultiPolygon);
+        let DynGeometry::MultiPolygon(mpg) = g else {
+            unreachable!()
+        };
+        assert_eq!(mpg.0.len(), 1);
+    }
+
+    /// A `GeometryCollection` mixing a point and a line string parses,
+    /// preserving member kinds and order (the `items.push` arm).
+    #[test]
+    fn le_geometry_collection_mixed_members() {
+        let mut b = vec![0x01, 0x07, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_point_record());
+        b.extend_from_slice(&le_empty_linestring_record());
+        let g = from_wkb(&b).unwrap();
+        assert_eq!(g.kind(), DynKind::GeometryCollection);
+        let DynGeometry::GeometryCollection(items) = g else {
+            unreachable!()
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind(), DynKind::Point);
+        assert_eq!(items[1].kind(), DynKind::LineString);
+    }
+
+    /// A `MultiLineString` whose member is a `Point` reports the mismatch
+    /// with both codes (expected 2, found 1) — the `dyn_code(Point)` arm.
+    #[test]
+    fn multilinestring_wrong_member_reports_both_codes() {
+        let mut b = vec![0x01, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_point_record());
+        assert_eq!(
+            from_wkb(&b).unwrap_err(),
+            WkbError::MismatchedMemberType {
+                expected: WKB_LINESTRING,
+                found: WKB_POINT,
+            }
+        );
+    }
+
+    /// A `MultiPolygon` whose member is a `Point` reports the mismatch —
+    /// the `dyn_code(Point)` arm through the polygon reader.
+    #[test]
+    fn multipolygon_wrong_member_reports_both_codes() {
+        let mut b = vec![0x01, 0x06, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_point_record());
+        assert_eq!(
+            from_wkb(&b).unwrap_err(),
+            WkbError::MismatchedMemberType {
+                expected: WKB_POLYGON,
+                found: WKB_POINT,
+            }
+        );
+    }
+
+    /// An unknown base type code (here 8, one past the OGC range) is
+    /// rejected.
+    #[test]
+    fn unknown_base_type_is_rejected() {
+        let b = vec![0x01, 0x08, 0x00, 0x00, 0x00];
+        assert_eq!(from_wkb(&b).unwrap_err(), WkbError::UnknownGeometryType(8));
+    }
 }

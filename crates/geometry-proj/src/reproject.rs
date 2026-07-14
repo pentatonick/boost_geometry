@@ -247,6 +247,69 @@ mod tests {
         assert!(ls.0[1].get::<0>() > 1000.0);
     }
 
+    /// A `Ring`'s every vertex is reprojected; the origin stays put and
+    /// the rest move outward under Web Mercator.
+    #[test]
+    fn reproject_a_ring() {
+        use geometry_model::Ring;
+        let mut ring: Ring<P> = Ring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(0.1, 0.0),
+            P::new(0.1, 0.1),
+            P::new(0.0, 0.0),
+        ]);
+        reproject(&mut ring, &wgs84(), &mercator()).unwrap();
+        assert!(ring.0[0].get::<0>().abs() < 1e-6); // origin fixed
+        assert!(ring.0[1].get::<0>() > 1000.0); // moved outward
+    }
+
+    /// A `Polygon`'s exterior *and* interior rings are all reprojected.
+    #[test]
+    fn reproject_a_polygon_with_hole() {
+        use geometry_model::{Polygon, Ring};
+        let outer: Ring<P> = Ring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(0.2, 0.0),
+            P::new(0.2, 0.2),
+            P::new(0.0, 0.0),
+        ]);
+        let hole: Ring<P> = Ring::from_vec(vec![
+            P::new(0.05, 0.05),
+            P::new(0.1, 0.05),
+            P::new(0.1, 0.1),
+            P::new(0.05, 0.05),
+        ]);
+        let mut pg = Polygon::with_inners(outer, vec![hole]);
+        reproject(&mut pg, &wgs84(), &mercator()).unwrap();
+        // Exterior origin vertex fixed at (0,0); the hole's first vertex
+        // moved outward (was 0.05 rad in each axis).
+        assert!(pg.outer.0[0].get::<0>().abs() < 1e-6);
+        assert!(pg.inners[0].0[0].get::<0>() > 1000.0);
+    }
+
+    /// A `MultiPolygon` reprojects each member polygon.
+    #[test]
+    fn reproject_a_multipolygon() {
+        use geometry_model::{MultiPolygon, Polygon, Ring};
+        let member = Polygon::with_inners(
+            Ring::from_vec(vec![
+                P::new(0.1, 0.1),
+                P::new(0.2, 0.1),
+                P::new(0.2, 0.2),
+                P::new(0.1, 0.1),
+            ]),
+            vec![],
+        );
+        let mut mpg: MultiPolygon<Polygon<P>> = MultiPolygon(vec![member.clone(), member]);
+        reproject(&mut mpg, &wgs84(), &mercator()).unwrap();
+        // Both members' first vertices moved to the same reprojected x
+        // (they were identical before), well away from the origin.
+        let x0 = mpg.0[0].outer.0[0].get::<0>();
+        let x1 = mpg.0[1].outer.0[0].get::<0>();
+        assert!(x0 > 1000.0);
+        assert!((x0 - x1).abs() < 1e-9);
+    }
+
     #[test]
     fn failed_reproject_leaves_geometry_unchanged() {
         // lat = π/2 rad is the Mercator singularity: proj4rs refuses

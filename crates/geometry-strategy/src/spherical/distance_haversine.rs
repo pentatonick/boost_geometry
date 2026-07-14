@@ -356,4 +356,40 @@ mod tests {
     {
         s.distance(a, b)
     }
+
+    type GP = WithCs<Adapt<[f64; 2]>, Spherical<Degree>>;
+
+    /// `Haversine::comparable()` yields a `ComparableHaversine` that
+    /// returns the sqrt-free `h` term; taking `asin(sqrt(h)) · 2R` of it
+    /// recovers the full Haversine distance.
+    #[test]
+    fn comparable_yields_the_h_term() {
+        let a = deg(4.0, 52.0);
+        let b = deg(2.0, 48.0);
+        let full = Haversine::UNIT.distance(&a, &b);
+        let h = DistanceStrategy::<GP, GP>::comparable(&Haversine::UNIT).distance(&a, &b);
+        // Reconstruct the angle from the comparable term.
+        let reconstructed = 2.0 * h.sqrt().asin();
+        assert!((full - reconstructed).abs() < 1e-12, "{full} vs {reconstructed}");
+    }
+
+    /// `ComparableHaversine::comparable()` returns itself, and its
+    /// `distance` preserves the ordering of the full distance (the whole
+    /// point of the comparable form): a nearer pair has a smaller `h`.
+    #[test]
+    fn comparable_of_comparable_is_itself_and_order_preserving() {
+        let o = deg(0.0, 0.0);
+        let near = deg(1.0, 0.0);
+        let far = deg(10.0, 0.0);
+        let cmp = DistanceStrategy::<GP, GP>::comparable(&ComparableHaversine);
+        assert!(cmp.distance(&o, &near) < cmp.distance(&o, &far));
+    }
+
+    /// The read-only-point witness computes a distance when invoked.
+    #[test]
+    #[allow(clippy::used_underscore_items, reason = "the test exists to run the compile-time witness's body")]
+    fn readonly_witness_computes_distance() {
+        let d = _accepts_readonly_point(&Haversine::UNIT, &deg(0.0, 0.0), &deg(1.0, 0.0));
+        assert!(d > 0.0, "got {d}");
+    }
 }

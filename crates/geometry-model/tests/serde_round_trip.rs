@@ -32,6 +32,15 @@ fn point_serializes_as_coordinate_tuple() {
     assert_eq!(json, "[3.0,4.0]");
 }
 
+/// Deserialising a tuple with too few coordinates is an
+/// `invalid_length` error, not a silent zero-fill.
+#[test]
+fn point_deserialize_rejects_short_tuple() {
+    let err = serde_json::from_str::<Pt>("[3.0]").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("2 coordinates"), "got: {msg}");
+}
+
 #[test]
 fn linestring_round_trip() {
     let ls: Linestring<Pt> = linestring![(0., 0.), (1., 1.), (2., 3.)];

@@ -50,6 +50,13 @@ fn point2d_new_get() {
     assert!(approx_eq(p.get::<1>(), 2.0));
 }
 
+// point.hpp:133-149 — the single-argument 1-D constructor.
+#[test]
+fn point1d_new_get() {
+    let p = geometry_model::Point::<f64, 1, Cartesian>::new(7.5);
+    assert!(approx_eq(p.get::<0>(), 7.5));
+}
+
 // test/core/tag.cpp — `tag<G>::type` resolves to `point_tag`.
 #[test]
 fn tag_is_point_tag() {

@@ -258,4 +258,79 @@ mod tests {
         for_each_segment(&pg, |_, _| count += 1);
         assert_eq!(count, 4);
     }
+
+    use geometry_model::{MultiLinestring, MultiPolygon, Ring};
+
+    /// A `MultiLinestring` visits every point of every member in order.
+    #[test]
+    fn multilinestring_visits_all_member_points() {
+        let mls: MultiLinestring<Linestring<Pt>> = MultiLinestring(vec![
+            linestring![(0.0, 0.0), (1.0, 1.0)],
+            linestring![(2.0, 2.0), (3.0, 3.0), (4.0, 4.0)],
+        ]);
+        let mut xs = alloc::vec::Vec::new();
+        for_each_point(&mls, |p| xs.push(p.get::<0>()));
+        assert_eq!(xs, vec![0.0, 1.0, 2.0, 3.0, 4.0]);
+    }
+
+    /// A `MultiPolygon` visits every stored point across its members.
+    #[test]
+    fn multipolygon_visits_all_member_points() {
+        let member: Polygon<Pt> =
+            polygon![[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]];
+        let mpg: MultiPolygon<Polygon<Pt>> = MultiPolygon(vec![member.clone(), member]);
+        let mut count = 0;
+        for_each_point(&mpg, |_| count += 1);
+        assert_eq!(count, 8); // two members × 4 stored points
+    }
+
+    /// An *open* ring emits an extra implicit `(last, first)` closing
+    /// edge that a closed ring does not.
+    #[test]
+    fn open_ring_emits_implicit_closing_edge() {
+        // 4 distinct vertices, open (CL = false): 3 windowed edges + the
+        // implicit closing edge = 4.
+        let ring: Ring<Pt, true, false> =
+            Ring::from_vec(vec![Pt::new(0.0, 0.0), Pt::new(2.0, 0.0), Pt::new(2.0, 2.0), Pt::new(0.0, 2.0)]);
+        let mut edges = alloc::vec::Vec::new();
+        for_each_segment(&ring, |a, b| {
+            edges.push(((a.get::<0>(), a.get::<1>()), (b.get::<0>(), b.get::<1>())));
+        });
+        assert_eq!(edges.len(), 4);
+        // The last edge closes the ring: (0,2) -> (0,0).
+        assert_eq!(*edges.last().unwrap(), ((0.0, 2.0), (0.0, 0.0)));
+    }
+
+    /// A ring with fewer than two vertices emits no segments (the length
+    /// guard).
+    #[test]
+    fn degenerate_ring_emits_no_segments() {
+        let ring: Ring<Pt, true, false> = Ring::from_vec(vec![Pt::new(1.0, 1.0)]);
+        let mut count = 0;
+        for_each_segment(&ring, |_, _| count += 1);
+        assert_eq!(count, 0);
+    }
+
+    /// A `MultiLinestring` visits the segments of every member.
+    #[test]
+    fn multilinestring_visits_all_member_segments() {
+        let mls: MultiLinestring<Linestring<Pt>> = MultiLinestring(vec![
+            linestring![(0.0, 0.0), (1.0, 1.0)],          // 1 edge
+            linestring![(2.0, 2.0), (3.0, 3.0), (4.0, 4.0)], // 2 edges
+        ]);
+        let mut count = 0;
+        for_each_segment(&mls, |_, _| count += 1);
+        assert_eq!(count, 3);
+    }
+
+    /// A `MultiPolygon` visits the segments of every member polygon.
+    #[test]
+    fn multipolygon_visits_all_member_segments() {
+        let member: Polygon<Pt> =
+            polygon![[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]]; // 4 edges
+        let mpg: MultiPolygon<Polygon<Pt>> = MultiPolygon(vec![member.clone(), member]);
+        let mut count = 0;
+        for_each_segment(&mpg, |_, _| count += 1);
+        assert_eq!(count, 8); // two members × 4 edges
+    }
 }

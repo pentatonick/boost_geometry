@@ -202,6 +202,38 @@ mod tests {
         assert_eq!(num_segments(&pg), 7);
     }
 
+    /// `num_segments.cpp:126-127` — an empty or 1-point linestring has
+    /// no edges (the `n < 2` guard).
+    #[test]
+    fn short_linestrings_have_no_segments() {
+        let empty: Ls = linestring![];
+        assert_eq!(num_segments(&empty), 0);
+        let single: Ls = linestring![(0.0, 0.0)];
+        assert_eq!(num_segments(&single), 0);
+    }
+
+    /// `num_segments.cpp:143-156` — a multi-linestring sums its members.
+    #[test]
+    fn multi_linestring_sums_members() {
+        let mls = geometry_model::MultiLinestring::<Ls>(vec![
+            linestring![(0.0, 0.0), (1.0, 1.0)],                         // 1 edge
+            linestring![(2.0, 2.0), (3.0, 3.0), (4.0, 4.0), (5.0, 5.0)], // 3 edges
+        ]);
+        assert_eq!(num_segments(&mls), 4);
+    }
+
+    /// `num_segments.cpp:242-262` — a multi-polygon sums its members.
+    #[test]
+    fn multi_polygon_sums_members() {
+        let plain: Poly = polygon![[(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (0.0, 5.0), (0.0, 0.0)]]; // 4
+        let holed: Poly = polygon![
+            [(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (0.0, 5.0), (0.0, 0.0)], // 4
+            [(1.0, 1.0), (2.0, 1.0), (1.0, 2.0), (1.0, 1.0)],             // 3
+        ];
+        let mpg = geometry_model::MultiPolygon(vec![plain, holed]);
+        assert_eq!(num_segments(&mpg), 11);
+    }
+
     #[test]
     fn single_point_open_ring_has_no_segments() {
         // Regression: a 1-point ring has zero segments regardless of
