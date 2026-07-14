@@ -21,3 +21,6 @@ Cargo.lock
 
 # Local agent/session runtime state.
 /.claude/
+
+# Local-only specs/notes — not part of the shipped source.
+/specs/
