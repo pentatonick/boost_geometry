@@ -12,9 +12,6 @@
 
 use core::iter::FusedIterator;
 
-#[cfg(test)]
-use alloc::vec::Vec;
-
 use crate::indexable::Indexable;
 use crate::node::Node;
 use crate::search_frontier::SearchFrontier;
@@ -52,10 +49,6 @@ pub struct NearestIter<
     #[cfg(test)]
     leaf_expansions: usize,
     #[cfg(test)]
-    node_pushes: usize,
-    #[cfg(test)]
-    value_pushes: usize,
-    #[cfg(test)]
     pending_nodes: usize,
     #[cfg(test)]
     pending_values: usize,
@@ -65,8 +58,6 @@ pub struct NearestIter<
     value_high_water: usize,
     #[cfg(test)]
     combined_high_water: usize,
-    #[cfg(test)]
-    yielded_by_leaf: Vec<usize>,
 }
 
 #[cfg(test)]
@@ -75,12 +66,6 @@ pub(crate) struct NearestMetrics {
     pub(crate) frontier: FrontierMetrics,
     pub(crate) branch_expansions: usize,
     pub(crate) leaf_expansions: usize,
-    pub(crate) node_pushes: usize,
-    pub(crate) value_pushes: usize,
-    pub(crate) node_pops: usize,
-    pub(crate) value_pops: usize,
-    pub(crate) contributing_leaves: usize,
-    pub(crate) max_yields_per_leaf: usize,
     pub(crate) node_high_water: usize,
     pub(crate) value_high_water: usize,
 }
@@ -93,8 +78,6 @@ impl<'a, T, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAPACITY: usiz
         nodes.push(DistanceEntry {
             dist: 0.0,
             item: root,
-            #[cfg(test)]
-            source_leaf: None,
         });
         Self {
             query,
@@ -105,10 +88,6 @@ impl<'a, T, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAPACITY: usiz
             #[cfg(test)]
             leaf_expansions: 0,
             #[cfg(test)]
-            node_pushes: 1,
-            #[cfg(test)]
-            value_pushes: 0,
-            #[cfg(test)]
             pending_nodes: 1,
             #[cfg(test)]
             pending_values: 0,
@@ -118,8 +97,6 @@ impl<'a, T, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAPACITY: usiz
             value_high_water: 0,
             #[cfg(test)]
             combined_high_water: 1,
-            #[cfg(test)]
-            yielded_by_leaf: Vec::new(),
         }
     }
 
@@ -135,24 +112,9 @@ impl<'a, T, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAPACITY: usiz
             },
             branch_expansions: self.branch_expansions,
             leaf_expansions: self.leaf_expansions,
-            node_pushes: self.node_pushes,
-            value_pushes: self.value_pushes,
-            node_pops: nodes.pops,
-            value_pops: values.pops,
-            contributing_leaves: self
-                .yielded_by_leaf
-                .iter()
-                .filter(|&&yielded| yielded != 0)
-                .count(),
-            max_yields_per_leaf: self.yielded_by_leaf.iter().copied().max().unwrap_or(0),
             node_high_water: self.node_high_water,
             value_high_water: self.value_high_water,
         }
-    }
-
-    #[cfg(test)]
-    fn yielded_by_leaf(&self) -> &[usize] {
-        &self.yielded_by_leaf
     }
 }
 
@@ -179,9 +141,6 @@ impl<'a, T: Indexable, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAP
                 #[cfg(test)]
                 {
                     self.pending_values -= 1;
-                    self.yielded_by_leaf[value
-                        .source_leaf
-                        .expect("only value entries enter the value frontier")] += 1;
                 }
                 return Some(value.item);
             }
@@ -190,24 +149,19 @@ impl<'a, T: Indexable, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAP
             match node.item {
                 Node::Leaf(values) => {
                     #[cfg(test)]
-                    let source_leaf = {
+                    {
                         self.pending_nodes -= 1;
                         self.leaf_expansions += 1;
-                        self.value_pushes += values.len();
                         self.pending_values += values.len();
                         self.value_high_water = self.value_high_water.max(self.pending_values);
                         self.combined_high_water = self
                             .combined_high_water
                             .max(self.pending_nodes + self.pending_values);
-                        self.yielded_by_leaf.push(0);
-                        self.yielded_by_leaf.len() - 1
-                    };
+                    }
                     let query = self.query;
                     self.values.extend(values.iter().map(|value| DistanceEntry {
                         dist: value.bounds().comparable_min_distance_to(query),
                         item: value,
-                        #[cfg(test)]
-                        source_leaf: Some(source_leaf),
                     }));
                 }
                 Node::Branch(children) => {
@@ -215,7 +169,6 @@ impl<'a, T: Indexable, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAP
                     {
                         self.pending_nodes -= 1;
                         self.branch_expansions += 1;
-                        self.node_pushes += children.len();
                         self.pending_nodes += children.len();
                         self.node_high_water = self.node_high_water.max(self.pending_nodes);
                         self.combined_high_water = self
@@ -227,8 +180,6 @@ impl<'a, T: Indexable, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAP
                         .extend(children.iter().map(|(bounds, child)| DistanceEntry {
                             dist: bounds.comparable_min_distance_to(query),
                             item: child,
-                            #[cfg(test)]
-                            source_leaf: None,
                         }));
                 }
             }
@@ -245,8 +196,6 @@ impl<T: Indexable, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAPACIT
 struct DistanceEntry<'a, T> {
     dist: f64,
     item: &'a T,
-    #[cfg(test)]
-    source_leaf: Option<usize>,
 }
 
 impl<T> DistanceEntry<'_, T> {
