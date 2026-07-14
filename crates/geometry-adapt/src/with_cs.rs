@@ -175,6 +175,21 @@ mod tests {
         assert_eq!(p.get::<1>(), 2.0);
     }
 
+    /// `PointMut::set` on a `WithCs` writes through to the inner point's
+    /// storage; re-reading through `get` returns the written value.
+    #[test]
+    fn set_writes_through_to_inner() {
+        let mut p: WithCs<MyXy, Spherical<Degree>> = WithCs::new(MyXy(0.0, 0.0));
+        p.set::<0>(7.0);
+        p.set::<1>(9.0);
+        assert_eq!(p.get::<0>(), 7.0);
+        assert_eq!(p.get::<1>(), 9.0);
+        // The change landed in the wrapped MyXy, visible after unwrap.
+        let inner = p.into_inner();
+        assert_eq!(inner.0, 7.0);
+        assert_eq!(inner.1, 9.0);
+    }
+
     // `#[repr(transparent)]` guarantees layout-compat; this is a
     // sanity check rather than a real test, but it pins the
     // assumption that adapter code depends on.

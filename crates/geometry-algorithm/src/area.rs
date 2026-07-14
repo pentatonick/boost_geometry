@@ -156,7 +156,7 @@ mod tests {
         reason = "areas are compared with an explicit tolerance, not `==`"
     )]
 
-    use super::{area, box_area, multi_polygon_area, ring_area};
+    use super::{area, area_with, box_area, multi_polygon_area, ring_area};
     use geometry_cs::Cartesian;
     use geometry_model::{Box, MultiPolygon, Point2D, Polygon, Ring, polygon};
 
@@ -270,6 +270,77 @@ mod tests {
         );
     }
 
+    /// A spherical polygon with an oppositely-wound interior ring (hole)
+    /// subtracts the hole's area: outer octant minus a smaller hole is
+    /// strictly less than the whole octant but still positive.
+    #[cfg(feature = "std")]
+    #[test]
+    fn spherical_polygon_with_hole_subtracts_inner_area() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Spherical};
+        use geometry_strategy::SphericalPolygonArea;
+
+        type Sp = WithCs<Adapt<[f64; 2]>, Spherical<Degree>>;
+        let sp = |lon: f64, lat: f64| -> Sp { WithCs::new(Adapt([lon, lat])) };
+
+        // Outer: the full octant (CW, positive). Hole: a small triangle
+        // wound CCW (opposite), so its excess is negative.
+        let outer = Ring::from_vec(vec![sp(0., 0.), sp(0., 90.), sp(90., 0.), sp(0., 0.)]);
+        let hole = Ring::from_vec(vec![sp(10., 10.), sp(30., 10.), sp(20., 20.), sp(10., 10.)]);
+        let pg: Polygon<Sp> = Polygon::with_inners(outer, vec![hole]);
+        let with_hole = area_with(&pg, SphericalPolygonArea::UNIT);
+        let whole = core::f64::consts::FRAC_PI_2;
+        assert!(with_hole < whole, "hole must reduce area: {with_hole}");
+        assert!(with_hole > 0.0, "still positive: {with_hole}");
+    }
+
+    /// An *open* spherical ring (its closing vertex omitted) is closed
+    /// implicitly: the `last -> first` edge is added, so the area
+    /// matches the closed form.
+    #[cfg(feature = "std")]
+    #[test]
+    fn spherical_open_ring_closes_implicitly() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Spherical};
+        use geometry_strategy::SphericalArea;
+
+        type Sp = WithCs<Adapt<[f64; 2]>, Spherical<Degree>>;
+        let sp = |lon: f64, lat: f64| -> Sp { WithCs::new(Adapt([lon, lat])) };
+
+        let closed: Ring<Sp> =
+            Ring::from_vec(vec![sp(0., 0.), sp(0., 90.), sp(90., 0.), sp(0., 0.)]);
+        let open: Ring<Sp, true, false> =
+            Ring::from_vec(vec![sp(0., 0.), sp(0., 90.), sp(90., 0.)]);
+        let a_closed = area_with(&closed, SphericalArea::UNIT);
+        let a_open = area_with(&open, SphericalArea::UNIT);
+        assert!((a_closed - a_open).abs() < 1e-9, "{a_closed} vs {a_open}");
+    }
+
+    /// A spherical ring crossing the antimeridian drives Δlon
+    /// normalisation (the `±2π` wrap): a thin sliver straddling ±180°
+    /// must yield a small excess, not a ~2π artefact.
+    #[cfg(feature = "std")]
+    #[test]
+    fn spherical_antimeridian_crossing_normalises_dlon() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Spherical};
+        use geometry_strategy::SphericalArea;
+
+        type Sp = WithCs<Adapt<[f64; 2]>, Spherical<Degree>>;
+        let sp = |lon: f64, lat: f64| -> Sp { WithCs::new(Adapt([lon, lat])) };
+
+        let r: Ring<Sp> = Ring::from_vec(vec![
+            sp(170., 0.),
+            sp(170., 10.),
+            sp(-170., 10.),
+            sp(-170., 0.),
+            sp(170., 0.),
+        ]);
+        let got = area_with(&r, SphericalArea::UNIT).abs();
+        // A 20°×10° sliver subtends far less than a hemisphere (2π).
+        assert!(got < 0.2, "expected a small sliver area, got {got}");
+    }
+
     /// `area_geo.cpp` — strategy-less `area` on a geographic polygon
     /// resolves to the authalic-sphere `GeographicPolygonArea`; a
     /// 1° × 1° box near the equator on WGS84 ≈ `12_309` km² (within 2 %).
@@ -296,5 +367,99 @@ mod tests {
             "got {} km² expected ~12309 km²",
             got / 1e6
         );
+    }
+
+    /// `area_geo.cpp` — a geographic polygon with a hole wound opposite
+    /// the outer ring: `area(polygon)` = outer − hole (the interior-ring
+    /// subtraction loop of `GeographicPolygonArea`).
+    #[cfg(feature = "std")]
+    #[test]
+    fn geographic_polygon_with_hole_subtracts_hole_area() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Geographic};
+
+        type Gg = WithCs<Adapt<[f64; 2]>, Geographic<Degree>>;
+        let gg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
+
+        let outer = Ring::from_vec(vec![
+            gg(0., 0.),
+            gg(1., 0.),
+            gg(1., 1.),
+            gg(0., 1.),
+            gg(0., 0.),
+        ]);
+        // Same winding sense reversed → opposite-signed excess: a hole.
+        let hole: Ring<Gg> = Ring::from_vec(vec![
+            gg(0.2, 0.2),
+            gg(0.2, 0.8),
+            gg(0.8, 0.8),
+            gg(0.8, 0.2),
+            gg(0.2, 0.2),
+        ]);
+        let outer_only = area(&Polygon::new(outer.clone())).abs();
+        let hole_alone = area(&Polygon::new(hole.clone())).abs();
+        let holed = Polygon::with_inners(outer, vec![hole]);
+        let got = area(&holed).abs();
+        let expected = outer_only - hole_alone;
+        assert!(
+            (got - expected).abs() / expected < 1e-9,
+            "got {got}, expected outer − hole = {expected}"
+        );
+    }
+
+    /// A geographic ring declared *open* closes implicitly: same area
+    /// as the explicitly closed ring (the closing-edge branch of the
+    /// excess accumulator).
+    #[cfg(feature = "std")]
+    #[test]
+    fn geographic_open_ring_closes_implicitly() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Geographic};
+
+        type Gg = WithCs<Adapt<[f64; 2]>, Geographic<Degree>>;
+        let gg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
+
+        let open: Polygon<Gg, true, false> = Polygon::new(Ring::from_vec(vec![
+            gg(0., 0.),
+            gg(1., 0.),
+            gg(1., 1.),
+            gg(0., 1.),
+        ]));
+        let closed: Polygon<Gg> = Polygon::new(Ring::from_vec(vec![
+            gg(0., 0.),
+            gg(1., 0.),
+            gg(1., 1.),
+            gg(0., 1.),
+            gg(0., 0.),
+        ]));
+        let got_open = area(&open).abs();
+        let got_closed = area(&closed).abs();
+        assert!(
+            (got_open - got_closed).abs() / got_closed < 1e-12,
+            "open {got_open} != closed {got_closed}"
+        );
+    }
+
+    /// A counter-clockwise-declared geographic polygon negates the
+    /// signed area (the `PointOrder::CounterClockwise` arm): same
+    /// vertices, opposite declared order → opposite sign.
+    #[cfg(feature = "std")]
+    #[test]
+    fn geographic_ccw_declared_polygon_negates_sign() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Geographic};
+
+        type Gg = WithCs<Adapt<[f64; 2]>, Geographic<Degree>>;
+        let gg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
+
+        let verts = vec![gg(0., 0.), gg(1., 0.), gg(1., 1.), gg(0., 1.), gg(0., 0.)];
+        let cw: Polygon<Gg, true> = Polygon::new(Ring::from_vec(verts.clone()));
+        let ccw: Polygon<Gg, false> = Polygon::new(Ring::from_vec(verts));
+        let sum = area(&cw) + area(&ccw);
+        assert!(
+            sum.abs() < 1e-3,
+            "signed areas do not cancel: cw + ccw = {sum}"
+        );
+        assert!(area(&cw).abs() > 1e9, "area unexpectedly tiny");
     }
 }

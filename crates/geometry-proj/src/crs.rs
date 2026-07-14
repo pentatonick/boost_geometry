@@ -134,4 +134,30 @@ mod tests {
     fn bad_epsg_errors() {
         assert!(Crs::from_epsg(1).is_err());
     }
+
+    /// A WGS84 `GEOGCS[...]` WKT builds a geographic CRS, same as the
+    /// EPSG:4326 path.
+    #[test]
+    fn build_from_wkt_geographic() {
+        let wkt = r#"GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]]"#;
+        let crs = Crs::from_wkt(wkt).unwrap();
+        assert!(crs.is_geographic());
+    }
+
+    /// Malformed WKT surfaces as `CrsError::Wkt`, and both error
+    /// variants render through `Display`.
+    #[test]
+    fn error_variants_display() {
+        let Err(wkt_err) = Crs::from_wkt("NOT WKT AT ALL") else {
+            panic!("malformed WKT accepted");
+        };
+        let msg = alloc::format!("{wkt_err}");
+        assert!(msg.starts_with("invalid WKT:"), "got: {msg}");
+
+        let Err(proj_err) = Crs::from_proj_string("+proj=definitely_not_a_projection") else {
+            panic!("bad proj string accepted");
+        };
+        let msg = alloc::format!("{proj_err}");
+        assert!(msg.starts_with("invalid CRS definition:"), "got: {msg}");
+    }
 }

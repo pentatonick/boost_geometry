@@ -112,4 +112,50 @@ mod tests {
         assert_eq!(outer_second_x, 4.0); // was (4.0, 0.0) before reversal
         assert_eq!(pg.interiors().count(), 1);
     }
+
+    /// `Reverse for MultiLinestring` maps `reverse` over every member;
+    /// member order itself is unchanged.
+    #[test]
+    fn reverse_multi_linestring_flips_each_member_in_place() {
+        let mut mls: geometry_model::MultiLinestring<geometry_model::Linestring<P>> =
+            geometry_model::MultiLinestring(alloc::vec![
+                linestring![(0.0, 0.0), (1.0, 0.0)],
+                linestring![(5.0, 0.0), (6.0, 0.0), (7.0, 0.0)],
+            ]);
+        reverse(&mut mls);
+        let member_xs: Vec<Vec<f64>> = mls
+            .0
+            .iter()
+            .map(|l| l.points().map(geometry_trait::Point::get::<0>).collect())
+            .collect();
+        // First member is still first (order preserved), each reversed.
+        assert_eq!(member_xs, vec![vec![1.0, 0.0], vec![7.0, 6.0, 5.0]]);
+    }
+
+    /// `Reverse for MultiPolygon` maps `reverse` over every member
+    /// polygon; member order itself is unchanged.
+    #[test]
+    fn reverse_multi_polygon_flips_each_member_in_place() {
+        let a: geometry_model::Polygon<P> =
+            polygon![[(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (0.0, 0.0)]];
+        let b: geometry_model::Polygon<P> =
+            polygon![[(10.0, 0.0), (10.0, 4.0), (14.0, 4.0), (10.0, 0.0)]];
+        let mut mpg: geometry_model::MultiPolygon<geometry_model::Polygon<P>> =
+            geometry_model::MultiPolygon(alloc::vec![a, b]);
+        reverse(&mut mpg);
+        // Member order preserved: first polygon still starts at x == 0.
+        let firsts: Vec<f64> = mpg
+            .0
+            .iter()
+            .map(|pg| pg.exterior().points().next().unwrap().get::<0>())
+            .collect();
+        assert_eq!(firsts, vec![0.0, 10.0]);
+        // Each member's second vertex is its old penultimate vertex.
+        let seconds: Vec<f64> = mpg
+            .0
+            .iter()
+            .map(|pg| pg.exterior().points().nth(1).unwrap().get::<0>())
+            .collect();
+        assert_eq!(seconds, vec![4.0, 14.0]);
+    }
 }

@@ -220,4 +220,5 @@ mod tests {
         let hull = MonotoneChain.convex_hull(&mp);
         assert_eq!(hull.points().count(), 2);
     }
+
 }

@@ -769,4 +769,202 @@ mod tests {
             unreachable!();
         }
     }
+
+    // ---- EMPTY forms for the remaining collection kinds --------------
+
+    /// `POLYGON EMPTY` yields a polygon with an empty exterior ring and
+    /// no holes.
+    #[test]
+    fn polygon_empty() {
+        let g = from_wkt("POLYGON EMPTY").unwrap();
+        if let DynGeometry::Polygon(p) = g {
+            assert_eq!(p.exterior().points().len(), 0);
+            assert_eq!(p.interiors().count(), 0);
+        } else {
+            unreachable!();
+        }
+    }
+
+    /// `MULTIPOINT EMPTY`, `MULTILINESTRING EMPTY`, and `MULTIPOLYGON
+    /// EMPTY` each yield an empty container of the matching kind.
+    #[test]
+    fn multi_kinds_empty() {
+        match from_wkt("MULTIPOINT EMPTY").unwrap() {
+            DynGeometry::MultiPoint(mp) => assert_eq!(mp.points().len(), 0),
+            _ => unreachable!(),
+        }
+        match from_wkt("MULTILINESTRING EMPTY").unwrap() {
+            DynGeometry::MultiLineString(mls) => assert_eq!(mls.linestrings().len(), 0),
+            _ => unreachable!(),
+        }
+        match from_wkt("MULTIPOLYGON EMPTY").unwrap() {
+            DynGeometry::MultiPolygon(mpg) => assert_eq!(mpg.polygons().len(), 0),
+            _ => unreachable!(),
+        }
+    }
+
+    // ---- Grammar error branches -------------------------------------
+
+    /// A body that opens with the wrong token fails
+    /// `expect_left_paren` with an `UnexpectedToken` naming `'('`.
+    #[test]
+    fn missing_left_paren_is_reported() {
+        let err = from_wkt("LINESTRING 10 10").unwrap_err();
+        assert!(
+            matches!(&err, WktError::UnexpectedToken { expected, .. } if *expected == "'('"),
+            "got {err:?}"
+        );
+    }
+
+    /// A coordinate list that never closes fails `expect_right_paren`
+    /// (the terminating token is `Eof`, not `)`).
+    #[test]
+    fn missing_right_paren_is_reported() {
+        let err = from_wkt("LINESTRING (10 10, 20 20").unwrap_err();
+        assert!(
+            matches!(&err, WktError::UnexpectedToken { expected, .. } if *expected == "')'"),
+            "got {err:?}"
+        );
+    }
+
+    /// A coordinate pair truncated after the first ordinate runs into
+    /// `Eof` where the second number is required → `UnexpectedEof`.
+    #[test]
+    fn missing_ordinate_hits_eof() {
+        let err = from_wkt("POINT (10").unwrap_err();
+        assert_eq!(err, WktError::UnexpectedEof);
+    }
+
+    /// A non-number where an ordinate is expected fails `expect_number`
+    /// with an `UnexpectedToken` naming `number`.
+    #[test]
+    fn non_number_ordinate_is_reported() {
+        // The second "ordinate" is a `)`, not a number.
+        let err = from_wkt("POINT (10 )").unwrap_err();
+        assert!(
+            matches!(&err, WktError::UnexpectedToken { expected, .. } if *expected == "number"),
+            "got {err:?}"
+        );
+    }
+
+    /// Trailing tokens after a complete geometry are rejected by the
+    /// end-of-input guard in `from_wkt`.
+    #[test]
+    fn trailing_tokens_are_rejected() {
+        let err = from_wkt("POINT (1 1) POINT (2 2)").unwrap_err();
+        assert!(
+            matches!(&err, WktError::UnexpectedToken { expected, .. } if *expected == "end of input"),
+            "got {err:?}"
+        );
+    }
+
+    /// Empty input reaches `parse_geometry` with an immediate `Eof`
+    /// keyword slot → `UnexpectedEof`.
+    #[test]
+    fn empty_input_is_unexpected_eof() {
+        assert_eq!(from_wkt("").unwrap_err(), WktError::UnexpectedEof);
+    }
+
+    /// A leading token that is neither an identifier nor `Eof` (here a
+    /// `(`) fails the keyword dispatch with `UnexpectedToken`.
+    #[test]
+    fn non_keyword_leading_token_is_reported() {
+        let err = from_wkt("(1 1)").unwrap_err();
+        assert!(
+            matches!(&err, WktError::UnexpectedToken { expected, .. }
+                if *expected == "geometry type keyword"),
+            "got {err:?}"
+        );
+    }
+
+    // ---- Typed-parse happy paths and per-kind mismatches -------------
+
+    /// Each typed parser returns its concrete kind on matching input.
+    #[test]
+    fn typed_parsers_accept_their_own_kind() {
+        assert_eq!(parse_point("POINT (1 2)").unwrap().get::<0>(), 1.0);
+        assert_eq!(
+            parse_linestring("LINESTRING (0 0, 1 1)").unwrap().points().len(),
+            2
+        );
+        assert_eq!(
+            parse_polygon("POLYGON ((0 0, 1 0, 1 1, 0 0))")
+                .unwrap()
+                .exterior()
+                .points()
+                .len(),
+            4
+        );
+        assert_eq!(
+            parse_multi_point("MULTIPOINT (0 0, 1 1)").unwrap().points().len(),
+            2
+        );
+        assert_eq!(
+            parse_multi_linestring("MULTILINESTRING ((0 0, 1 1))")
+                .unwrap()
+                .linestrings()
+                .len(),
+            1
+        );
+        assert_eq!(
+            parse_multi_polygon("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)))")
+                .unwrap()
+                .polygons()
+                .len(),
+            1
+        );
+    }
+
+    /// Each typed parser rejects a different-kind input with a
+    /// `TypeMismatch` whose `found` names the actual kind — exercising
+    /// every arm of `kind_name`.
+    #[test]
+    fn typed_parsers_reject_wrong_kind_naming_the_kind() {
+        let cases: &[(WktError, &str, &str)] = &[
+            (
+                parse_linestring("POINT (1 1)").unwrap_err(),
+                "LINESTRING",
+                "POINT",
+            ),
+            (
+                parse_polygon("LINESTRING (0 0, 1 1)").unwrap_err(),
+                "POLYGON",
+                "LINESTRING",
+            ),
+            (
+                parse_multi_point("POLYGON ((0 0, 1 0, 1 1, 0 0))").unwrap_err(),
+                "MULTIPOINT",
+                "POLYGON",
+            ),
+            (
+                parse_multi_linestring("MULTIPOINT (0 0, 1 1)").unwrap_err(),
+                "MULTILINESTRING",
+                "MULTIPOINT",
+            ),
+            (
+                parse_multi_polygon("MULTILINESTRING ((0 0, 1 1))").unwrap_err(),
+                "MULTIPOLYGON",
+                "MULTILINESTRING",
+            ),
+            (
+                parse_point("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)))").unwrap_err(),
+                "POINT",
+                "MULTIPOLYGON",
+            ),
+            (
+                parse_point("GEOMETRYCOLLECTION (POINT (1 1))").unwrap_err(),
+                "POINT",
+                "GEOMETRYCOLLECTION",
+            ),
+        ];
+        for (err, want_expected, want_found) in cases {
+            match err {
+                WktError::TypeMismatch { expected, found } => {
+                    assert_eq!(expected, want_expected);
+                    assert_eq!(found, want_found);
+                }
+                other => panic!("expected TypeMismatch, got {other:?}"),
+            }
+        }
+    }
 }

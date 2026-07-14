@@ -216,4 +216,57 @@ mod tests {
         assert_eq!(mp.0.len(), 1);
         assert_eq!(mp.0[0].get::<0>(), 1.);
     }
+
+    // convert.cpp — Ring → Polygon: the ring becomes a hole-free
+    // exterior, vertices copied verbatim.
+    #[test]
+    fn ring_to_polygon_becomes_hole_free_exterior() {
+        use geometry_model::Ring;
+        let ring: Ring<Pt> = Ring::from_vec(vec![
+            Pt::new(0., 0.),
+            Pt::new(1., 0.),
+            Pt::new(1., 1.),
+            Pt::new(0., 0.),
+        ]);
+        let pg: Polygon<Pt> = convert(&ring);
+        assert_eq!(pg.exterior().points().count(), 4);
+        assert_eq!(pg.interiors().count(), 0);
+        let first = pg.exterior().points().next().unwrap();
+        assert_eq!((first.get::<0>(), first.get::<1>()), (0., 0.));
+    }
+
+    // convert.cpp — Ring → Linestring copies the point sequence.
+    #[test]
+    fn ring_to_linestring_copies_points() {
+        use geometry_model::Ring;
+        let ring: Ring<Pt> = Ring::from_vec(vec![Pt::new(2., 3.), Pt::new(4., 5.), Pt::new(2., 3.)]);
+        let ls: Linestring<Pt> = convert(&ring);
+        assert_eq!(ls.0.len(), 3);
+        assert_eq!((ls.0[1].get::<0>(), ls.0[1].get::<1>()), (4., 5.));
+    }
+
+    // convert.cpp — Linestring → MultiLinestring wraps a single member.
+    #[test]
+    fn linestring_to_multi_linestring_single_member() {
+        use geometry_model::MultiLinestring;
+        let ls: Linestring<Pt> = Linestring(vec![Pt::new(0., 0.), Pt::new(1., 1.)]);
+        let mls: MultiLinestring<Linestring<Pt>> = convert(&ls);
+        assert_eq!(mls.0.len(), 1);
+        assert_eq!(mls.0[0].0.len(), 2);
+    }
+
+    // convert.cpp — Polygon → MultiPolygon wraps a single member.
+    #[test]
+    fn polygon_to_multi_polygon_single_member() {
+        use geometry_model::{MultiPolygon, Ring};
+        let pg: Polygon<Pt> = Polygon::new(Ring::from_vec(vec![
+            Pt::new(0., 0.),
+            Pt::new(1., 0.),
+            Pt::new(1., 1.),
+            Pt::new(0., 0.),
+        ]));
+        let mpg: MultiPolygon<Polygon<Pt>> = convert(&pg);
+        assert_eq!(mpg.0.len(), 1);
+        assert_eq!(mpg.0[0].exterior().points().count(), 4);
+    }
 }

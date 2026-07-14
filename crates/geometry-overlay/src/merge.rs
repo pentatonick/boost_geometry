@@ -182,6 +182,39 @@ mod tests {
         assert_eq!(merged.polygons().count(), 0);
     }
 
+    /// A single-element input has no pairs to test — it comes back
+    /// unchanged.
+    #[test]
+    fn single_element_returned_unchanged() {
+        let a = square(0.0, 0.0, 2.0);
+        let merged = merge_polygons(vec![a]).unwrap();
+        assert_eq!(merged.polygons().count(), 1);
+        assert!(close(total_area(&merged), 4.0));
+    }
+
+    /// Two squares sharing only one vertex must not fuse.
+    #[test]
+    fn vertex_only_touch_does_not_fuse() {
+        let a = square(0.0, 0.0, 2.0);
+        let b = square(2.0, 2.0, 2.0); // shares only the corner (2,2)
+        let merged = merge_polygons(vec![a, b]).unwrap();
+        assert_eq!(merged.polygons().count(), 2);
+        assert!(close(total_area(&merged), 8.0));
+    }
+
+    /// The `merge_multipolygon` wrapper merges its members like
+    /// `merge_polygons` does.
+    #[test]
+    fn multipolygon_wrapper_merges_members() {
+        let mp = MultiPolygon(vec![
+            square(0.0, 0.0, 2.0),
+            square(1.0, 1.0, 2.0), // overlaps the first
+            square(9.0, 9.0, 1.0), // disjoint
+        ]);
+        let merged = super::merge_multipolygon(mp).unwrap();
+        assert_eq!(merged.polygons().count(), 2);
+    }
+
     #[test]
     fn touching_only_pair_does_not_abort_the_merge() {
         // Regression: `overlaps` returns `Err(Unsupported)` for an

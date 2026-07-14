@@ -184,6 +184,100 @@ mod tests {
         assert_eq!(ls.points().count(), 3);
     }
 
+    /// A cascading spike: removing the inner tip exposes a second spike
+    /// at the now-adjacent pair, which the non-advancing backtrack
+    /// (`i -= 1`) then also removes. All overshoots collapse to the base
+    /// monotone run.
+    #[test]
+    fn cascading_spikes_all_collapse() {
+        // (0,0) → (2,0) → (5,0) → (3,0) → (1,0): both (5,0) and the
+        // resulting reversed vertices are collinear overshoots along the
+        // x-axis. After the walk only a monotone sequence survives.
+        let mut ls: geometry_model::Linestring<P> =
+            linestring![(0.0, 0.0), (2.0, 0.0), (5.0, 0.0), (3.0, 0.0), (1.0, 0.0)];
+        remove_spikes(&mut ls);
+        let xs: Vec<f64> = ls.points().map(geometry_trait::Point::get::<0>).collect();
+        // The sequence is strictly monotone (no reversal remains): each
+        // step moves in one direction only.
+        for w in xs.windows(3) {
+            let d1 = w[1] - w[0];
+            let d2 = w[2] - w[1];
+            assert!(d1 * d2 >= 0.0, "residual reversal in {xs:?}");
+        }
+    }
+
+    /// A `Polygon` removes spikes from its exterior *and* every interior
+    /// ring.
+    #[test]
+    fn polygon_removes_spikes_in_outer_and_holes() {
+        use geometry_model::{Polygon, Ring};
+        use geometry_trait::{Point as _, Polygon as _, Ring as _};
+        // Outer square with a spur vertex (5,0) on the bottom edge.
+        let outer = Ring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(4.0, 0.0),
+            P::new(5.0, 0.0), // reversed-collinear overshoot then back
+            P::new(4.0, 0.0),
+            P::new(4.0, 4.0),
+            P::new(0.0, 4.0),
+            P::new(0.0, 0.0),
+        ]);
+        // Hole with its own spur.
+        let hole = Ring::from_vec(vec![
+            P::new(1.0, 1.0),
+            P::new(2.0, 1.0),
+            P::new(3.0, 1.0), // overshoot
+            P::new(2.0, 1.0),
+            P::new(2.0, 2.0),
+            P::new(1.0, 1.0),
+        ]);
+        let mut pg: Polygon<P> = Polygon::with_inners(outer, vec![hole]);
+        remove_spikes(&mut pg);
+        // The (5,0) and (3,1) overshoot vertices are gone.
+        let ext: Vec<(f64, f64)> = pg
+            .exterior()
+            .points()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert!(!ext.contains(&(5.0, 0.0)), "outer spike survived: {ext:?}");
+        let hole_pts: Vec<(f64, f64)> = pg
+            .interiors()
+            .next()
+            .unwrap()
+            .points()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert!(!hole_pts.contains(&(3.0, 1.0)), "hole spike survived");
+    }
+
+    /// A `MultiPolygon` removes spikes from each member polygon.
+    #[test]
+    fn multipolygon_removes_spikes_from_each_member() {
+        use geometry_model::{MultiPolygon, Polygon, Ring};
+        use geometry_trait::{Point as _, Polygon as _, Ring as _};
+        let spiky = || {
+            Polygon::<P>::new(Ring::from_vec(vec![
+                P::new(0.0, 0.0),
+                P::new(4.0, 0.0),
+                P::new(5.0, 0.0),
+                P::new(4.0, 0.0),
+                P::new(4.0, 4.0),
+                P::new(0.0, 4.0),
+                P::new(0.0, 0.0),
+            ]))
+        };
+        let mut mpg: MultiPolygon<Polygon<P>> = MultiPolygon(vec![spiky(), spiky()]);
+        remove_spikes(&mut mpg);
+        for pg in &mpg.0 {
+            let pts: Vec<(f64, f64)> = pg
+                .exterior()
+                .points()
+                .map(|p| (p.get::<0>(), p.get::<1>()))
+                .collect();
+            assert!(!pts.contains(&(5.0, 0.0)), "member spike survived");
+        }
+    }
+
     #[test]
     fn ring_seam_spike_is_removed() {
         // A closed ring whose FIRST vertex is a reversed-collinear spike

@@ -36,6 +36,37 @@ fn distance_dyn_point_linestring_is_min_over_segments() {
 }
 
 #[test]
+fn distance_dyn_point_linestring_keeps_earlier_closer_segment() {
+    // Point at (0,1); first segment passes at distance 1, the later
+    // segments are strictly farther — the running minimum must be kept
+    // (the `Some(m) if m <= d` arm).
+    let p = DynGeometry::<S, Cartesian>::Point(Pt::new(0.0, 1.0));
+    let ls = DynGeometry::<S, Cartesian>::LineString(linestring![
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (10.0, -50.0),
+        (20.0, -50.0)
+    ]);
+    assert_eq!(distance_dyn(&p, &ls).unwrap(), 1.0);
+}
+
+#[test]
+fn distance_dyn_point_to_single_vertex_linestring() {
+    // One vertex → treated as a zero-length segment: distance is the
+    // point-to-vertex distance.
+    let p = DynGeometry::<S, Cartesian>::Point(Pt::new(3.0, 4.0));
+    let ls = DynGeometry::<S, Cartesian>::LineString(linestring![(0.0, 0.0)]);
+    assert_eq!(distance_dyn(&p, &ls).unwrap(), 5.0);
+}
+
+#[test]
+fn distance_dyn_point_to_empty_linestring_is_zero() {
+    let p = DynGeometry::<S, Cartesian>::Point(Pt::new(3.0, 4.0));
+    let ls = DynGeometry::<S, Cartesian>::LineString(linestring![]);
+    assert_eq!(distance_dyn(&p, &ls).unwrap(), 0.0);
+}
+
+#[test]
 fn distance_dyn_unsupported_pair_returns_mismatch() {
     let a = DynGeometry::<S, Cartesian>::Polygon(polygon![[
         (0.0, 0.0),
@@ -67,6 +98,15 @@ fn length_dyn_point_is_zero() {
     // KC4.T1: length of a non-linear kind is 0 (Boost length.hpp:75-80).
     let p = DynGeometry::<S, Cartesian>::Point(Pt::new(1.0, 2.0));
     assert_eq!(length_dyn(&p), 0.0);
+}
+
+#[test]
+fn length_dyn_multi_linestring_sums_members() {
+    let mls = DynGeometry::<S, Cartesian>::MultiLineString(geometry_model::MultiLinestring(vec![
+        linestring![(0.0, 0.0), (3.0, 4.0)], // 5
+        linestring![(0.0, 0.0), (0.0, 2.0)], // 2
+    ]));
+    assert_eq!(length_dyn(&mls), 7.0);
 }
 
 #[test]

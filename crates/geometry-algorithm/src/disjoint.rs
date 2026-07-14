@@ -99,6 +99,25 @@ mod tests {
         assert!(intersects(&a, &b));
     }
 
+    /// Polygon–polygon disjointness: separated squares are disjoint,
+    /// overlapping ones are not.
+    #[test]
+    fn polygon_pair_disjointness() {
+        use geometry_model::{Polygon, polygon};
+        let a: Polygon<P> = polygon![[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)]];
+        let apart: Polygon<P> = polygon![[
+            (10.0, 10.0),
+            (14.0, 10.0),
+            (14.0, 14.0),
+            (10.0, 14.0),
+            (10.0, 10.0)
+        ]];
+        let overlapping: Polygon<P> =
+            polygon![[(2.0, 2.0), (6.0, 2.0), (6.0, 6.0), (2.0, 6.0), (2.0, 2.0)]];
+        assert!(disjoint(&a, &apart));
+        assert!(!disjoint(&a, &overlapping));
+    }
+
     #[test]
     fn box_box_fast_path() {
         use crate::disjoint::disjoint_box_box;

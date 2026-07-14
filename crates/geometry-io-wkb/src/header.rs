@@ -244,4 +244,48 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, WkbError::UnexpectedEof);
     }
+
+    /// Every `WkbError` variant renders a distinct, descriptive message
+    /// through its `Display` impl, including the embedded byte/type/code
+    /// values.
+    #[test]
+    fn every_error_variant_displays_descriptively() {
+        extern crate alloc;
+        use alloc::format;
+
+        assert_eq!(
+            format!("{}", WkbError::UnexpectedEof),
+            "unexpected end of WKB input"
+        );
+        assert_eq!(
+            format!("{}", WkbError::InvalidByteOrder(0x02)),
+            "invalid byte-order flag 0x02 (expected 0x00 or 0x01)"
+        );
+        assert_eq!(
+            format!("{}", WkbError::UnknownGeometryType(9)),
+            "unknown WKB geometry type 9"
+        );
+        assert!(
+            format!("{}", WkbError::UnsupportedDimension).contains("2D only"),
+            "dimension message"
+        );
+        assert_eq!(
+            format!("{}", WkbError::TrailingBytes),
+            "trailing bytes after WKB geometry"
+        );
+        assert!(
+            format!("{}", WkbError::NestingTooDeep).contains("nesting too deep"),
+            "nesting message"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                WkbError::MismatchedMemberType {
+                    expected: 1,
+                    found: 2
+                }
+            ),
+            "WKB multi-geometry member has type 2, expected 1"
+        );
+    }
 }

@@ -232,4 +232,38 @@ mod tests {
         let expected = (-45.187_718_848_049_521_f64).to_radians();
         assert!((got - expected).abs() < 1e-9, "got {got}");
     }
+
+    /// The clamp branches of `normalize_azimuth`
+    /// (`andoyer_inverse.hpp:246-286`): the flattening correction must
+    /// not push an azimuth past 0 / ±π on the side it started.
+    #[test]
+    fn normalize_azimuth_clamps_all_four_quadrants() {
+        use super::normalize_azimuth;
+        let pi = core::f64::consts::PI;
+
+        // A ≥ 0, dA ≥ 0: an azimuth pushed below 0 clamps to 0.
+        let mut az = -0.1;
+        normalize_azimuth(&mut az, 0.05, 0.15);
+        assert_eq!(az, 0.0);
+
+        // A ≥ 0, dA < 0: an azimuth pushed above π clamps to π.
+        let mut az = pi + 0.1;
+        normalize_azimuth(&mut az, pi - 0.05, -0.15);
+        assert_eq!(az, pi);
+
+        // A < 0, dA ≤ 0: an azimuth pushed above 0 clamps to 0.
+        let mut az = 0.1;
+        normalize_azimuth(&mut az, -0.05, -0.15);
+        assert_eq!(az, 0.0);
+
+        // A < 0, dA > 0: an azimuth pushed below −π clamps to −π.
+        let mut az = -pi - 0.1;
+        normalize_azimuth(&mut az, -pi + 0.05, 0.15);
+        assert_eq!(az, -pi);
+
+        // In-range azimuths pass through untouched.
+        let mut az = 0.5;
+        normalize_azimuth(&mut az, 0.4, -0.1);
+        assert_eq!(az, 0.5);
+    }
 }

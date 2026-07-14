@@ -444,66 +444,6 @@ mod tests {
     }
 
     #[test]
-    fn records_iterator_shape() {
-        for (distribution, points) in [("uniform", uniform(N)), ("clustered", clustered(N))] {
-            let tree: Rtree<(Bounds, u32), AsymmetricRStarSplit<8, 3, 32, 9>> = points
-                .into_iter()
-                .enumerate()
-                .map(|(i, point)| (Bounds::point(point), u32::try_from(i).expect("N fits u32")))
-                .collect();
-
-            let mut boost_pushes = 0;
-            let mut boost_pops = 0;
-            let mut boost_branches = 0;
-            let mut boost_leaves = 0;
-            let mut boost_node_pushes = 0;
-            let mut boost_value_pushes = 0;
-            let mut boost_node_pops = 0;
-            let mut boost_value_pops = 0;
-            let mut boost_contributing_leaves = 0;
-            let mut boost_max_yields_per_leaf = 0;
-            let mut boost_leaf_yield_histogram = [0usize; K + 1];
-            let mut boost_leaf_expansions_per_query = Vec::with_capacity(Q);
-            let mut boost_node_high_water = 0;
-            let mut boost_value_high_water = 0;
-            for query in queries(Q) {
-                let mut nearest = tree.nearest_iter(query);
-                assert_eq!(nearest.by_ref().take(K).count(), K);
-                let metrics = nearest.metrics();
-                boost_pushes += metrics.frontier.pushes;
-                boost_pops += metrics.frontier.pops;
-                boost_branches += metrics.branch_expansions;
-                boost_leaves += metrics.leaf_expansions;
-                boost_node_pushes += metrics.node_pushes;
-                boost_value_pushes += metrics.value_pushes;
-                boost_node_pops += metrics.node_pops;
-                boost_value_pops += metrics.value_pops;
-                boost_contributing_leaves += metrics.contributing_leaves;
-                boost_max_yields_per_leaf =
-                    boost_max_yields_per_leaf.max(metrics.max_yields_per_leaf);
-                boost_leaf_expansions_per_query.push(metrics.leaf_expansions);
-                for &yielded in nearest.yielded_by_leaf() {
-                    boost_leaf_yield_histogram[yielded] += 1;
-                }
-                boost_node_high_water = boost_node_high_water.max(metrics.node_high_water);
-                boost_value_high_water = boost_value_high_water.max(metrics.value_high_water);
-            }
-
-            boost_leaf_expansions_per_query.sort_unstable();
-            eprintln!(
-                "[rtree-leaf-release] distribution={distribution} expected_yields={} observed_value_pushes={boost_value_pushes} observed_value_pops={boost_value_pops} observed_leaf_expansions={boost_leaves} observed_leaf_expansions_p50={} observed_leaf_expansions_p95={} observed_leaf_expansions_max={} observed_contributing_leaves={boost_contributing_leaves} observed_max_yields_per_leaf={boost_max_yields_per_leaf} observed_leaf_yield_histogram={boost_leaf_yield_histogram:?}",
-                Q * K,
-                boost_leaf_expansions_per_query[Q / 2],
-                boost_leaf_expansions_per_query[Q * 95 / 100],
-                boost_leaf_expansions_per_query[Q - 1],
-            );
-            eprintln!(
-                "[rtree-iterator-shape] distribution={distribution} pushes={boost_pushes} pops={boost_pops} branches={boost_branches} leaves={boost_leaves} node_pushes={boost_node_pushes} value_pushes={boost_value_pushes} node_pops={boost_node_pops} value_pops={boost_value_pops} node_high_water={boost_node_high_water} value_high_water={boost_value_high_water}"
-            );
-        }
-    }
-
-    #[test]
     fn records_split_frontier_capacity_distribution() {
         for (distribution, points) in [("uniform", uniform(N)), ("clustered", clustered(N))] {
             let tree: Rtree<(Bounds, u32), AsymmetricRStarSplit<8, 3, 32, 9>> = points

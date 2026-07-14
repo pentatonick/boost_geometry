@@ -329,4 +329,12 @@ mod tests {
         let expected = core::f64::consts::FRAC_PI_2;
         assert!((got - expected).abs() / expected < 1e-6, "got {got}");
     }
+
+    /// Both strategies default to the mean-Earth radius.
+    #[test]
+    fn defaults_are_mean_earth_radius() {
+        assert_eq!(SphericalArea::default().radius, 6_371_000.0);
+        assert_eq!(SphericalPolygonArea::default().radius, 6_371_000.0);
+    }
+
 }

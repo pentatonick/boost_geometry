@@ -152,6 +152,29 @@ mod tests {
         assert_eq!(num_interior_rings(&pg), 2);
     }
 
+    /// Every non-polygon kind reports zero interior rings by convention.
+    #[test]
+    fn non_polygon_kinds_have_zero() {
+        use geometry_model::{Box, MultiLinestring, MultiPoint, Ring, Segment};
+        let ring: Ring<Pt> =
+            Ring::from_vec(vec![Pt::new(0.0, 0.0), Pt::new(1.0, 0.0), Pt::new(0.0, 0.0)]);
+        assert_eq!(num_interior_rings(&ring), 0);
+        assert_eq!(
+            num_interior_rings(&Segment::new(Pt::new(0.0, 0.0), Pt::new(1.0, 1.0))),
+            0
+        );
+        assert_eq!(
+            num_interior_rings(&Box::from_corners(Pt::new(0.0, 0.0), Pt::new(1.0, 1.0))),
+            0
+        );
+        assert_eq!(
+            num_interior_rings(&MultiPoint(vec![Pt::new(0.0, 0.0)])),
+            0
+        );
+        let mls: MultiLinestring<Ls> = MultiLinestring(vec![linestring![(0.0, 0.0), (1.0, 1.0)]]);
+        assert_eq!(num_interior_rings(&mls), 0);
+    }
+
     /// `num_interior_rings.cpp:121` —
     /// `MULTIPOLYGON(<1 hole>,<0 holes>)` → 1 (sum over members).
     #[test]

@@ -360,4 +360,52 @@ mod tests {
         let err = tokenize("1.2.3").unwrap_err();
         assert_eq!(err, WktError::InvalidNumber("1.2.3".into()));
     }
+
+    /// Every `WktError` variant renders a distinct message through its
+    /// `Display` impl, embedding its payload.
+    #[test]
+    fn every_error_variant_displays_descriptively() {
+        use alloc::format;
+
+        assert_eq!(
+            format!("{}", WktError::UnexpectedChar { pos: 9, ch: '@' }),
+            "unexpected character '@' at byte 9"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                WktError::UnexpectedToken {
+                    expected: "'('",
+                    found: "Comma".into()
+                }
+            ),
+            "expected '(', found Comma"
+        );
+        assert_eq!(
+            format!("{}", WktError::UnexpectedEof),
+            "unexpected end of input"
+        );
+        assert_eq!(
+            format!("{}", WktError::InvalidNumber("1.2.3".into())),
+            "invalid number \"1.2.3\""
+        );
+        assert_eq!(
+            format!("{}", WktError::UnknownGeometryType("TRIANGLE".into())),
+            "unknown geometry type \"TRIANGLE\""
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                WktError::TypeMismatch {
+                    expected: "POINT",
+                    found: "LINESTRING"
+                }
+            ),
+            "type mismatch: expected POINT, found LINESTRING"
+        );
+        assert!(
+            format!("{}", WktError::NestingTooDeep).contains("nesting too deep"),
+            "nesting message"
+        );
+    }
 }

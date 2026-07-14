@@ -1412,6 +1412,36 @@ mod tests {
         assert_eq!(t.len(), 0);
     }
 
+    /// `Default` builds the same empty tree as `new()`.
+    #[test]
+    fn default_tree_is_empty() {
+        let t: Rtree<P> = Rtree::default();
+        assert!(t.is_empty());
+        assert_eq!(t.len(), 0);
+    }
+
+    /// `FrontierNode` equality is keyed on the distance (total order),
+    /// not on the node identity.
+    #[test]
+    fn frontier_node_eq_compares_distance() {
+        let mut t: Rtree<P> = Rtree::new();
+        t.insert(P::new(0.0, 0.0));
+        let a = FrontierNode {
+            dist: 1.5,
+            node: &t.root,
+        };
+        let b = FrontierNode {
+            dist: 1.5,
+            node: &t.root,
+        };
+        let c = FrontierNode {
+            dist: 2.5,
+            node: &t.root,
+        };
+        assert!(a == b);
+        assert!(a != c);
+    }
+
     #[test]
     fn insert_many_points_keeps_len() {
         let mut t: Rtree<P> = Rtree::new();
