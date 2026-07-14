@@ -107,6 +107,7 @@ pub mod buffer;
 pub mod cartesian;
 pub mod centroid;
 pub mod closest_points;
+pub mod compare;
 pub mod convex_hull;
 pub mod densify;
 pub mod disjoint;
@@ -141,6 +142,7 @@ pub use centroid::{
     CentroidStrategyForKind,
 };
 pub use closest_points::{CartesianClosestPoints, ClosestPointsStrategy};
+pub use compare::{ALL_DIMENSIONS, EqualTo, Greater, Less, LessExact};
 pub use convex_hull::{ConvexHullStrategy, MonotoneChain};
 pub use densify::{CartesianDensify, DensifyStrategy};
 pub use disjoint::{CartesianDisjoint, DisjointStrategy};
