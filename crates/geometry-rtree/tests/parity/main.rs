@@ -7,15 +7,12 @@ use fixture::{
 use geometry_rtree::{
     AsymmetricQuadratic, AsymmetricRStarSplit, Bounds, Predicate, Quadratic, Rtree, SplitParameters,
 };
-use rstar::primitives::GeomWithData;
-use rstar::{AABB, RTree};
 
 const K: usize = 8;
 const HALF: f64 = 500.0;
 const QUERY_COUNT: usize = 20;
 
 type BoostTree<P = Quadratic> = Rtree<(Bounds, u32), P>;
-type RstarTree = RTree<GeomWithData<[f64; 2], u32>>;
 
 fn families() -> [Vec<[f64; 2]>; 3] {
     [uniform(5_000), clustered(5_000), duplicates(4_000)]
@@ -29,27 +26,10 @@ fn boost_tree<P: SplitParameters>(points: &[[f64; 2]]) -> BoostTree<P> {
         .collect()
 }
 
-fn rstar_tree(points: &[[f64; 2]]) -> RstarTree {
-    RTree::bulk_load(
-        points
-            .iter()
-            .enumerate()
-            .map(|(i, &p)| GeomWithData::new(p, u32::try_from(i).expect("fits u32")))
-            .collect(),
-    )
-}
-
 fn boost_knn_distances<P: SplitParameters>(tree: &BoostTree<P>, q: [f64; 2], k: usize) -> Vec<f64> {
     tree.nearest(q, k)
         .iter()
         .map(|(b, _)| squared_distance(b.min, q))
-        .collect()
-}
-
-fn rstar_knn_distances(tree: &RstarTree, q: [f64; 2], k: usize) -> Vec<f64> {
-    tree.nearest_neighbor_iter(&q)
-        .take(k)
-        .map(|v| squared_distance(*v.geom(), q))
         .collect()
 }
 
@@ -62,15 +42,6 @@ fn boost_range_ids<P: SplitParameters>(
         .query(Predicate::Intersects(Bounds::new(min, max)))
         .iter()
         .map(|(_, id)| *id)
-        .collect();
-    ids.sort_unstable();
-    ids
-}
-
-fn rstar_range_ids(tree: &RstarTree, min: [f64; 2], max: [f64; 2]) -> Vec<u32> {
-    let mut ids: Vec<u32> = tree
-        .locate_in_envelope(&AABB::from_corners(min, max))
-        .map(|v| v.data)
         .collect();
     ids.sort_unstable();
     ids
@@ -124,21 +95,6 @@ fn boost_knn_matches_scan_rstar_split_branch8_leaf32() {
     knn_parity_case::<AsymmetricRStarSplit<8, 3, 32, 9>>();
 }
 
-#[test]
-#[allow(clippy::float_cmp, reason = "R2 mandates exact f64 sequence equality")]
-fn rstar_knn_matches_scan() {
-    for points in families() {
-        let tree = rstar_tree(&points);
-        for q in queries(QUERY_COUNT) {
-            assert_eq!(
-                rstar_knn_distances(&tree, q, K),
-                knn_scan(&points, q, K),
-                "rstar knn diverges from scan oracle at query {q:?}"
-            );
-        }
-    }
-}
-
 fn range_parity_case<P: SplitParameters>() {
     for points in families() {
         let tree = boost_tree::<P>(&points);
@@ -181,21 +137,6 @@ fn boost_range_matches_scan_branch8_leaf32() {
 #[test]
 fn boost_range_matches_scan_rstar_split_branch8_leaf32() {
     range_parity_case::<AsymmetricRStarSplit<8, 3, 32, 9>>();
-}
-
-#[test]
-fn rstar_range_matches_scan() {
-    for points in families() {
-        let tree = rstar_tree(&points);
-        for q in queries(QUERY_COUNT) {
-            let (min, max) = window(q);
-            assert_eq!(
-                rstar_range_ids(&tree, min, max),
-                range_scan(&points, min, max),
-                "rstar range diverges from scan oracle at query {q:?}"
-            );
-        }
-    }
 }
 
 fn adversarial_families() -> [Vec<[f64; 2]>; 4] {
@@ -499,7 +440,6 @@ fn knn_k_zero_returns_nothing() {
     let q = queries(1)[0];
     assert!(knn_scan(&points, q, 0).is_empty());
     assert!(boost_knn_distances(&boost_tree::<Quadratic>(&points), q, 0).is_empty());
-    assert!(rstar_knn_distances(&rstar_tree(&points), q, 0).is_empty());
 }
 
 #[test]
@@ -513,7 +453,6 @@ fn knn_k_beyond_len_returns_all_ascending() {
         boost_knn_distances(&boost_tree::<Quadratic>(&points), q, 100),
         oracle
     );
-    assert_eq!(rstar_knn_distances(&rstar_tree(&points), q, 100), oracle);
 }
 
 #[test]
@@ -527,7 +466,6 @@ fn knn_k_equals_len_returns_all_ascending() {
         boost_knn_distances(&boost_tree::<Quadratic>(&points), q, 64),
         oracle
     );
-    assert_eq!(rstar_knn_distances(&rstar_tree(&points), q, 64), oracle);
 }
 
 #[test]
@@ -541,20 +479,16 @@ fn knn_query_coincident_with_a_stored_point() {
         boost_knn_distances(&boost_tree::<Quadratic>(&points), q, K),
         oracle
     );
-    assert_eq!(rstar_knn_distances(&rstar_tree(&points), q, K), oracle);
 }
 
 #[test]
 fn empty_tree_returns_nothing() {
     let points: Vec<[f64; 2]> = Vec::new();
     let boost = boost_tree::<Quadratic>(&points);
-    let rstar = rstar_tree(&points);
     let q = queries(1)[0];
     let (min, max) = window(q);
     assert!(boost_knn_distances(&boost, q, K).is_empty());
-    assert!(rstar_knn_distances(&rstar, q, K).is_empty());
     assert!(boost_range_ids(&boost, min, max).is_empty());
-    assert!(rstar_range_ids(&rstar, min, max).is_empty());
 }
 
 #[test]
@@ -568,14 +502,12 @@ fn window_covering_the_field_returns_every_id() {
         boost_range_ids(&boost_tree::<Quadratic>(&points), min, max),
         all
     );
-    assert_eq!(rstar_range_ids(&rstar_tree(&points), min, max), all);
 }
 
 #[test]
 fn window_boundary_touch_is_inclusive() {
     let points = vec![[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]];
     let boost = boost_tree::<Quadratic>(&points);
-    let rstar = rstar_tree(&points);
     for (min, max, expected) in [
         ([0.0, 0.0], [1.0, 1.0], vec![0u32, 1]),
         ([1.0, 1.0], [3.0, 3.0], vec![1, 2]),
@@ -583,6 +515,5 @@ fn window_boundary_touch_is_inclusive() {
     ] {
         assert_eq!(range_scan(&points, min, max), expected);
         assert_eq!(boost_range_ids(&boost, min, max), expected);
-        assert_eq!(rstar_range_ids(&rstar, min, max), expected);
     }
 }
