@@ -1,6 +1,6 @@
 [package]
 name = "geometry-adapt"
-version                = "0.0.6"
+version                = "0.0.7"
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
@@ -23,10 +23,10 @@ libm = [
 ]
 
 [dependencies]
-geometry-tag    = { version = "0.0.6", path = "../geometry-tag" }
-geometry-coords = { version = "0.0.6", path = "../geometry-coords", default-features = false }
-geometry-cs     = { version = "0.0.6", path = "../geometry-cs",     default-features = false }
-geometry-trait  = { version = "0.0.6", path = "../geometry-trait",  default-features = false }
+geometry-tag    = { version = "0.0.7", path = "../geometry-tag" }
+geometry-coords = { version = "0.0.7", path = "../geometry-coords", default-features = false }
+geometry-cs     = { version = "0.0.7", path = "../geometry-cs",     default-features = false }
+geometry-trait  = { version = "0.0.7", path = "../geometry-trait",  default-features = false }
 
 [dev-dependencies]
 geometry-algorithm = { path = "../geometry-algorithm" }

@@ -1,6 +1,6 @@
 [package]
 name = "geometry-cs"
-version                = "0.0.6"
+version                = "0.0.7"
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
@@ -11,7 +11,7 @@ description = "Coordinate system types: Cartesian, Spherical, Geographic, and an
 readme = "README.md"
 
 [dependencies]
-geometry-coords = { version = "0.0.6", path = "../geometry-coords", default-features = false }
+geometry-coords = { version = "0.0.7", path = "../geometry-coords", default-features = false }
 
 [features]
 default = ["std"]

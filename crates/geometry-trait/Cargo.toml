@@ -1,6 +1,6 @@
 [package]
 name = "geometry-trait"
-version                = "0.0.6"
+version                = "0.0.7"
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
@@ -16,9 +16,9 @@ std = ["geometry-coords/std", "geometry-cs/std"]
 libm = ["geometry-coords/libm"]
 
 [dependencies]
-geometry-tag    = { version = "0.0.6", path = "../geometry-tag" }
-geometry-coords = { version = "0.0.6", path = "../geometry-coords", default-features = false }
-geometry-cs     = { version = "0.0.6", path = "../geometry-cs",     default-features = false }
+geometry-tag    = { version = "0.0.7", path = "../geometry-tag" }
+geometry-coords = { version = "0.0.7", path = "../geometry-coords", default-features = false }
+geometry-cs     = { version = "0.0.7", path = "../geometry-cs",     default-features = false }
 
 [dev-dependencies]
 trybuild        = "1"

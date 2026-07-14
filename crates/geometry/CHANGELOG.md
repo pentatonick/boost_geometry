@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/pentatonick/boost_geometry/compare/v0.0.6...v0.0.7) - 2026-07-14
+
+### Fixed
+
+- drop redundant license-file key from crate manifests
+
+### Other
+
+- reorder README badges (CI, Publish, Docs, Coverage, Crates, MSRV, License)
+
 ## [0.0.6](https://github.com/pentatonick/boost_geometry/compare/v0.0.5...v0.0.6) - 2026-07-13
 
 ### Other
