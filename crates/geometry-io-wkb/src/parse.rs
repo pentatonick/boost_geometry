@@ -105,10 +105,8 @@ fn base_type_code(tag: u32) -> Result<u32, WkbError> {
 /// inside a `MultiPoint` inside a `GeometryCollection`).
 const MAX_DEPTH: usize = 128;
 
-/// Smallest number of bytes a single point body occupies: two `f64`
-/// ordinates. A `numPoints`/`numRings`-style count cannot describe more
-/// points than `remaining / 16`, so a run's capacity is clamped to that.
-const MIN_POINT_BYTES: usize = 16;
+/// Bytes in one 2D point body: two `f64` ordinates.
+const POINT_BYTES: usize = 16;
 
 /// Smallest number of bytes a nested WKB record occupies: a one-byte
 /// byte-order flag plus a 4-byte type tag (§8.2.3–8.2.4). A multi /
@@ -152,10 +150,24 @@ impl<'a> Parser<'a> {
     /// Read a `uint32` count followed by that many point bodies.
     /// Used by `LineString` and by each ring of a `Polygon`.
     fn read_point_run(&mut self, order: ByteOrder) -> Result<Vec<Pt>, WkbError> {
-        let n = self.cursor.read_u32(order)?;
-        let mut pts = reserve_bounded(n, self.cursor.remaining(), MIN_POINT_BYTES);
-        for _ in 0..n {
-            pts.push(self.read_point(order)?);
+        let n = self.cursor.read_u32(order)? as usize;
+        let byte_len = n.checked_mul(POINT_BYTES).ok_or(WkbError::UnexpectedEof)?;
+        let bytes = self.cursor.read_slice(byte_len)?;
+        let mut pts = Vec::with_capacity(n);
+        for point in bytes.chunks_exact(POINT_BYTES) {
+            let x_bytes: [u8; 8] = point[..8]
+                .try_into()
+                .expect("a point chunk contains its x ordinate");
+            let y_bytes: [u8; 8] = point[8..]
+                .try_into()
+                .expect("a point chunk contains its y ordinate");
+            let (x, y) = match order {
+                ByteOrder::LittleEndian => {
+                    (f64::from_le_bytes(x_bytes), f64::from_le_bytes(y_bytes))
+                }
+                ByteOrder::BigEndian => (f64::from_be_bytes(x_bytes), f64::from_be_bytes(y_bytes)),
+            };
+            pts.push(Point2D::new(x, y));
         }
         Ok(pts)
     }
@@ -521,5 +533,124 @@ mod tests {
                 found: 2
             }
         );
+    }
+
+    // ---- Building blocks for nested records --------------------------
+
+    /// A little-endian `Point(1, 2)` WKB record (21 bytes).
+    fn le_point_record() -> Vec<u8> {
+        let mut b = vec![0x01, 0x01, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&F1);
+        b.extend_from_slice(&F2);
+        b
+    }
+
+    /// A little-endian empty `LineString` WKB record.
+    fn le_empty_linestring_record() -> Vec<u8> {
+        vec![0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    }
+
+    /// A little-endian empty `Polygon` WKB record (zero rings).
+    fn le_empty_polygon_record() -> Vec<u8> {
+        vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    }
+
+    /// A valid `MultiPoint` of two members parses to a two-point
+    /// multipoint (the happy `pts.push` arm).
+    #[test]
+    fn le_multipoint_two_members() {
+        let mut b = vec![0x01, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_point_record());
+        b.extend_from_slice(&le_point_record());
+        let g = from_wkb(&b).unwrap();
+        assert_eq!(g.kind(), DynKind::MultiPoint);
+        let DynGeometry::MultiPoint(mp) = g else {
+            unreachable!()
+        };
+        assert_eq!(mp.0.len(), 2);
+        assert_eq!(mp.0[0].get::<0>(), 1.0);
+    }
+
+    /// A valid `MultiLineString` of one empty member parses (the happy
+    /// `lines.push` arm).
+    #[test]
+    fn le_multilinestring_one_member() {
+        let mut b = vec![0x01, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_empty_linestring_record());
+        let g = from_wkb(&b).unwrap();
+        assert_eq!(g.kind(), DynKind::MultiLineString);
+        let DynGeometry::MultiLineString(mls) = g else {
+            unreachable!()
+        };
+        assert_eq!(mls.0.len(), 1);
+    }
+
+    /// A valid `MultiPolygon` of one empty member parses (the happy
+    /// `polys.push` arm).
+    #[test]
+    fn le_multipolygon_one_member() {
+        let mut b = vec![0x01, 0x06, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_empty_polygon_record());
+        let g = from_wkb(&b).unwrap();
+        assert_eq!(g.kind(), DynKind::MultiPolygon);
+        let DynGeometry::MultiPolygon(mpg) = g else {
+            unreachable!()
+        };
+        assert_eq!(mpg.0.len(), 1);
+    }
+
+    /// A `GeometryCollection` mixing a point and a line string parses,
+    /// preserving member kinds and order (the `items.push` arm).
+    #[test]
+    fn le_geometry_collection_mixed_members() {
+        let mut b = vec![0x01, 0x07, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_point_record());
+        b.extend_from_slice(&le_empty_linestring_record());
+        let g = from_wkb(&b).unwrap();
+        assert_eq!(g.kind(), DynKind::GeometryCollection);
+        let DynGeometry::GeometryCollection(items) = g else {
+            unreachable!()
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind(), DynKind::Point);
+        assert_eq!(items[1].kind(), DynKind::LineString);
+    }
+
+    /// A `MultiLineString` whose member is a `Point` reports the mismatch
+    /// with both codes (expected 2, found 1) — the `dyn_code(Point)` arm.
+    #[test]
+    fn multilinestring_wrong_member_reports_both_codes() {
+        let mut b = vec![0x01, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_point_record());
+        assert_eq!(
+            from_wkb(&b).unwrap_err(),
+            WkbError::MismatchedMemberType {
+                expected: WKB_LINESTRING,
+                found: WKB_POINT,
+            }
+        );
+    }
+
+    /// A `MultiPolygon` whose member is a `Point` reports the mismatch —
+    /// the `dyn_code(Point)` arm through the polygon reader.
+    #[test]
+    fn multipolygon_wrong_member_reports_both_codes() {
+        let mut b = vec![0x01, 0x06, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        b.extend_from_slice(&le_point_record());
+        assert_eq!(
+            from_wkb(&b).unwrap_err(),
+            WkbError::MismatchedMemberType {
+                expected: WKB_POLYGON,
+                found: WKB_POINT,
+            }
+        );
+    }
+
+    /// An unknown base type code (here 8, one past the OGC range) is
+    /// rejected.
+    #[test]
+    fn unknown_base_type_is_rejected() {
+        let b = vec![0x01, 0x08, 0x00, 0x00, 0x00];
+        assert_eq!(from_wkb(&b).unwrap_err(), WkbError::UnknownGeometryType(8));
     }
 }

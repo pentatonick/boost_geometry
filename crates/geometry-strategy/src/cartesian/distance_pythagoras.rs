@@ -320,6 +320,31 @@ mod tests {
     {
         s.distance(a, b)
     }
+
+    /// `ComparablePythagoras::comparable()` returns itself — the
+    /// comparable form is already sqrt-free.
+    #[test]
+    fn comparable_of_comparable_is_itself() {
+        let o = Point2D::<f64, Cartesian>::new(0.0, 0.0);
+        let p = Point2D::<f64, Cartesian>::new(3.0, 4.0);
+        let cmp = DistanceStrategy::<Point2D<f64, Cartesian>, Point2D<f64, Cartesian>>::comparable(
+            &ComparablePythagoras,
+        );
+        assert!((cmp.distance(&o, &p) - 25.0).abs() < 1e-12);
+    }
+
+    /// The read-only-point witness computes the same value when actually
+    /// invoked with a concrete strategy and points.
+    #[test]
+    #[allow(
+        clippy::used_underscore_items,
+        reason = "the test exists to run the compile-time witness's body"
+    )]
+    fn readonly_witness_computes_distance() {
+        let a = Point2D::<f64, Cartesian>::new(0.0, 0.0);
+        let b = Point2D::<f64, Cartesian>::new(3.0, 4.0);
+        assert!((_accepts_readonly_point(&Pythagoras, &a, &b) - 5.0).abs() < 1e-12);
+    }
 }
 
 #[cfg(test)]

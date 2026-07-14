@@ -229,6 +229,20 @@ mod tests {
         assert_eq!(num_points(&ls), 3);
     }
 
+    /// `num_points.cpp:84-87` — a ring counts its stored points
+    /// (closed 5-point square → 5).
+    #[test]
+    fn ring_counts_stored_points() {
+        let r: geometry_model::Ring<Pt> = geometry_model::Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(4.0, 0.0),
+            Pt::new(4.0, 3.0),
+            Pt::new(0.0, 3.0),
+            Pt::new(0.0, 0.0),
+        ]);
+        assert_eq!(num_points(&r), 5);
+    }
+
     /// `num_points.cpp:88` — `POLYGON((0 0,10 10,0 10,0 0))` (outer
     /// only, closed) → 4; a 5-point closed outer here → 5.
     #[test]

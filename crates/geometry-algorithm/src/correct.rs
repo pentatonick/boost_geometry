@@ -204,6 +204,85 @@ mod tests {
         assert_eq!(r.points().count(), 2, "2-point ring must stay 2 points");
     }
 
+    /// An *open*-declared ring (`CLOSED = false`) that is stored with a
+    /// redundant closing vertex has it dropped by `fix_closure` — the
+    /// `(should_be_closed=false, already_closed=true)` arm.
+    #[test]
+    fn open_declared_ring_drops_redundant_closing_vertex() {
+        use geometry_trait::Ring as _;
+        // CW (true), OPEN (false), stored closed (first == last).
+        let mut r: Ring<P, true, false> = Ring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(0.0, 2.0),
+            P::new(2.0, 2.0),
+            P::new(2.0, 0.0),
+            P::new(0.0, 0.0),
+        ]);
+        correct(&mut r);
+        // The closing vertex is removed: 5 stored points → 4.
+        assert_eq!(r.points().count(), 4);
+        // Area is unchanged by the closure fix (still the 2×2 square).
+        assert_eq!(ring_area(&r), 4.0);
+    }
+
+    /// `correct` on a `MultiPolygon` corrects each member polygon: a
+    /// CCW-stored member is re-wound to a positive exterior area.
+    #[test]
+    fn multipolygon_corrects_each_member() {
+        use geometry_model::{MultiPolygon, Polygon};
+        let ccw_square = || {
+            Polygon::<P>::new(Ring::from_vec(vec![
+                P::new(0.0, 0.0),
+                P::new(2.0, 0.0),
+                P::new(2.0, 2.0),
+                P::new(0.0, 2.0),
+                P::new(0.0, 0.0),
+            ]))
+        };
+        let mut mpg: MultiPolygon<Polygon<P>> = MultiPolygon(vec![ccw_square(), ccw_square()]);
+        // Precondition: both exteriors are negative (CCW, CW-declared).
+        assert!(ring_area(&mpg.0[0].outer) < 0.0);
+        correct(&mut mpg);
+        assert_eq!(ring_area(&mpg.0[0].outer), 4.0);
+        assert_eq!(ring_area(&mpg.0[1].outer), 4.0);
+    }
+
+    /// A 3D ring whose stored closing vertex matches the first in all
+    /// three ordinates is recognised as already-closed — exercising the
+    /// `coords_equal` `D == 2` arm.
+    #[test]
+    fn coords_equal_compares_the_third_ordinate() {
+        use geometry_model::Point3D;
+        use geometry_trait::Ring as _;
+        type P3 = Point3D<f64, Cartesian>;
+        // Open-declared 3D ring stored closed in x, y AND z. `fix_closure`
+        // only drops the closer if `coords_equal` returns true across all
+        // three ordinates.
+        let mut r: Ring<P3, true, false> = Ring::from_vec(vec![
+            P3::new(0.0, 0.0, 5.0),
+            P3::new(1.0, 0.0, 5.0),
+            P3::new(1.0, 1.0, 5.0),
+            P3::new(0.0, 0.0, 5.0),
+        ]);
+        // Note: this ring's orientation correction relies on ShoelaceArea,
+        // which is defined for these Cartesian points; we only assert the
+        // closure fix here.
+        let before = r.points().count();
+        super::fix_closure(&mut r);
+        assert_eq!(before, 4);
+        assert_eq!(r.points().count(), 3, "closing vertex dropped");
+
+        // And a ring whose z differs at the closer is NOT already closed.
+        let mut open: Ring<P3, true, false> = Ring::from_vec(vec![
+            P3::new(0.0, 0.0, 5.0),
+            P3::new(1.0, 0.0, 5.0),
+            P3::new(1.0, 1.0, 5.0),
+            P3::new(0.0, 0.0, 9.0), // same x,y — different z
+        ]);
+        super::fix_closure(&mut open);
+        assert_eq!(open.points().count(), 4, "z differs → not closed → kept");
+    }
+
     #[test]
     fn ccw_ring_correctly_wound_is_a_noop() {
         // Regression: `fix_orientation(self, CW)` used to reverse a

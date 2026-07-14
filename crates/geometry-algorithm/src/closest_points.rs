@@ -111,4 +111,65 @@ mod tests {
             Linestring::from_vec(alloc::vec![Pt::new(0., 0.), Pt::new(1., 0.),]);
         let _ = closest_points(&a, &b);
     }
+
+    /// Point × Point: the closest pair is trivially the two inputs.
+    #[test]
+    fn point_point_returns_the_inputs() {
+        let a = Pt::new(1., 2.);
+        let b = Pt::new(4., 6.);
+        let (ca, cb) = closest_points(&a, &b);
+        assert_eq!((ca.get::<0>(), ca.get::<1>()), (1., 2.));
+        assert_eq!((cb.get::<0>(), cb.get::<1>()), (4., 6.));
+        assert!((Pythagoras.distance(&ca, &cb) - 5.0).abs() < 1e-12);
+    }
+
+    /// Point × Point works in 3D too, exercising the `get_dim`/`set_dim`
+    /// (and `copy_point`) third-ordinate arm.
+    #[test]
+    fn point_point_in_three_dimensions() {
+        use geometry_model::Point3D;
+        type P3 = Point3D<f64, Cartesian>;
+        let a = P3::new(0., 0., 0.);
+        let b = P3::new(1., 2., 2.);
+        let (ca, cb) = closest_points(&a, &b);
+        assert_eq!((ca.get::<0>(), ca.get::<1>(), ca.get::<2>()), (0., 0., 0.));
+        assert_eq!((cb.get::<0>(), cb.get::<1>(), cb.get::<2>()), (1., 2., 2.));
+    }
+
+    /// Two parallel, non-crossing segments: the intersection test
+    /// returns `None`, so the closest pair falls out of the four endpoint
+    /// projections. Here the parallel offset is a constant 1 apart.
+    #[test]
+    fn parallel_segments_closest_pair_via_endpoint_projection() {
+        let a = Segment::new(Pt::new(0., 0.), Pt::new(4., 0.));
+        let b = Segment::new(Pt::new(0., 1.), Pt::new(4., 1.));
+        let (ca, cb) = closest_points(&a, &b);
+        assert!((Pythagoras.distance(&ca, &cb) - 1.0).abs() < 1e-12);
+    }
+
+    /// A degenerate (zero-length) segment drives the projection down its
+    /// `denominator <= 0` branch: the closest point is the segment's
+    /// start.
+    #[test]
+    fn degenerate_segment_projects_to_its_point() {
+        let p = Pt::new(3., 4.);
+        // start == end: a zero-length segment at the origin.
+        let s = Segment::new(Pt::new(0., 0.), Pt::new(0., 0.));
+        let (a, b) = closest_points(&p, &s);
+        assert_eq!((a.get::<0>(), a.get::<1>()), (3., 4.));
+        assert_eq!((b.get::<0>(), b.get::<1>()), (0., 0.));
+        assert!((Pythagoras.distance(&a, &b) - 5.0).abs() < 1e-12);
+    }
+
+    /// Linestring × Linestring: two disjoint parallel polylines. The
+    /// windowed double-loop keeps the minimum (the first-iteration seed
+    /// then the running-minimum update).
+    #[test]
+    fn linestring_linestring_closest_over_all_segment_pairs() {
+        use geometry_model::linestring;
+        let a: Linestring<Pt> = linestring![(0., 0.), (4., 0.)];
+        let b: Linestring<Pt> = linestring![(0., 3.), (4., 3.)];
+        let (ca, cb) = closest_points(&a, &b);
+        assert!((Pythagoras.distance(&ca, &cb) - 3.0).abs() < 1e-12);
+    }
 }

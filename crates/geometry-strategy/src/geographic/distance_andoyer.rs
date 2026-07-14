@@ -326,4 +326,26 @@ mod tests {
     {
         s.distance(a, b)
     }
+
+    /// `comparable()` returns a strategy producing the same distance —
+    /// there is no sqrt to skip in the geodesic formula.
+    #[test]
+    fn comparable_produces_the_same_distance() {
+        let a = deg(4.0, 52.0);
+        let b = deg(3.0, 40.0);
+        let real = Andoyer::WGS84.distance(&a, &b);
+        let cmp = DistanceStrategy::<GP, GP>::comparable(&Andoyer::WGS84).distance(&a, &b);
+        assert!((real - cmp).abs() < 1e-9);
+    }
+
+    /// The read-only-point witness computes a distance when invoked.
+    #[test]
+    #[allow(
+        clippy::used_underscore_items,
+        reason = "the test exists to run the compile-time witness's body"
+    )]
+    fn readonly_witness_computes_distance() {
+        let d = _accepts_readonly_point(&Andoyer::WGS84, &deg(4.0, 52.0), &deg(3.0, 40.0));
+        assert!(d > 1_000_000.0, "≈1336 km, got {d}");
+    }
 }

@@ -28,6 +28,7 @@ FOOTER = (
 )
 
 FENCE_RE = re.compile(r"^```(\S*)$")
+HEADING_RE = re.compile(r"^#{1,6}(?:[ \t]+|$)")
 # rustdoc fence infostrings that mean "this is rust code"
 RUST_INFOSTRINGS = {"", "rust", "ignore", "no_run", "should_panic", "compile_fail", "edition2024"}
 
@@ -63,9 +64,7 @@ def to_markdown(doc: str) -> str:
             continue  # hidden doctest line
         out.append(line)
     # demote doc headings so the crate name stays the only h1
-    return "\n".join(
-        ("#" + l if l.startswith("#") and not l.startswith("#!") else l) for l in out
-    )
+    return "\n".join(("#" + line if HEADING_RE.match(line) else line) for line in out)
 
 
 def splice_examples() -> None:

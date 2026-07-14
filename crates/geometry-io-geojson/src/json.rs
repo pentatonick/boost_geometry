@@ -82,6 +82,11 @@ pub(crate) enum JsonValue {
     Str(String),
     /// A JSON array.
     Array(Vec<JsonValue>),
+    /// A two-number `GeoJSON` position kept inline to avoid one allocation
+    /// for every coordinate pair. The general JSON parser still emits
+    /// [`JsonValue::Array`]; this variant is enabled only by
+    /// [`parse_geojson`].
+    Position([f64; 2]),
     /// A JSON object as insertion-ordered `(key, value)` pairs.
     Object(Vec<(String, JsonValue)>),
 }
@@ -111,6 +116,14 @@ impl JsonValue {
         }
     }
 
+    /// Borrow an inline two-ordinate `GeoJSON` position.
+    pub(crate) fn as_position(&self) -> Option<[f64; 2]> {
+        match self {
+            JsonValue::Position(position) => Some(*position),
+            _ => None,
+        }
+    }
+
     /// Look up an object member by key, if this value is a
     /// [`JsonValue::Object`]. Returns the first match (`GeoJSON` objects do
     /// not carry duplicate keys).
@@ -134,10 +147,23 @@ impl JsonValue {
 ///
 /// Returns [`GeoJsonError::Json`] for a syntax error and
 /// [`GeoJsonError::UnexpectedEof`] when the input ends mid-value.
+#[cfg(test)]
 pub(crate) fn parse_json(input: &str) -> Result<JsonValue, GeoJsonError> {
+    parse_document(input, false)
+}
+
+/// Parse a `GeoJSON` document while storing exact two-number positions
+/// inline. General arrays, including positions with extra ordinates, retain
+/// the ordinary [`JsonValue::Array`] representation.
+pub(crate) fn parse_geojson(input: &str) -> Result<JsonValue, GeoJsonError> {
+    parse_document(input, true)
+}
+
+fn parse_document(input: &str, inline_positions: bool) -> Result<JsonValue, GeoJsonError> {
     let mut p = JsonParser {
         bytes: input.as_bytes(),
         pos: 0,
+        inline_positions,
     };
     p.skip_ws();
     let value = p.parse_value(0)?;
@@ -167,6 +193,7 @@ const MAX_DEPTH: usize = 128;
 struct JsonParser<'a> {
     bytes: &'a [u8],
     pos: usize,
+    inline_positions: bool,
 }
 
 impl JsonParser<'_> {
@@ -271,6 +298,11 @@ impl JsonParser<'_> {
             self.pos += 1;
             return Ok(JsonValue::Array(items));
         }
+        if self.inline_positions {
+            if let Some(position) = self.parse_position()? {
+                return Ok(JsonValue::Position(position));
+            }
+        }
         loop {
             self.skip_ws();
             items.push(self.parse_value(depth + 1)?);
@@ -287,6 +319,39 @@ impl JsonParser<'_> {
                 None => return Err(GeoJsonError::UnexpectedEof),
             }
         }
+    }
+
+    /// Parse an exact two-number array without allocating. Any other array
+    /// shape restores the cursor and falls back to the general array parser.
+    fn parse_position(&mut self) -> Result<Option<[f64; 2]>, GeoJsonError> {
+        let start = self.pos;
+        if !matches!(self.peek(), Some(b'-' | b'0'..=b'9')) {
+            return Ok(None);
+        }
+        let JsonValue::Number(x) = self.parse_number()? else {
+            unreachable!("parse_number always returns a number");
+        };
+        self.skip_ws();
+        if self.peek() != Some(b',') {
+            self.pos = start;
+            return Ok(None);
+        }
+        self.pos += 1;
+        self.skip_ws();
+        if !matches!(self.peek(), Some(b'-' | b'0'..=b'9')) {
+            self.pos = start;
+            return Ok(None);
+        }
+        let JsonValue::Number(y) = self.parse_number()? else {
+            unreachable!("parse_number always returns a number");
+        };
+        self.skip_ws();
+        if self.peek() == Some(b']') {
+            self.pos += 1;
+            return Ok(Some([x, y]));
+        }
+        self.pos = start;
+        Ok(None)
     }
 
     /// Parse a string literal, decoding the `\" \\ \/ \n \t \r \b \f`
@@ -384,7 +449,7 @@ mod tests {
         reason = "number literals in these fixtures are exact"
     )]
 
-    use super::{GeoJsonError, JsonValue, parse_json};
+    use super::{GeoJsonError, JsonValue, parse_geojson, parse_json};
     use alloc::string::ToString;
 
     #[test]
@@ -406,6 +471,22 @@ mod tests {
         let inner = outer[1].as_array().unwrap()[0].as_array().unwrap();
         assert_eq!(inner[0].as_f64(), Some(3.0));
         assert_eq!(inner[1].as_f64(), Some(4.0));
+    }
+
+    #[test]
+    fn geojson_positions_are_inline_with_general_array_fallback() {
+        assert_eq!(
+            parse_geojson("[1,2]").unwrap(),
+            JsonValue::Position([1.0, 2.0])
+        );
+        assert!(matches!(
+            parse_geojson("[1,2,3]").unwrap(),
+            JsonValue::Array(values) if values.len() == 3
+        ));
+        assert!(matches!(
+            parse_json("[1,2]").unwrap(),
+            JsonValue::Array(values) if values.len() == 2
+        ));
     }
 
     #[test]
@@ -444,6 +525,108 @@ mod tests {
             parse_json("1.2.3").unwrap_err(),
             GeoJsonError::Json(_)
         ));
+    }
+
+    /// Every `GeoJsonError` variant renders a distinct, descriptive
+    /// message through its `Display` impl.
+    #[test]
+    fn error_display_covers_every_variant() {
+        use alloc::string::String;
+        let cases: Vec<(GeoJsonError, &str)> = vec![
+            (GeoJsonError::Json("boom".to_string()), "invalid JSON: boom"),
+            (GeoJsonError::UnexpectedEof, "unexpected end of input"),
+            (
+                GeoJsonError::ExpectedType,
+                "missing GeoJSON \"type\" member",
+            ),
+            (
+                GeoJsonError::UnknownGeometryType("Xyz".to_string()),
+                "unknown GeoJSON geometry type \"Xyz\"",
+            ),
+            (
+                GeoJsonError::MalformedCoordinates,
+                "malformed or missing coordinates",
+            ),
+            (
+                GeoJsonError::UnsupportedType("Feature".to_string()),
+                "unsupported GeoJSON type \"Feature\"",
+            ),
+        ];
+        for (err, want) in cases {
+            let rendered: String = alloc::format!("{err}");
+            assert_eq!(rendered, want);
+        }
+    }
+
+    /// The `JsonValue` accessors return `None` when the value is a
+    /// different variant.
+    #[test]
+    fn accessors_return_none_on_mismatch() {
+        let n = JsonValue::Number(1.0);
+        assert_eq!(n.as_str(), None);
+        assert_eq!(n.as_array(), None);
+        assert_eq!(n.get("k"), None); // not an object
+        let s = JsonValue::Bool(true);
+        assert_eq!(s.as_f64(), None);
+    }
+
+    /// A truncated keyword literal fails `expect_literal` with a
+    /// descriptive `Json` error.
+    #[test]
+    fn truncated_literal_is_reported() {
+        let err = parse_json("tru").unwrap_err();
+        assert_eq!(err, GeoJsonError::Json("expected `true`".to_string()));
+    }
+
+    /// The three structural object errors are each reported: a non-string
+    /// key, a missing colon, and a bad separator after a member.
+    #[test]
+    fn object_structure_errors_are_reported() {
+        assert_eq!(
+            parse_json("{1: 2}").unwrap_err(),
+            GeoJsonError::Json("expected string key".to_string())
+        );
+        assert_eq!(
+            parse_json(r#"{"a" 2}"#).unwrap_err(),
+            GeoJsonError::Json("expected `:` after key".to_string())
+        );
+        assert_eq!(
+            parse_json(r#"{"a": 1 "b": 2}"#).unwrap_err(),
+            GeoJsonError::Json("expected `,` or `}`".to_string())
+        );
+    }
+
+    /// A bad separator inside an array is reported.
+    #[test]
+    fn array_separator_error_is_reported() {
+        assert_eq!(
+            parse_json("[1 2]").unwrap_err(),
+            GeoJsonError::Json("expected `,` or `]`".to_string())
+        );
+    }
+
+    /// The `\r`, `\b`, and `\f` string escapes decode to their control
+    /// characters, and an unknown escape is rejected.
+    #[test]
+    fn control_escapes_decode_and_bad_escape_rejected() {
+        let v = parse_json(r#""a\rb\bc\fd""#).unwrap();
+        assert_eq!(v.as_str(), Some("a\rb\u{0008}c\u{000C}d"));
+
+        let err = parse_json(r#""\x""#).unwrap_err();
+        assert!(
+            matches!(&err, GeoJsonError::Json(m) if m.contains("unsupported escape")),
+            "got {err:?}"
+        );
+    }
+
+    /// A multi-byte UTF-8 character inside a string is copied intact
+    /// through the non-ASCII branch (exercising `utf8_char_len`'s 2/3/4
+    /// byte arms).
+    #[test]
+    fn multibyte_utf8_in_string_survives() {
+        // é (2 bytes), € (3 bytes), 𝄞 (4 bytes).
+        let v = parse_json("\"é€𝄞\"").unwrap();
+        assert_eq!(v.as_str(), Some("é€𝄞"));
     }
 
     #[test]

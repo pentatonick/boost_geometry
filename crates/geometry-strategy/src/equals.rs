@@ -326,4 +326,24 @@ mod tests {
     {
         s.equals(a, b)
     }
+
+    /// The read-only-point witness computes membership when invoked with
+    /// a concrete strategy and points.
+    #[test]
+    #[allow(
+        clippy::used_underscore_items,
+        reason = "the test exists to run the compile-time witness's body"
+    )]
+    fn readonly_witness_computes_equality() {
+        assert!(_accepts_readonly_point(
+            &EqPointPoint,
+            &pt(1.0, 1.0),
+            &pt(1.0, 1.0)
+        ));
+        assert!(!_accepts_readonly_point(
+            &EqPointPoint,
+            &pt(1.0, 1.0),
+            &pt(2.0, 2.0)
+        ));
+    }
 }

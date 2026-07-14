@@ -143,6 +143,39 @@ mod tests {
         assert_eq!(num_geometries(&mp), 3);
     }
 
+    /// The remaining single kinds — `Ring`, `Segment`, `Box` — each
+    /// report exactly one geometry.
+    #[test]
+    fn other_single_kinds_are_one() {
+        use geometry_model::{Box, Ring, Segment};
+        let ring: Ring<Pt> = Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(1.0, 0.0),
+            Pt::new(0.0, 0.0),
+        ]);
+        assert_eq!(num_geometries(&ring), 1);
+        assert_eq!(
+            num_geometries(&Segment::new(Pt::new(0.0, 0.0), Pt::new(1.0, 1.0))),
+            1
+        );
+        assert_eq!(
+            num_geometries(&Box::from_corners(Pt::new(0.0, 0.0), Pt::new(1.0, 1.0))),
+            1
+        );
+    }
+
+    /// A `MultiLineString` reports its member count.
+    #[test]
+    fn multi_linestring_returns_member_count() {
+        use geometry_model::MultiLinestring;
+        let mls: MultiLinestring<Ls> = MultiLinestring(vec![
+            linestring![(0.0, 0.0), (1.0, 1.0)],
+            linestring![(2.0, 2.0), (3.0, 3.0)],
+            linestring![(4.0, 4.0), (5.0, 5.0)],
+        ]);
+        assert_eq!(num_geometries(&mls), 3);
+    }
+
     /// `num_geometries.cpp:124` — a 2-member multipolygon → 2.
     #[test]
     fn multi_polygon_returns_member_count() {

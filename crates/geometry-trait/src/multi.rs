@@ -327,5 +327,43 @@ mod tests {
         assert_eq!(mpg.polygons().len(), 2);
         let inner_counts: Vec<usize> = mpg.polygons().map(|p| p.interiors().count()).collect();
         assert_eq!(inner_counts, vec![0, 1]);
+
+        // Read the exterior ring's vertices of the first polygon through
+        // `VRing::points` and both `Xy::get::<0>` / `get::<1>`.
+        let first = mpg.polygons().next().unwrap();
+        let ext: Vec<(f64, f64)> = first
+            .exterior()
+            .points()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(ext.len(), 5);
+        assert_eq!(ext[2], (1.0, 1.0));
+
+        // And the second polygon's single hole is a non-empty ring.
+        let hole_len = mpg
+            .polygons()
+            .nth(1)
+            .unwrap()
+            .interiors()
+            .next()
+            .unwrap()
+            .points()
+            .count();
+        assert_eq!(hole_len, 5);
+    }
+
+    /// `Xy` is a full `PointMut`: `set` writes each ordinate and `get`
+    /// reads it back — covering the `get`/`set` `D == 1` branches.
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "compared values are exact integer-valued literals"
+    )]
+    fn xy_get_set_round_trips_both_ordinates() {
+        let mut p = Xy(0.0, 0.0);
+        p.set::<0>(3.0);
+        p.set::<1>(4.0);
+        assert_eq!(p.get::<0>(), 3.0);
+        assert_eq!(p.get::<1>(), 4.0);
     }
 }

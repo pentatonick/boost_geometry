@@ -18,7 +18,7 @@ use geometry_model::{
     DynGeometry, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D, Polygon, Ring,
 };
 
-use crate::lexer::{Token, WktError, tokenize};
+use crate::lexer::{Lexer, Token, WktError};
 
 /// A concrete 2D Cartesian point — the coordinate type every parsed
 /// geometry is built from.
@@ -34,39 +34,41 @@ type Pt = Point2D<f64, Cartesian>;
 /// readers' cap; real WKT nests only a few levels deep.
 const MAX_DEPTH: usize = 128;
 
-/// A cursor over the token stream produced by
-/// [`crate::lexer::tokenize`]. Holds the position; every `parse_*`
-/// method advances it.
-struct Parser {
-    tokens: Vec<Token>,
-    pos: usize,
+/// A one-token lookahead cursor over the input. Every `parse_*` method
+/// advances it, and tokens are scanned only as the grammar consumes them.
+struct Parser<'a> {
+    lexer: Lexer<'a>,
+    current: Token,
 }
 
-impl Parser {
-    fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+impl<'a> Parser<'a> {
+    fn new(input: &'a str) -> Result<Self, WktError> {
+        let mut lexer = Lexer::new(input);
+        let current = lexer.next_token()?;
+        Ok(Self { lexer, current })
     }
 
     /// Borrow the current token without consuming it.
     fn peek(&self) -> &Token {
-        // `tokenize` always terminates the stream with `Eof`, so the
-        // index is in bounds for every position the parser reaches.
-        &self.tokens[self.pos]
+        &self.current
     }
 
     /// Consume and return the current token. The cursor is strictly
     /// monotonic, so the vacated slot is never read again; `Eof` is the
     /// placeholder because a stray re-read then fails exactly like
     /// running off the end of the stream.
-    fn next(&mut self) -> Token {
-        let t = core::mem::replace(&mut self.tokens[self.pos], Token::Eof);
-        self.pos += 1;
-        t
+    fn next(&mut self) -> Result<Token, WktError> {
+        let next = self.lexer.next_token()?;
+        Ok(core::mem::replace(&mut self.current, next))
+    }
+
+    fn advance(&mut self) -> Result<(), WktError> {
+        self.next().map(drop)
     }
 
     /// Consume a `(`, or fail.
     fn expect_left_paren(&mut self) -> Result<(), WktError> {
-        match self.next() {
+        match self.next()? {
             Token::LeftParen => Ok(()),
             other => Err(WktError::UnexpectedToken {
                 expected: "'('",
@@ -77,7 +79,7 @@ impl Parser {
 
     /// Consume a `)`, or fail.
     fn expect_right_paren(&mut self) -> Result<(), WktError> {
-        match self.next() {
+        match self.next()? {
             Token::RightParen => Ok(()),
             other => Err(WktError::UnexpectedToken {
                 expected: "')'",
@@ -88,7 +90,7 @@ impl Parser {
 
     /// Consume one `f64` numeric token, or fail.
     fn expect_number(&mut self) -> Result<f64, WktError> {
-        match self.next() {
+        match self.next()? {
             Token::Number(n) => Ok(n),
             Token::Eof => Err(WktError::UnexpectedEof),
             other => Err(WktError::UnexpectedToken {
@@ -104,12 +106,13 @@ impl Parser {
     /// coordinate scan. Mirrors Boost's handling of the dimension in
     /// `boost/geometry/io/wkt/read.hpp` (it likewise reads only the
     /// coordinates its point type declares).
-    fn skip_dimension_suffix(&mut self) {
+    fn skip_dimension_suffix(&mut self) -> Result<(), WktError> {
         if let Token::Ident(word) = self.peek() {
             if word == "Z" || word == "M" || word == "ZM" {
-                self.pos += 1;
+                self.advance()?;
             }
         }
+        Ok(())
     }
 
     /// Read exactly two ordinates into a 2D point. Any further ordinates
@@ -119,7 +122,7 @@ impl Parser {
         let y = self.expect_number()?;
         // Discard trailing Z / M ordinates for this 2D port.
         while let Token::Number(_) = self.peek() {
-            self.pos += 1;
+            self.advance()?;
         }
         Ok(Point2D::new(x, y))
     }
@@ -134,7 +137,7 @@ impl Parser {
             pts.push(self.parse_point_coords()?);
             match self.peek() {
                 Token::Comma => {
-                    self.pos += 1;
+                    self.advance()?;
                 }
                 _ => break,
             }
@@ -153,7 +156,7 @@ impl Parser {
             rings.push(self.parse_coord_list()?);
             match self.peek() {
                 Token::Comma => {
-                    self.pos += 1;
+                    self.advance()?;
                 }
                 _ => break,
             }
@@ -180,7 +183,7 @@ impl Parser {
     /// `LINESTRING` body: `(x y, …)` or `EMPTY`.
     fn parse_linestring_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(DynGeometry::LineString(Linestring(Vec::new())));
         }
         let pts = self.parse_coord_list()?;
@@ -196,7 +199,7 @@ impl Parser {
     /// The shared `POLYGON` value builder, reused by `MULTIPOLYGON`.
     fn parse_polygon_value(&mut self) -> Result<Polygon<Pt>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(Polygon::new(Ring::new()));
         }
         let mut rings = self.parse_coord_list_list()?.into_iter();
@@ -211,7 +214,7 @@ impl Parser {
     /// peeking past the outer `(` for a nested `(`.
     fn parse_multipoint_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(DynGeometry::MultiPoint(MultiPoint(Vec::new())));
         }
         self.expect_left_paren()?;
@@ -219,7 +222,7 @@ impl Parser {
         loop {
             if let Token::LeftParen = self.peek() {
                 // Parenthesised member: `(x y)`.
-                self.pos += 1;
+                self.advance()?;
                 pts.push(self.parse_point_coords()?);
                 self.expect_right_paren()?;
             } else {
@@ -228,7 +231,7 @@ impl Parser {
             }
             match self.peek() {
                 Token::Comma => {
-                    self.pos += 1;
+                    self.advance()?;
                 }
                 _ => break,
             }
@@ -240,7 +243,7 @@ impl Parser {
     /// `MULTILINESTRING` body: `((x y, …), …)` or `EMPTY`.
     fn parse_multilinestring_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(DynGeometry::MultiLineString(MultiLinestring(Vec::new())));
         }
         let lists = self.parse_coord_list_list()?;
@@ -251,7 +254,7 @@ impl Parser {
     /// `MULTIPOLYGON` body: `(((ring), …), …)` or `EMPTY`.
     fn parse_multipolygon_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(DynGeometry::MultiPolygon(MultiPolygon(Vec::new())));
         }
         self.expect_left_paren()?;
@@ -260,7 +263,7 @@ impl Parser {
             polys.push(self.parse_polygon_value()?);
             match self.peek() {
                 Token::Comma => {
-                    self.pos += 1;
+                    self.advance()?;
                 }
                 _ => break,
             }
@@ -277,7 +280,7 @@ impl Parser {
         depth: usize,
     ) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
-            self.pos += 1;
+            self.advance()?;
             return Ok(DynGeometry::GeometryCollection(Vec::new()));
         }
         self.expect_left_paren()?;
@@ -286,7 +289,7 @@ impl Parser {
             items.push(self.parse_geometry(depth + 1)?);
             match self.peek() {
                 Token::Comma => {
-                    self.pos += 1;
+                    self.advance()?;
                 }
                 _ => break,
             }
@@ -305,7 +308,7 @@ impl Parser {
         if depth >= MAX_DEPTH {
             return Err(WktError::NestingTooDeep);
         }
-        let keyword = match self.next() {
+        let keyword = match self.next()? {
             Token::Ident(word) => word,
             Token::Eof => return Err(WktError::UnexpectedEof),
             other => {
@@ -315,7 +318,7 @@ impl Parser {
                 });
             }
         };
-        self.skip_dimension_suffix();
+        self.skip_dimension_suffix()?;
         match keyword.as_str() {
             "POINT" => self.parse_point_body(),
             "LINESTRING" => self.parse_linestring_body(),
@@ -365,8 +368,7 @@ impl Parser {
 /// assert_eq!(g.kind(), DynKind::Point);
 /// ```
 pub fn from_wkt<S: AsRef<str>>(input: S) -> Result<DynGeometry<f64, Cartesian>, WktError> {
-    let tokens = tokenize(input.as_ref())?;
-    let mut parser = Parser::new(tokens);
+    let mut parser = Parser::new(input.as_ref())?;
     let g = parser.parse_geometry(0)?;
     // Reject trailing garbage after a complete geometry.
     match parser.peek() {
@@ -765,6 +767,210 @@ mod tests {
             assert_eq!(p.get::<1>(), 10.0);
         } else {
             unreachable!();
+        }
+    }
+
+    // ---- EMPTY forms for the remaining collection kinds --------------
+
+    /// `POLYGON EMPTY` yields a polygon with an empty exterior ring and
+    /// no holes.
+    #[test]
+    fn polygon_empty() {
+        let g = from_wkt("POLYGON EMPTY").unwrap();
+        if let DynGeometry::Polygon(p) = g {
+            assert_eq!(p.exterior().points().len(), 0);
+            assert_eq!(p.interiors().count(), 0);
+        } else {
+            unreachable!();
+        }
+    }
+
+    /// `MULTIPOINT EMPTY`, `MULTILINESTRING EMPTY`, and `MULTIPOLYGON
+    /// EMPTY` each yield an empty container of the matching kind.
+    #[test]
+    fn multi_kinds_empty() {
+        match from_wkt("MULTIPOINT EMPTY").unwrap() {
+            DynGeometry::MultiPoint(mp) => assert_eq!(mp.points().len(), 0),
+            _ => unreachable!(),
+        }
+        match from_wkt("MULTILINESTRING EMPTY").unwrap() {
+            DynGeometry::MultiLineString(mls) => assert_eq!(mls.linestrings().len(), 0),
+            _ => unreachable!(),
+        }
+        match from_wkt("MULTIPOLYGON EMPTY").unwrap() {
+            DynGeometry::MultiPolygon(mpg) => assert_eq!(mpg.polygons().len(), 0),
+            _ => unreachable!(),
+        }
+    }
+
+    // ---- Grammar error branches -------------------------------------
+
+    /// A body that opens with the wrong token fails
+    /// `expect_left_paren` with an `UnexpectedToken` naming `'('`.
+    #[test]
+    fn missing_left_paren_is_reported() {
+        let err = from_wkt("LINESTRING 10 10").unwrap_err();
+        assert!(
+            matches!(&err, WktError::UnexpectedToken { expected, .. } if *expected == "'('"),
+            "got {err:?}"
+        );
+    }
+
+    /// A coordinate list that never closes fails `expect_right_paren`
+    /// (the terminating token is `Eof`, not `)`).
+    #[test]
+    fn missing_right_paren_is_reported() {
+        let err = from_wkt("LINESTRING (10 10, 20 20").unwrap_err();
+        assert!(
+            matches!(&err, WktError::UnexpectedToken { expected, .. } if *expected == "')'"),
+            "got {err:?}"
+        );
+    }
+
+    /// A coordinate pair truncated after the first ordinate runs into
+    /// `Eof` where the second number is required → `UnexpectedEof`.
+    #[test]
+    fn missing_ordinate_hits_eof() {
+        let err = from_wkt("POINT (10").unwrap_err();
+        assert_eq!(err, WktError::UnexpectedEof);
+    }
+
+    /// A non-number where an ordinate is expected fails `expect_number`
+    /// with an `UnexpectedToken` naming `number`.
+    #[test]
+    fn non_number_ordinate_is_reported() {
+        // The second "ordinate" is a `)`, not a number.
+        let err = from_wkt("POINT (10 )").unwrap_err();
+        assert!(
+            matches!(&err, WktError::UnexpectedToken { expected, .. } if *expected == "number"),
+            "got {err:?}"
+        );
+    }
+
+    /// Trailing tokens after a complete geometry are rejected by the
+    /// end-of-input guard in `from_wkt`.
+    #[test]
+    fn trailing_tokens_are_rejected() {
+        let err = from_wkt("POINT (1 1) POINT (2 2)").unwrap_err();
+        assert!(
+            matches!(&err, WktError::UnexpectedToken { expected, .. } if *expected == "end of input"),
+            "got {err:?}"
+        );
+    }
+
+    /// Empty input reaches `parse_geometry` with an immediate `Eof`
+    /// keyword slot → `UnexpectedEof`.
+    #[test]
+    fn empty_input_is_unexpected_eof() {
+        assert_eq!(from_wkt("").unwrap_err(), WktError::UnexpectedEof);
+    }
+
+    /// A leading token that is neither an identifier nor `Eof` (here a
+    /// `(`) fails the keyword dispatch with `UnexpectedToken`.
+    #[test]
+    fn non_keyword_leading_token_is_reported() {
+        let err = from_wkt("(1 1)").unwrap_err();
+        assert!(
+            matches!(&err, WktError::UnexpectedToken { expected, .. }
+                if *expected == "geometry type keyword"),
+            "got {err:?}"
+        );
+    }
+
+    // ---- Typed-parse happy paths and per-kind mismatches -------------
+
+    /// Each typed parser returns its concrete kind on matching input.
+    #[test]
+    fn typed_parsers_accept_their_own_kind() {
+        assert_eq!(parse_point("POINT (1 2)").unwrap().get::<0>(), 1.0);
+        assert_eq!(
+            parse_linestring("LINESTRING (0 0, 1 1)")
+                .unwrap()
+                .points()
+                .len(),
+            2
+        );
+        assert_eq!(
+            parse_polygon("POLYGON ((0 0, 1 0, 1 1, 0 0))")
+                .unwrap()
+                .exterior()
+                .points()
+                .len(),
+            4
+        );
+        assert_eq!(
+            parse_multi_point("MULTIPOINT (0 0, 1 1)")
+                .unwrap()
+                .points()
+                .len(),
+            2
+        );
+        assert_eq!(
+            parse_multi_linestring("MULTILINESTRING ((0 0, 1 1))")
+                .unwrap()
+                .linestrings()
+                .len(),
+            1
+        );
+        assert_eq!(
+            parse_multi_polygon("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)))")
+                .unwrap()
+                .polygons()
+                .len(),
+            1
+        );
+    }
+
+    /// Each typed parser rejects a different-kind input with a
+    /// `TypeMismatch` whose `found` names the actual kind — exercising
+    /// every arm of `kind_name`.
+    #[test]
+    fn typed_parsers_reject_wrong_kind_naming_the_kind() {
+        let cases: &[(WktError, &str, &str)] = &[
+            (
+                parse_linestring("POINT (1 1)").unwrap_err(),
+                "LINESTRING",
+                "POINT",
+            ),
+            (
+                parse_polygon("LINESTRING (0 0, 1 1)").unwrap_err(),
+                "POLYGON",
+                "LINESTRING",
+            ),
+            (
+                parse_multi_point("POLYGON ((0 0, 1 0, 1 1, 0 0))").unwrap_err(),
+                "MULTIPOINT",
+                "POLYGON",
+            ),
+            (
+                parse_multi_linestring("MULTIPOINT (0 0, 1 1)").unwrap_err(),
+                "MULTILINESTRING",
+                "MULTIPOINT",
+            ),
+            (
+                parse_multi_polygon("MULTILINESTRING ((0 0, 1 1))").unwrap_err(),
+                "MULTIPOLYGON",
+                "MULTILINESTRING",
+            ),
+            (
+                parse_point("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)))").unwrap_err(),
+                "POINT",
+                "MULTIPOLYGON",
+            ),
+            (
+                parse_point("GEOMETRYCOLLECTION (POINT (1 1))").unwrap_err(),
+                "POINT",
+                "GEOMETRYCOLLECTION",
+            ),
+        ];
+        for (err, want_expected, want_found) in cases {
+            match err {
+                WktError::TypeMismatch { expected, found } => {
+                    assert_eq!(expected, want_expected);
+                    assert_eq!(found, want_found);
+                }
+                other => panic!("expected TypeMismatch, got {other:?}"),
+            }
         }
     }
 }

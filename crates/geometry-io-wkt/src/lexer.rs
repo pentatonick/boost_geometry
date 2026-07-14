@@ -12,6 +12,7 @@
 //! and `boost/geometry/io/wkt/read.hpp` for the C++ tokenizer.
 
 use alloc::string::{String, ToString};
+#[cfg(test)]
 use alloc::vec::Vec;
 
 /// One lexeme of a WKT string.
@@ -124,63 +125,132 @@ impl std::error::Error for WktError {}
 /// Returns [`WktError::UnexpectedChar`] for a character that cannot
 /// start any lexeme, and [`WktError::InvalidNumber`] for a numeric
 /// lexeme that fails to parse as `f64`.
-pub(crate) fn tokenize(input: &str) -> Result<Vec<Token>, WktError> {
-    let mut tokens = Vec::new();
-    // Index over `char_indices` so error positions are byte offsets and
-    // multi-byte characters are handled correctly.
-    let mut chars = input.char_indices().peekable();
+pub(crate) struct Lexer<'a> {
+    input: &'a str,
+    pos: usize,
+}
 
-    while let Some(&(pos, ch)) = chars.peek() {
-        if ch.is_whitespace() {
-            chars.next();
-        } else if ch == '(' {
-            chars.next();
-            tokens.push(Token::LeftParen);
-        } else if ch == ')' {
-            chars.next();
-            tokens.push(Token::RightParen);
-        } else if ch == ',' {
-            chars.next();
-            tokens.push(Token::Comma);
-        } else if ch.is_ascii_alphabetic() {
-            let mut word = String::new();
-            while let Some(&(_, c)) = chars.peek() {
-                if c.is_ascii_alphabetic() {
-                    word.push(c.to_ascii_uppercase());
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            if word == "EMPTY" {
-                tokens.push(Token::Empty);
-            } else {
-                tokens.push(Token::Ident(word));
-            }
-        } else if ch == '+' || ch == '-' || ch == '.' || ch.is_ascii_digit() {
-            let start = pos;
-            let mut end = pos + ch.len_utf8();
-            chars.next();
-            while let Some(&(p, c)) = chars.peek() {
-                if c.is_ascii_digit() || c == '.' || c == '+' || c == '-' || c == 'e' || c == 'E' {
-                    end = p + c.len_utf8();
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            let slice = &input[start..end];
-            let value: f64 = slice
-                .parse()
-                .map_err(|_| WktError::InvalidNumber(slice.to_string()))?;
-            tokens.push(Token::Number(value));
-        } else {
-            return Err(WktError::UnexpectedChar { pos, ch });
-        }
+impl<'a> Lexer<'a> {
+    pub(crate) fn new(input: &'a str) -> Self {
+        Self { input, pos: 0 }
     }
 
-    tokens.push(Token::Eof);
-    Ok(tokens)
+    /// Scan and return one token, leaving the rest of the input untouched.
+    /// The parser asks for the next token only after consuming the current
+    /// one, avoiding an allocated copy of the complete token stream.
+    pub(crate) fn next_token(&mut self) -> Result<Token, WktError> {
+        let bytes = self.input.as_bytes();
+        while let Some(&byte) = bytes.get(self.pos) {
+            if byte.is_ascii_whitespace() {
+                self.pos += 1;
+            } else if !byte.is_ascii() {
+                let ch = self.input[self.pos..]
+                    .chars()
+                    .next()
+                    .expect("position is inside the input");
+                if ch.is_whitespace() {
+                    self.pos += ch.len_utf8();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        let Some(&byte) = bytes.get(self.pos) else {
+            return Ok(Token::Eof);
+        };
+        let start = self.pos;
+        if byte == b'(' {
+            self.pos += 1;
+            Ok(Token::LeftParen)
+        } else if byte == b')' {
+            self.pos += 1;
+            Ok(Token::RightParen)
+        } else if byte == b',' {
+            self.pos += 1;
+            Ok(Token::Comma)
+        } else if byte.is_ascii_alphabetic() {
+            self.pos += 1;
+            while bytes.get(self.pos).is_some_and(u8::is_ascii_alphabetic) {
+                self.pos += 1;
+            }
+            let word = self.input[start..self.pos].to_ascii_uppercase();
+            if word == "EMPTY" {
+                Ok(Token::Empty)
+            } else {
+                Ok(Token::Ident(word))
+            }
+        } else if byte == b'+' || byte == b'-' || byte == b'.' || byte.is_ascii_digit() {
+            let negative = byte == b'-';
+            let mut all_digits = byte == b'+' || byte == b'-' || byte.is_ascii_digit();
+            let mut saw_digit = byte.is_ascii_digit();
+            let mut integer = if saw_digit { u64::from(byte - b'0') } else { 0 };
+            self.pos += 1;
+            while let Some(&byte) = bytes.get(self.pos) {
+                if byte.is_ascii_digit()
+                    || byte == b'.'
+                    || byte == b'+'
+                    || byte == b'-'
+                    || byte == b'e'
+                    || byte == b'E'
+                {
+                    if all_digits {
+                        if byte.is_ascii_digit() {
+                            saw_digit = true;
+                            match integer
+                                .checked_mul(10)
+                                .and_then(|value| value.checked_add(u64::from(byte - b'0')))
+                            {
+                                Some(next) => integer = next,
+                                None => all_digits = false,
+                            }
+                        } else {
+                            all_digits = false;
+                        }
+                    }
+                    self.pos += 1;
+                } else {
+                    break;
+                }
+            }
+            let slice = &self.input[start..self.pos];
+            let value = if all_digits && saw_digit {
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "integer-to-f64 uses the same IEEE-754 rounding as parsing its decimal spelling"
+                )]
+                let value = integer as f64;
+                if negative { -value } else { value }
+            } else {
+                slice
+                    .parse()
+                    .map_err(|_| WktError::InvalidNumber(slice.to_string()))?
+            };
+            Ok(Token::Number(value))
+        } else {
+            let ch = self.input[self.pos..]
+                .chars()
+                .next()
+                .expect("position is inside the input");
+            Err(WktError::UnexpectedChar { pos: self.pos, ch })
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn tokenize(input: &str) -> Result<Vec<Token>, WktError> {
+    let mut lexer = Lexer::new(input);
+    let mut tokens = Vec::new();
+    loop {
+        let token = lexer.next_token()?;
+        let done = token == Token::Eof;
+        tokens.push(token);
+        if done {
+            return Ok(tokens);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -262,6 +332,24 @@ mod tests {
     }
 
     #[test]
+    fn integral_fast_path_matches_standard_float_rounding() {
+        for literal in [
+            "0",
+            "-0",
+            "9007199254740993",
+            "18446744073709551615",
+            "-18446744073709551615",
+        ] {
+            let expected = literal.parse::<f64>().unwrap();
+            let tokens = tokenize(literal).unwrap();
+            let Token::Number(actual) = tokens[0] else {
+                panic!("expected number token");
+            };
+            assert_eq!(actual.to_bits(), expected.to_bits(), "literal {literal}");
+        }
+    }
+
+    #[test]
     fn malformed_char_reports_position() {
         let err = tokenize("POINT (1 @)").unwrap_err();
         assert_eq!(err, WktError::UnexpectedChar { pos: 9, ch: '@' });
@@ -271,5 +359,53 @@ mod tests {
     fn malformed_number_reports_slice() {
         let err = tokenize("1.2.3").unwrap_err();
         assert_eq!(err, WktError::InvalidNumber("1.2.3".into()));
+    }
+
+    /// Every `WktError` variant renders a distinct message through its
+    /// `Display` impl, embedding its payload.
+    #[test]
+    fn every_error_variant_displays_descriptively() {
+        use alloc::format;
+
+        assert_eq!(
+            format!("{}", WktError::UnexpectedChar { pos: 9, ch: '@' }),
+            "unexpected character '@' at byte 9"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                WktError::UnexpectedToken {
+                    expected: "'('",
+                    found: "Comma".into()
+                }
+            ),
+            "expected '(', found Comma"
+        );
+        assert_eq!(
+            format!("{}", WktError::UnexpectedEof),
+            "unexpected end of input"
+        );
+        assert_eq!(
+            format!("{}", WktError::InvalidNumber("1.2.3".into())),
+            "invalid number \"1.2.3\""
+        );
+        assert_eq!(
+            format!("{}", WktError::UnknownGeometryType("TRIANGLE".into())),
+            "unknown geometry type \"TRIANGLE\""
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                WktError::TypeMismatch {
+                    expected: "POINT",
+                    found: "LINESTRING"
+                }
+            ),
+            "type mismatch: expected POINT, found LINESTRING"
+        );
+        assert!(
+            format!("{}", WktError::NestingTooDeep).contains("nesting too deep"),
+            "nesting message"
+        );
     }
 }

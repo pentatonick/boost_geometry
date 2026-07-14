@@ -47,6 +47,13 @@ const WKB_MULTIPOLYGON: u32 = 6;
 /// OGC base type code for `GeometryCollection`.
 const WKB_GEOMETRYCOLLECTION: u32 = 7;
 
+/// Bytes in every WKB byte-order flag plus type header.
+const HEADER_LEN: usize = 5;
+/// Bytes in every WKB element count.
+const COUNT_LEN: usize = 4;
+/// Bytes in one 2D point body.
+const POINT_LEN: usize = 16;
+
 /// Serialise a geometry to an OGC Well-Known Binary byte vector in the
 /// caller-chosen [`ByteOrder`].
 ///
@@ -72,8 +79,28 @@ const WKB_GEOMETRYCOLLECTION: u32 = 7;
 /// ```
 #[must_use]
 pub fn to_wkb<G: Geometry + WriteWkb>(g: &G, order: ByteOrder) -> Vec<u8> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(g.wkb_len().unwrap_or(0));
     g.write_wkb(order, &mut out);
+    out
+}
+
+/// Serialise any polygon implementing [`PolygonTrait`] to OGC WKB.
+///
+/// This is the bring-your-own-type counterpart to [`to_wkb`]. It reads the
+/// polygon through the public geometry traits, including its interior rings,
+/// and writes a complete 2D Polygon record in the requested byte order.
+#[must_use]
+pub fn to_wkb_polygon<Pg>(polygon: &Pg, order: ByteOrder) -> Vec<u8>
+where
+    Pg: PolygonTrait,
+    Pg::Point: PointTrait<Scalar = f64>,
+{
+    let capacity = polygon_body_len(polygon)
+        .and_then(|body_len| HEADER_LEN.checked_add(body_len))
+        .unwrap_or(0);
+    let mut out = Vec::with_capacity(capacity);
+    write_header(WKB_POLYGON, order, &mut out);
+    write_polygon_body(polygon, order, &mut out);
     out
 }
 
@@ -86,9 +113,33 @@ pub fn to_wkb<G: Geometry + WriteWkb>(g: &G, order: ByteOrder) -> Vec<u8> {
 /// sibling WKT writer.
 #[doc(hidden)]
 pub trait WriteWkb {
+    /// Exact encoded length when it can be determined without writing.
+    ///
+    /// The default preserves support for external implementations while
+    /// built-in geometry models use the exact length to allocate once.
+    fn wkb_len(&self) -> Option<usize> {
+        None
+    }
+
     /// Append `self` as a complete WKB record (byte-order flag + type
     /// tag + body) to `out`, in the given [`ByteOrder`].
     fn write_wkb(&self, order: ByteOrder, out: &mut Vec<u8>);
+}
+
+fn point_run_len(point_count: usize) -> Option<usize> {
+    COUNT_LEN.checked_add(point_count.checked_mul(POINT_LEN)?)
+}
+
+fn polygon_body_len<Pg>(pg: &Pg) -> Option<usize>
+where
+    Pg: PolygonTrait,
+    Pg::Point: PointTrait<Scalar = f64>,
+{
+    let mut len = COUNT_LEN.checked_add(point_run_len(pg.exterior().points().len())?)?;
+    for ring in pg.interiors() {
+        len = len.checked_add(point_run_len(ring.points().len())?)?;
+    }
+    Some(len)
 }
 
 /// Append the one-byte endianness flag (OGC 06-103r4 §8.2.3).
@@ -108,15 +159,6 @@ fn write_u32(v: u32, order: ByteOrder, out: &mut Vec<u8>) {
     out.extend_from_slice(&b);
 }
 
-/// Append an `f64` in the given byte order.
-fn write_f64(v: f64, order: ByteOrder, out: &mut Vec<u8>) {
-    let b = match order {
-        ByteOrder::LittleEndian => v.to_le_bytes(),
-        ByteOrder::BigEndian => v.to_be_bytes(),
-    };
-    out.extend_from_slice(&b);
-}
-
 /// Append the record header: byte-order flag + 32-bit type tag.
 fn write_header(type_code: u32, order: ByteOrder, out: &mut Vec<u8>) {
     write_byte_order(order, out);
@@ -126,8 +168,24 @@ fn write_header(type_code: u32, order: ByteOrder, out: &mut Vec<u8>) {
 /// Append one point's first two ordinates as two `f64` (no header). This
 /// is a 2D writer, so only dimensions 0 and 1 are emitted.
 fn write_point_body<P: PointTrait<Scalar = f64>>(p: &P, order: ByteOrder, out: &mut Vec<u8>) {
-    write_f64(p.get::<0>(), order, out);
-    write_f64(p.get::<1>(), order, out);
+    match order {
+        ByteOrder::LittleEndian => write_point_body_le(p, out),
+        ByteOrder::BigEndian => write_point_body_be(p, out),
+    }
+}
+
+fn write_point_body_le<P: PointTrait<Scalar = f64>>(p: &P, out: &mut Vec<u8>) {
+    let mut bytes = [0; POINT_LEN];
+    bytes[..8].copy_from_slice(&p.get::<0>().to_le_bytes());
+    bytes[8..].copy_from_slice(&p.get::<1>().to_le_bytes());
+    out.extend_from_slice(&bytes);
+}
+
+fn write_point_body_be<P: PointTrait<Scalar = f64>>(p: &P, out: &mut Vec<u8>) {
+    let mut bytes = [0; POINT_LEN];
+    bytes[..8].copy_from_slice(&p.get::<0>().to_be_bytes());
+    bytes[8..].copy_from_slice(&p.get::<1>().to_be_bytes());
+    out.extend_from_slice(&bytes);
 }
 
 /// Append a `uint32` count followed by that many point bodies. Shared by
@@ -143,8 +201,17 @@ where
     )]
     let n = points.len() as u32;
     write_u32(n, order, out);
-    for p in points {
-        write_point_body(p, order, out);
+    match order {
+        ByteOrder::LittleEndian => {
+            for p in points {
+                write_point_body_le(p, out);
+            }
+        }
+        ByteOrder::BigEndian => {
+            for p in points {
+                write_point_body_be(p, out);
+            }
+        }
     }
 }
 
@@ -169,6 +236,10 @@ where
 }
 
 impl<Cs: CoordinateSystem> WriteWkb for Point<f64, 2, Cs> {
+    fn wkb_len(&self) -> Option<usize> {
+        Some(HEADER_LEN + POINT_LEN)
+    }
+
     fn write_wkb(&self, order: ByteOrder, out: &mut Vec<u8>) {
         write_header(WKB_POINT, order, out);
         write_point_body(self, order, out);
@@ -176,6 +247,10 @@ impl<Cs: CoordinateSystem> WriteWkb for Point<f64, 2, Cs> {
 }
 
 impl<P: PointTrait<Scalar = f64>> WriteWkb for Linestring<P> {
+    fn wkb_len(&self) -> Option<usize> {
+        HEADER_LEN.checked_add(point_run_len(self.points().len())?)
+    }
+
     fn write_wkb(&self, order: ByteOrder, out: &mut Vec<u8>) {
         write_header(WKB_LINESTRING, order, out);
         write_point_run(self.points(), order, out);
@@ -188,6 +263,12 @@ impl<P: PointTrait<Scalar = f64>> WriteWkb for Linestring<P> {
 // inference unambiguous at the call site, matching the sibling WKT
 // writer. A ring's serialisation does not depend on those flags.
 impl<P: PointTrait<Scalar = f64>> WriteWkb for Ring<P, true, true> {
+    fn wkb_len(&self) -> Option<usize> {
+        HEADER_LEN
+            .checked_add(COUNT_LEN)?
+            .checked_add(point_run_len(self.points().len())?)
+    }
+
     fn write_wkb(&self, order: ByteOrder, out: &mut Vec<u8>) {
         // A bare ring serialises as a single-ring polygon — WKB has no
         // standalone ring type code.
@@ -198,6 +279,10 @@ impl<P: PointTrait<Scalar = f64>> WriteWkb for Ring<P, true, true> {
 }
 
 impl<P: PointTrait<Scalar = f64>> WriteWkb for Polygon<P, true, true> {
+    fn wkb_len(&self) -> Option<usize> {
+        HEADER_LEN.checked_add(polygon_body_len(self)?)
+    }
+
     fn write_wkb(&self, order: ByteOrder, out: &mut Vec<u8>) {
         write_header(WKB_POLYGON, order, out);
         write_polygon_body(self, order, out);
@@ -205,6 +290,12 @@ impl<P: PointTrait<Scalar = f64>> WriteWkb for Polygon<P, true, true> {
 }
 
 impl<P: PointTrait<Scalar = f64>> WriteWkb for MultiPoint<P> {
+    fn wkb_len(&self) -> Option<usize> {
+        HEADER_LEN
+            .checked_add(COUNT_LEN)?
+            .checked_add(self.points().len().checked_mul(HEADER_LEN + POINT_LEN)?)
+    }
+
     fn write_wkb(&self, order: ByteOrder, out: &mut Vec<u8>) {
         write_header(WKB_MULTIPOINT, order, out);
         #[allow(
@@ -226,6 +317,16 @@ where
     L: LinestringTrait,
     L::Point: PointTrait<Scalar = f64>,
 {
+    fn wkb_len(&self) -> Option<usize> {
+        let mut len = HEADER_LEN.checked_add(COUNT_LEN)?;
+        for linestring in self.linestrings() {
+            len = len
+                .checked_add(HEADER_LEN)?
+                .checked_add(point_run_len(linestring.points().len())?)?;
+        }
+        Some(len)
+    }
+
     fn write_wkb(&self, order: ByteOrder, out: &mut Vec<u8>) {
         write_header(WKB_MULTILINESTRING, order, out);
         #[allow(
@@ -247,6 +348,16 @@ where
     Pg: PolygonTrait,
     Pg::Point: PointTrait<Scalar = f64>,
 {
+    fn wkb_len(&self) -> Option<usize> {
+        let mut len = HEADER_LEN.checked_add(COUNT_LEN)?;
+        for polygon in self.polygons() {
+            len = len
+                .checked_add(HEADER_LEN)?
+                .checked_add(polygon_body_len(polygon)?)?;
+        }
+        Some(len)
+    }
+
     fn write_wkb(&self, order: ByteOrder, out: &mut Vec<u8>) {
         write_header(WKB_MULTIPOLYGON, order, out);
         #[allow(
@@ -264,6 +375,47 @@ where
 }
 
 impl<Cs: CoordinateSystem> WriteWkb for DynGeometry<f64, Cs> {
+    fn wkb_len(&self) -> Option<usize> {
+        match self {
+            DynGeometry::Point(point) => point.wkb_len(),
+            DynGeometry::LineString(linestring) => linestring.wkb_len(),
+            DynGeometry::Polygon(polygon) => polygon.wkb_len(),
+            DynGeometry::MultiPoint(multipoint) => multipoint.wkb_len(),
+            DynGeometry::MultiLineString(multilinestring) => multilinestring.wkb_len(),
+            DynGeometry::MultiPolygon(multipolygon) => multipolygon.wkb_len(),
+            DynGeometry::GeometryCollection(items) => {
+                let mut len = HEADER_LEN.checked_add(COUNT_LEN)?;
+                let mut stack = Vec::with_capacity(items.len());
+                stack.extend(items);
+                while let Some(geometry) = stack.pop() {
+                    match geometry {
+                        DynGeometry::Point(point) => len = len.checked_add(point.wkb_len()?)?,
+                        DynGeometry::LineString(linestring) => {
+                            len = len.checked_add(linestring.wkb_len()?)?;
+                        }
+                        DynGeometry::Polygon(polygon) => {
+                            len = len.checked_add(polygon.wkb_len()?)?;
+                        }
+                        DynGeometry::MultiPoint(multipoint) => {
+                            len = len.checked_add(multipoint.wkb_len()?)?;
+                        }
+                        DynGeometry::MultiLineString(multilinestring) => {
+                            len = len.checked_add(multilinestring.wkb_len()?)?;
+                        }
+                        DynGeometry::MultiPolygon(multipolygon) => {
+                            len = len.checked_add(multipolygon.wkb_len()?)?;
+                        }
+                        DynGeometry::GeometryCollection(nested) => {
+                            len = len.checked_add(HEADER_LEN)?.checked_add(COUNT_LEN)?;
+                            stack.extend(nested);
+                        }
+                    }
+                }
+                Some(len)
+            }
+        }
+    }
+
     fn write_wkb(&self, order: ByteOrder, out: &mut Vec<u8>) {
         // Only the `GeometryCollection` arm nests; the leaf/multi arms
         // delegate to their own non-recursive writers. WKB is
@@ -359,5 +511,24 @@ mod tests {
         let bytes = to_wkb(&Pt::new(1.0, 2.0), ByteOrder::BigEndian);
         // 0x00 flag, then type 1 in big-endian.
         assert_eq!(&bytes[0..5], &[0x00, 0x00, 0x00, 0x00, 0x01]);
+    }
+
+    #[test]
+    fn trait_polygon_entry_point_matches_model_writer() {
+        let polygon = Polygon::with_inners(
+            Ring::from_vec(vec![
+                Pt::new(0.0, 0.0),
+                Pt::new(0.0, 2.0),
+                Pt::new(2.0, 2.0),
+                Pt::new(2.0, 0.0),
+                Pt::new(0.0, 0.0),
+            ]),
+            vec![],
+        );
+
+        assert_eq!(
+            to_wkb_polygon(&polygon, ByteOrder::LittleEndian),
+            to_wkb(&polygon, ByteOrder::LittleEndian)
+        );
     }
 }

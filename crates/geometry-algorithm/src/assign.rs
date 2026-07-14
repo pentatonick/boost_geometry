@@ -82,6 +82,17 @@ mod tests {
         assert_eq!(p.get::<2>(), 3.0);
     }
 
+    /// A 4-D point writes all four ordinates (the `dim > 3` arm).
+    #[test]
+    fn point4_round_trip() {
+        let mut p: geometry_model::Point<f64, 4, Cartesian> = geometry_model::Point::default();
+        assign_values(&mut p, &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(p.get::<0>(), 1.0);
+        assert_eq!(p.get::<1>(), 2.0);
+        assert_eq!(p.get::<2>(), 3.0);
+        assert_eq!(p.get::<3>(), 4.0);
+    }
+
     #[test]
     #[should_panic(expected = "assign_values: need at least 2")]
     fn too_few_values_panics() {

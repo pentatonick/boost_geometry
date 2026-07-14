@@ -82,7 +82,10 @@ mod tests {
     use super::clear;
     use crate::is_empty::is_empty;
     use geometry_cs::Cartesian;
-    use geometry_model::{Linestring, MultiPoint, Point2D, Polygon, linestring, polygon};
+    use geometry_model::{
+        Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D, Polygon, Ring, linestring,
+        polygon,
+    };
 
     type Pt = Point2D<f64, Cartesian>;
 
@@ -109,5 +112,36 @@ mod tests {
         let mut mp = MultiPoint(alloc::vec![Pt::new(0., 0.), Pt::new(1., 1.)]);
         clear(&mut mp);
         assert_eq!(mp.0.len(), 0);
+    }
+
+    #[test]
+    fn clear_ring() {
+        let mut r: Ring<Pt> = Ring::from_vec(alloc::vec![
+            Pt::new(0., 0.),
+            Pt::new(1., 0.),
+            Pt::new(1., 1.)
+        ]);
+        clear(&mut r);
+        assert!(is_empty(&r));
+    }
+
+    #[test]
+    fn clear_multi_linestring_drops_all_members() {
+        let mut mls: MultiLinestring<Linestring<Pt>> = MultiLinestring(alloc::vec![
+            linestring![(0., 0.), (1., 1.)],
+            linestring![(2., 2.), (3., 3.)],
+        ]);
+        clear(&mut mls);
+        assert_eq!(mls.0.len(), 0);
+        assert!(is_empty(&mls));
+    }
+
+    #[test]
+    fn clear_multi_polygon_drops_all_members() {
+        let member: Polygon<Pt> = polygon![[(0., 0.), (5., 0.), (5., 5.), (0., 0.)]];
+        let mut mpg: MultiPolygon<Polygon<Pt>> = MultiPolygon(alloc::vec![member.clone(), member]);
+        clear(&mut mpg);
+        assert_eq!(mpg.0.len(), 0);
+        assert!(is_empty(&mpg));
     }
 }

@@ -14,8 +14,8 @@ Where the C++ macro injects template specialisations in the
 The derive accepts an optional `#[geometry(...)]` attribute:
 
 ```text
-##[derive(Point)]
-##[geometry(cs = "Cartesian", scalar = "f64")]
+#[derive(Point)]
+#[geometry(cs = "Cartesian", scalar = "f64")]
 struct MyPoint { x: f64, y: f64 }
 ```
 

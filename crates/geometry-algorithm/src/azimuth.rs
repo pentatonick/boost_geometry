@@ -123,4 +123,54 @@ mod tests {
         let expected = 45.187_718_848_049_521_f64.to_radians();
         assert!((got - expected).abs() < 1e-9, "got {got}");
     }
+
+    /// Geographic bearing to a pole (`cos φ₂ == 0`): due north → 0,
+    /// due south → π (the pole branch of `andoyer_inverse.hpp`).
+    #[cfg(feature = "std")]
+    #[test]
+    fn geographic_destination_at_a_pole() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Geographic};
+
+        type Gg = WithCs<Adapt<[f64; 2]>, Geographic<Degree>>;
+        let gg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
+
+        let north = azimuth(&gg(10., 20.), &gg(10., 90.));
+        assert!(north.abs() < 1e-12, "got {north}");
+        let south = azimuth(&gg(10., 20.), &gg(10., -90.));
+        assert!((south - core::f64::consts::PI).abs() < 1e-12, "got {south}");
+    }
+
+    /// Geographic bearing *from* the north pole (`cos φ₁ == 0`): every
+    /// direction is south, azimuth π.
+    #[cfg(feature = "std")]
+    #[test]
+    fn geographic_start_at_north_pole_points_south() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Geographic};
+
+        type Gg = WithCs<Adapt<[f64; 2]>, Geographic<Degree>>;
+        let gg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
+
+        let got = azimuth(&gg(0., 90.), &gg(0., 0.));
+        assert!((got - core::f64::consts::PI).abs() < 1e-12, "got {got}");
+    }
+
+    /// A geographic pair straddling the ±180° antimeridian: the bearing
+    /// is (near) due east, not a trip most of the way around the globe.
+    #[cfg(feature = "std")]
+    #[test]
+    fn geographic_antimeridian_crossing_heads_east() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Geographic};
+
+        type Gg = WithCs<Adapt<[f64; 2]>, Geographic<Degree>>;
+        let gg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
+
+        let got = azimuth(&gg(179.5, 0.), &gg(-179.5, 0.));
+        assert!(
+            (got - core::f64::consts::FRAC_PI_2).abs() < 1e-6,
+            "got {got}"
+        );
+    }
 }

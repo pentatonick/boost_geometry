@@ -124,18 +124,26 @@ impl<'a> Cursor<'a> {
         self.bytes.len().saturating_sub(self.pos)
     }
 
-    /// Read the next `N` bytes as a fixed-size array, advancing the
-    /// cursor. Fails with [`WkbError::UnexpectedEof`] if fewer than `N`
-    /// bytes remain.
-    fn read_array<const N: usize>(&mut self) -> Result<[u8; N], WkbError> {
-        let end = self.pos.checked_add(N).ok_or(WkbError::UnexpectedEof)?;
+    /// Read `len` bytes as one borrowed slice, advancing the cursor.
+    /// Point runs use this to validate their complete fixed-width body
+    /// once instead of repeating a bounds check for every ordinate.
+    pub(crate) fn read_slice(&mut self, len: usize) -> Result<&'a [u8], WkbError> {
+        let end = self.pos.checked_add(len).ok_or(WkbError::UnexpectedEof)?;
         let slice = self
             .bytes
             .get(self.pos..end)
             .ok_or(WkbError::UnexpectedEof)?;
+        self.pos = end;
+        Ok(slice)
+    }
+
+    /// Read the next `N` bytes as a fixed-size array, advancing the
+    /// cursor. Fails with [`WkbError::UnexpectedEof`] if fewer than `N`
+    /// bytes remain.
+    fn read_array<const N: usize>(&mut self) -> Result<[u8; N], WkbError> {
+        let slice = self.read_slice(N)?;
         let mut buf = [0u8; N];
         buf.copy_from_slice(slice);
-        self.pos = end;
         Ok(buf)
     }
 
@@ -235,5 +243,49 @@ mod tests {
             .read_u32(ByteOrder::LittleEndian)
             .unwrap_err();
         assert_eq!(err, WkbError::UnexpectedEof);
+    }
+
+    /// Every `WkbError` variant renders a distinct, descriptive message
+    /// through its `Display` impl, including the embedded byte/type/code
+    /// values.
+    #[test]
+    fn every_error_variant_displays_descriptively() {
+        extern crate alloc;
+        use alloc::format;
+
+        assert_eq!(
+            format!("{}", WkbError::UnexpectedEof),
+            "unexpected end of WKB input"
+        );
+        assert_eq!(
+            format!("{}", WkbError::InvalidByteOrder(0x02)),
+            "invalid byte-order flag 0x02 (expected 0x00 or 0x01)"
+        );
+        assert_eq!(
+            format!("{}", WkbError::UnknownGeometryType(9)),
+            "unknown WKB geometry type 9"
+        );
+        assert!(
+            format!("{}", WkbError::UnsupportedDimension).contains("2D only"),
+            "dimension message"
+        );
+        assert_eq!(
+            format!("{}", WkbError::TrailingBytes),
+            "trailing bytes after WKB geometry"
+        );
+        assert!(
+            format!("{}", WkbError::NestingTooDeep).contains("nesting too deep"),
+            "nesting message"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                WkbError::MismatchedMemberType {
+                    expected: 1,
+                    found: 2
+                }
+            ),
+            "WKB multi-geometry member has type 2, expected 1"
+        );
     }
 }

@@ -192,5 +192,29 @@ mod tests {
         assert_eq!(ps.faces().len(), 4);
         let ring_lens: Vec<usize> = ps.faces().map(|f| f.exterior().points().count()).collect();
         assert_eq!(ring_lens, vec![5, 5, 5, 5]);
+
+        // Read each ordinate of the first face's first vertex through
+        // `Point::get`, and confirm every face reports zero interior
+        // rings (`interiors()` is empty for these quads).
+        let first_face = ps.faces().next().unwrap();
+        let v0 = first_face.exterior().points().next().unwrap();
+        assert_eq!(
+            (v0.get::<0>(), v0.get::<1>(), v0.get::<2>()),
+            (0.0, 0.0, 0.0)
+        );
+        for face in ps.faces() {
+            assert_eq!(face.interiors().count(), 0);
+        }
+    }
+
+    /// `Xyz` is a full `PointMut`: writing each ordinate through `set`
+    /// and reading it back through `get` round-trips.
+    #[test]
+    fn xyz_point_get_set_round_trips_every_ordinate() {
+        let mut p = Xyz(0.0, 0.0, 0.0);
+        p.set::<0>(1.0);
+        p.set::<1>(2.0);
+        p.set::<2>(3.0);
+        assert_eq!((p.get::<0>(), p.get::<1>(), p.get::<2>()), (1.0, 2.0, 3.0));
     }
 }

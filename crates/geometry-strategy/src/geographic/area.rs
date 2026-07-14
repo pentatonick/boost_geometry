@@ -224,4 +224,17 @@ mod tests {
             got / 1e6
         );
     }
+
+    /// `Default` for both strategies is WGS84.
+    #[test]
+    fn default_is_wgs84() {
+        assert_eq!(
+            GeographicArea::default().spheroid.equatorial_radius,
+            GeographicArea::WGS84.spheroid.equatorial_radius
+        );
+        assert_eq!(
+            GeographicPolygonArea::default().spheroid.equatorial_radius,
+            GeographicPolygonArea::WGS84.spheroid.equatorial_radius
+        );
+    }
 }

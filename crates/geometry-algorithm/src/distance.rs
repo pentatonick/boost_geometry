@@ -141,4 +141,112 @@ mod tests {
         assert_eq!(distance_with(&a, &b, Pythagoras), 5.0);
         assert_eq!(comparable_distance(&a, &b), 25.0);
     }
+
+    /// The 1D squared-difference walk: |7 − 2| = 5, squared = 25.
+    /// Exercises the `DIM == 1` dispatch arm of the Pythagoras kernel.
+    #[test]
+    fn one_dimensional_distance() {
+        type P1 = geometry_model::Point<f64, 1, Cartesian>;
+        let a = P1::new(2.0);
+        let b = P1::new(7.0);
+        assert!((distance(&a, &b) - 5.0).abs() < 1e-12);
+        assert!((comparable_distance(&a, &b) - 25.0).abs() < 1e-12);
+    }
+
+    /// The 4D walk (`MAX_DIM`): unit steps on each of four axes give
+    /// squared distance 4 and real distance 2. Exercises the `DIM == 4`
+    /// dispatch arm.
+    #[test]
+    fn four_dimensional_distance() {
+        use geometry_trait::PointMut as _;
+        type P4 = geometry_model::Point<f64, 4, Cartesian>;
+        let o = P4::default();
+        let mut p = P4::default();
+        p.set::<0>(1.0);
+        p.set::<1>(1.0);
+        p.set::<2>(1.0);
+        p.set::<3>(1.0);
+        assert!((comparable_distance(&o, &p) - 4.0).abs() < 1e-12);
+        assert!((distance(&o, &p) - 2.0).abs() < 1e-12);
+    }
+
+    /// A 3D point-to-segment distance exercises the `DIM == 3` dispatch
+    /// arms of the projected-point kernel. The point `(3, 4, 0)`
+    /// projects onto the z-axis segment `(0,0,0)-(0,0,10)` at the start
+    /// endpoint, so the distance is `sqrt(3² + 4²) = 5`.
+    #[test]
+    fn three_dimensional_point_to_segment() {
+        use geometry_model::{Point3D, Segment};
+        use geometry_strategy::PointToSegment;
+        type P3 = Point3D<f64, Cartesian>;
+        let p = P3::new(3.0, 4.0, 0.0);
+        let s = Segment::new(P3::new(0.0, 0.0, 0.0), P3::new(0.0, 0.0, 10.0));
+        let d = distance_with(&p, &s, PointToSegment::<Pythagoras>::default());
+        assert!((d - 5.0).abs() < 1e-12, "got {d}");
+    }
+
+    /// The north pole reached from two distinct longitudes is one
+    /// physical point (distance 0) for every geodesic strategy. The
+    /// differing longitudes bypass the coordinate-equality
+    /// short-circuit, so the in-formula degenerate guards report it.
+    #[cfg(feature = "std")]
+    #[test]
+    fn geodesic_coincident_poles_at_different_longitudes_are_zero() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Geographic};
+        use geometry_strategy::geographic::{Andoyer, Thomas, Vincenty};
+
+        type Gg = WithCs<Adapt<[f64; 2]>, Geographic<Degree>>;
+        let deg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
+
+        let a = deg(0.0, 90.0);
+        let b = deg(180.0, 90.0);
+        assert!(distance_with(&a, &b, Andoyer::WGS84).abs() < 1e-3);
+        assert!(distance_with(&a, &b, Thomas::WGS84).abs() < 1e-6);
+        assert!(distance_with(&a, &b, Vincenty::WGS84).abs() < 1e-3);
+    }
+
+    /// Thomas: a line whose *second* endpoint sits exactly on a pole
+    /// exercises the `lat2 == ±π/2` reduced-latitude short-circuit.
+    /// `(1, 80) → (0, 90)` ≈ 1116.825795 km.
+    #[cfg(feature = "std")]
+    #[test]
+    fn thomas_second_endpoint_at_pole() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Geographic};
+        use geometry_strategy::geographic::Thomas;
+
+        type Gg = WithCs<Adapt<[f64; 2]>, Geographic<Degree>>;
+        let deg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
+
+        let d = distance_with(&deg(1.0, 80.0), &deg(0.0, 90.0), Thomas::WGS84);
+        assert!(
+            (d / 1000.0 - 1_116.825_795).abs() < 0.012,
+            "{} km",
+            d / 1000.0
+        );
+    }
+
+    /// Vincenty: a pair straddling the antimeridian normalises Δλ into
+    /// `(-π, π]` in both directions; both describe the same 20°
+    /// equatorial arc (≈ 2 226 km on WGS84).
+    #[cfg(feature = "std")]
+    #[test]
+    fn vincenty_antimeridian_longitude_is_normalised_both_ways() {
+        use geometry_adapt::{Adapt, WithCs};
+        use geometry_cs::{Degree, Geographic};
+        use geometry_strategy::geographic::Vincenty;
+
+        type Gg = WithCs<Adapt<[f64; 2]>, Geographic<Degree>>;
+        let deg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
+
+        let east = distance_with(&deg(170.0, 0.0), &deg(-170.0, 0.0), Vincenty::WGS84);
+        let west = distance_with(&deg(-170.0, 0.0), &deg(170.0, 0.0), Vincenty::WGS84);
+        assert!((east - west).abs() < 1e-6, "{east} vs {west}");
+        assert!(
+            (east / 1000.0 - 2_226.0).abs() < 5.0,
+            "{} km",
+            east / 1000.0
+        );
+    }
 }

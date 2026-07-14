@@ -97,7 +97,7 @@ mod tests {
 
     use super::is_convex;
     use geometry_cs::Cartesian;
-    use geometry_model::{Point2D, Polygon, polygon};
+    use geometry_model::{MultiPolygon, Point2D, Polygon, Ring, polygon};
 
     type Pt = Point2D<f64, Cartesian>;
 
@@ -127,5 +127,51 @@ mod tests {
             [(1., 1.), (2., 1.), (2., 2.), (1., 2.), (1., 1.)],
         ];
         assert!(!is_convex(&pg));
+    }
+
+    /// A ring with fewer than 3 distinct vertices is trivially convex
+    /// (the `len < 3` guard).
+    #[test]
+    fn two_point_ring_is_trivially_convex() {
+        let r: Ring<Pt> = Ring::from_vec(alloc::vec![Pt::new(0., 0.), Pt::new(1., 0.)]);
+        assert!(is_convex(&r));
+    }
+
+    /// All vertices collinear: every cross-product is zero, no sign is
+    /// ever set, and the ring counts as convex (matches Boost, where
+    /// degenerate/collinear rings are not rejected as concave).
+    #[test]
+    fn collinear_ring_is_convex() {
+        let r: Ring<Pt> = Ring::from_vec(alloc::vec![
+            Pt::new(0., 0.),
+            Pt::new(1., 1.),
+            Pt::new(2., 2.)
+        ]);
+        assert!(is_convex(&r));
+    }
+
+    /// A convex (non-degenerate) `Ring` exercises the `Ring` impl's
+    /// positive path directly, not via `Polygon`.
+    #[test]
+    fn convex_ring_direct() {
+        let r: Ring<Pt> = Ring::from_vec(alloc::vec![
+            Pt::new(0., 0.),
+            Pt::new(4., 0.),
+            Pt::new(4., 4.),
+            Pt::new(0., 4.),
+        ]);
+        assert!(is_convex(&r));
+    }
+
+    /// `MultiPolygon` is convex iff *every* member is.
+    #[test]
+    fn multi_polygon_all_members_must_be_convex() {
+        let convex: Polygon<Pt> = polygon![[(0., 0.), (4., 0.), (2., 3.), (0., 0.)]];
+        let reflex: Polygon<Pt> =
+            polygon![[(0., 0.), (4., 0.), (2., 1.), (4., 4.), (0., 4.), (0., 0.)]];
+        let all_convex = MultiPolygon(alloc::vec![convex.clone(), convex.clone()]);
+        assert!(is_convex(&all_convex));
+        let mixed = MultiPolygon(alloc::vec![convex, reflex]);
+        assert!(!is_convex(&mixed));
     }
 }

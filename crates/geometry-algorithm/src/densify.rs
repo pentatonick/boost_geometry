@@ -82,6 +82,57 @@ mod tests {
         }
     }
 
+    /// An empty linestring densifies to empty; a single point copies
+    /// through; a zero-length segment gains no intermediate points.
+    #[test]
+    fn degenerate_inputs_copy_through() {
+        let empty: Linestring<Pt> = linestring![];
+        assert_eq!(num_points(&densify(&empty, 1.0)), 0);
+
+        let single: Linestring<Pt> = linestring![(3., 4.)];
+        let out = densify(&single, 1.0);
+        assert_eq!(num_points(&out), 1);
+
+        let zero_len: Linestring<Pt> = linestring![(0., 0.), (0., 0.)];
+        assert_eq!(num_points(&densify(&zero_len, 1.0)), 2);
+    }
+
+    /// A 3D linestring interpolates the third ordinate too (the `2 =>`
+    /// arms of the strategy's per-dimension blend).
+    #[test]
+    fn three_d_segment_interpolates_z() {
+        use geometry_model::Point3D;
+        type P3 = Point3D<f64, Cartesian>;
+        let ls: Linestring<P3> =
+            Linestring::from_vec(alloc::vec![P3::new(0., 0., 0.), P3::new(10., 0., 10.)]);
+        // len = √200 ≈ 14.14, max 5.1 → n = 2 intermediates at 1/3, 2/3.
+        let out = densify(&ls, 5.1);
+        let zs: alloc::vec::Vec<f64> = out.0.iter().map(geometry_trait::Point::get::<2>).collect();
+        assert_eq!(zs.len(), 4);
+        assert!((zs[1] - 10.0 / 3.0).abs() < 1e-9);
+        assert!((zs[2] - 20.0 / 3.0).abs() < 1e-9);
+    }
+
+    /// A 4D linestring interpolates the fourth ordinate (the `3 =>` arms).
+    #[test]
+    #[allow(clippy::float_cmp, reason = "midpoint ordinates are exact literals")]
+    fn four_d_segment_interpolates_all_ordinates() {
+        use geometry_model::Point;
+        use geometry_trait::{Point as _, PointMut as _};
+        type P4 = Point<f64, 4, Cartesian>;
+        let mut a = P4::default();
+        a.set::<3>(0.0);
+        let mut b = P4::default();
+        b.set::<0>(10.0);
+        b.set::<3>(4.0);
+        let ls: Linestring<P4> = Linestring::from_vec(alloc::vec![a, b]);
+        // len ≈ 10.77, max 6 → one intermediate at t = 0.5.
+        let out = densify(&ls, 6.0);
+        assert_eq!(num_points(&out), 3);
+        assert_eq!(out.0[1].get::<0>(), 5.0);
+        assert_eq!(out.0[1].get::<3>(), 2.0);
+    }
+
     #[test]
     #[should_panic(expected = "max_distance must be positive")]
     fn zero_max_distance_panics() {

@@ -12,9 +12,6 @@
 
 use core::iter::FusedIterator;
 
-#[cfg(test)]
-use alloc::vec::Vec;
-
 use crate::indexable::Indexable;
 use crate::node::Node;
 use crate::search_frontier::SearchFrontier;
@@ -52,10 +49,6 @@ pub struct NearestIter<
     #[cfg(test)]
     leaf_expansions: usize,
     #[cfg(test)]
-    node_pushes: usize,
-    #[cfg(test)]
-    value_pushes: usize,
-    #[cfg(test)]
     pending_nodes: usize,
     #[cfg(test)]
     pending_values: usize,
@@ -65,8 +58,6 @@ pub struct NearestIter<
     value_high_water: usize,
     #[cfg(test)]
     combined_high_water: usize,
-    #[cfg(test)]
-    yielded_by_leaf: Vec<usize>,
 }
 
 #[cfg(test)]
@@ -75,12 +66,6 @@ pub(crate) struct NearestMetrics {
     pub(crate) frontier: FrontierMetrics,
     pub(crate) branch_expansions: usize,
     pub(crate) leaf_expansions: usize,
-    pub(crate) node_pushes: usize,
-    pub(crate) value_pushes: usize,
-    pub(crate) node_pops: usize,
-    pub(crate) value_pops: usize,
-    pub(crate) contributing_leaves: usize,
-    pub(crate) max_yields_per_leaf: usize,
     pub(crate) node_high_water: usize,
     pub(crate) value_high_water: usize,
 }
@@ -93,8 +78,6 @@ impl<'a, T, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAPACITY: usiz
         nodes.push(DistanceEntry {
             dist: 0.0,
             item: root,
-            #[cfg(test)]
-            source_leaf: None,
         });
         Self {
             query,
@@ -105,10 +88,6 @@ impl<'a, T, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAPACITY: usiz
             #[cfg(test)]
             leaf_expansions: 0,
             #[cfg(test)]
-            node_pushes: 1,
-            #[cfg(test)]
-            value_pushes: 0,
-            #[cfg(test)]
             pending_nodes: 1,
             #[cfg(test)]
             pending_values: 0,
@@ -118,8 +97,6 @@ impl<'a, T, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAPACITY: usiz
             value_high_water: 0,
             #[cfg(test)]
             combined_high_water: 1,
-            #[cfg(test)]
-            yielded_by_leaf: Vec::new(),
         }
     }
 
@@ -135,24 +112,9 @@ impl<'a, T, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAPACITY: usiz
             },
             branch_expansions: self.branch_expansions,
             leaf_expansions: self.leaf_expansions,
-            node_pushes: self.node_pushes,
-            value_pushes: self.value_pushes,
-            node_pops: nodes.pops,
-            value_pops: values.pops,
-            contributing_leaves: self
-                .yielded_by_leaf
-                .iter()
-                .filter(|&&yielded| yielded != 0)
-                .count(),
-            max_yields_per_leaf: self.yielded_by_leaf.iter().copied().max().unwrap_or(0),
             node_high_water: self.node_high_water,
             value_high_water: self.value_high_water,
         }
-    }
-
-    #[cfg(test)]
-    fn yielded_by_leaf(&self) -> &[usize] {
-        &self.yielded_by_leaf
     }
 }
 
@@ -179,9 +141,6 @@ impl<'a, T: Indexable, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAP
                 #[cfg(test)]
                 {
                     self.pending_values -= 1;
-                    self.yielded_by_leaf[value
-                        .source_leaf
-                        .expect("only value entries enter the value frontier")] += 1;
                 }
                 return Some(value.item);
             }
@@ -190,24 +149,19 @@ impl<'a, T: Indexable, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAP
             match node.item {
                 Node::Leaf(values) => {
                     #[cfg(test)]
-                    let source_leaf = {
+                    {
                         self.pending_nodes -= 1;
                         self.leaf_expansions += 1;
-                        self.value_pushes += values.len();
                         self.pending_values += values.len();
                         self.value_high_water = self.value_high_water.max(self.pending_values);
                         self.combined_high_water = self
                             .combined_high_water
                             .max(self.pending_nodes + self.pending_values);
-                        self.yielded_by_leaf.push(0);
-                        self.yielded_by_leaf.len() - 1
-                    };
+                    }
                     let query = self.query;
                     self.values.extend(values.iter().map(|value| DistanceEntry {
                         dist: value.bounds().comparable_min_distance_to(query),
                         item: value,
-                        #[cfg(test)]
-                        source_leaf: Some(source_leaf),
                     }));
                 }
                 Node::Branch(children) => {
@@ -215,7 +169,6 @@ impl<'a, T: Indexable, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAP
                     {
                         self.pending_nodes -= 1;
                         self.branch_expansions += 1;
-                        self.node_pushes += children.len();
                         self.pending_nodes += children.len();
                         self.node_high_water = self.node_high_water.max(self.pending_nodes);
                         self.combined_high_water = self
@@ -227,8 +180,6 @@ impl<'a, T: Indexable, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAP
                         .extend(children.iter().map(|(bounds, child)| DistanceEntry {
                             dist: bounds.comparable_min_distance_to(query),
                             item: child,
-                            #[cfg(test)]
-                            source_leaf: None,
                         }));
                 }
             }
@@ -245,8 +196,6 @@ impl<T: Indexable, const NODE_INLINE_CAPACITY: usize, const VALUE_INLINE_CAPACIT
 struct DistanceEntry<'a, T> {
     dist: f64,
     item: &'a T,
-    #[cfg(test)]
-    source_leaf: Option<usize>,
 }
 
 impl<T> DistanceEntry<'_, T> {
@@ -282,9 +231,6 @@ mod tests {
     use super::{DEFAULT_NODE_INLINE_CAPACITY, DEFAULT_VALUE_INLINE_CAPACITY, NearestMetrics};
     use crate::{AsymmetricQuadratic, AsymmetricRStarSplit, Bounds, Rtree, SplitParameters};
     use core::mem::size_of;
-    use rstar::primitives::GeomWithData;
-    use rstar::{ParentNode, PointDistance, RTree, RTreeNode};
-    use std::collections::BinaryHeap;
 
     const FIELD: f64 = 50_000.0;
     const CLUSTER_COUNT: usize = 16;
@@ -292,93 +238,6 @@ mod tests {
     const N: usize = 50_000;
     const Q: usize = 100;
     const K: usize = 8;
-
-    type RstarValue = GeomWithData<[f64; 2], u32>;
-
-    struct RstarEntry<'a> {
-        node: &'a RTreeNode<RstarValue>,
-        dist: f64,
-    }
-
-    impl PartialEq for RstarEntry<'_> {
-        fn eq(&self, other: &Self) -> bool {
-            self.dist.total_cmp(&other.dist).is_eq()
-        }
-    }
-
-    impl Eq for RstarEntry<'_> {}
-
-    impl PartialOrd for RstarEntry<'_> {
-        fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    impl Ord for RstarEntry<'_> {
-        fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-            other.dist.total_cmp(&self.dist)
-        }
-    }
-
-    #[derive(Default)]
-    struct RstarMetrics {
-        pushes: usize,
-        parent_pushes: usize,
-        leaf_pushes: usize,
-        pops: usize,
-        parent_expansions: usize,
-        leaf_parent_expansions: usize,
-        leaf_yields: usize,
-        high_water: usize,
-    }
-
-    fn extend_rstar<'a>(
-        parent: &'a ParentNode<RstarValue>,
-        query: &[f64; 2],
-        heap: &mut BinaryHeap<RstarEntry<'a>>,
-        metrics: &mut RstarMetrics,
-    ) {
-        for node in parent.children() {
-            match node {
-                RTreeNode::Parent(_) => metrics.parent_pushes += 1,
-                RTreeNode::Leaf(_) => metrics.leaf_pushes += 1,
-            }
-        }
-        heap.extend(parent.children().iter().map(|node| {
-            let dist = match node {
-                RTreeNode::Parent(parent) => parent.envelope().distance_2(query),
-                RTreeNode::Leaf(value) => value.distance_2(query),
-            };
-            RstarEntry { node, dist }
-        }));
-        metrics.pushes += parent.children().len();
-        metrics.high_water = metrics.high_water.max(heap.len());
-    }
-
-    fn measure_rstar(tree: &RTree<RstarValue>, query: [f64; 2]) -> RstarMetrics {
-        let mut metrics = RstarMetrics::default();
-        let mut heap = BinaryHeap::new();
-        extend_rstar(tree.root(), &query, &mut heap, &mut metrics);
-        while metrics.leaf_yields < K {
-            let current = heap.pop().expect("fixture tree contains K values");
-            metrics.pops += 1;
-            match current.node {
-                RTreeNode::Parent(parent) => {
-                    metrics.parent_expansions += 1;
-                    if parent
-                        .children()
-                        .first()
-                        .is_some_and(|child| matches!(child, RTreeNode::Leaf(_)))
-                    {
-                        metrics.leaf_parent_expansions += 1;
-                    }
-                    extend_rstar(parent, &query, &mut heap, &mut metrics);
-                }
-                RTreeNode::Leaf(_) => metrics.leaf_yields += 1,
-            }
-        }
-        metrics
-    }
 
     struct Lcg {
         state: u64,
@@ -530,94 +389,6 @@ mod tests {
             ("branch8_leaf32", default),
         ] {
             eprintln!("[rtree-leaf-fanout] config={name} observed={observed:?}");
-        }
-    }
-
-    #[test]
-    fn records_rstar_iterator_shape_comparison() {
-        for (distribution, points) in [("uniform", uniform(N)), ("clustered", clustered(N))] {
-            let boost: Rtree<(Bounds, u32), AsymmetricRStarSplit<8, 3, 32, 9>> = points
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(i, point)| (Bounds::point(point), u32::try_from(i).expect("N fits u32")))
-                .collect();
-            let rstar = RTree::bulk_load(
-                points
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, point)| {
-                        GeomWithData::new(point, u32::try_from(i).expect("N fits u32"))
-                    })
-                    .collect(),
-            );
-
-            let mut boost_pushes = 0;
-            let mut boost_pops = 0;
-            let mut boost_branches = 0;
-            let mut boost_leaves = 0;
-            let mut boost_node_pushes = 0;
-            let mut boost_value_pushes = 0;
-            let mut boost_node_pops = 0;
-            let mut boost_value_pops = 0;
-            let mut boost_contributing_leaves = 0;
-            let mut boost_max_yields_per_leaf = 0;
-            let mut boost_leaf_yield_histogram = [0usize; K + 1];
-            let mut boost_leaf_expansions_per_query = Vec::with_capacity(Q);
-            let mut boost_node_high_water = 0;
-            let mut boost_value_high_water = 0;
-            let mut rstar_pushes = 0;
-            let mut rstar_parent_pushes = 0;
-            let mut rstar_leaf_pushes = 0;
-            let mut rstar_pops = 0;
-            let mut rstar_parents = 0;
-            let mut rstar_leaf_parents = 0;
-            let mut rstar_high_water = 0;
-
-            for query in queries(Q) {
-                let mut nearest = boost.nearest_iter(query);
-                assert_eq!(nearest.by_ref().take(K).count(), K);
-                let metrics = nearest.metrics();
-                boost_pushes += metrics.frontier.pushes;
-                boost_pops += metrics.frontier.pops;
-                boost_branches += metrics.branch_expansions;
-                boost_leaves += metrics.leaf_expansions;
-                boost_node_pushes += metrics.node_pushes;
-                boost_value_pushes += metrics.value_pushes;
-                boost_node_pops += metrics.node_pops;
-                boost_value_pops += metrics.value_pops;
-                boost_contributing_leaves += metrics.contributing_leaves;
-                boost_max_yields_per_leaf =
-                    boost_max_yields_per_leaf.max(metrics.max_yields_per_leaf);
-                boost_leaf_expansions_per_query.push(metrics.leaf_expansions);
-                for &yielded in nearest.yielded_by_leaf() {
-                    boost_leaf_yield_histogram[yielded] += 1;
-                }
-                boost_node_high_water = boost_node_high_water.max(metrics.node_high_water);
-                boost_value_high_water = boost_value_high_water.max(metrics.value_high_water);
-
-                let metrics = measure_rstar(&rstar, query);
-                assert_eq!(metrics.leaf_yields, K);
-                rstar_pushes += metrics.pushes;
-                rstar_parent_pushes += metrics.parent_pushes;
-                rstar_leaf_pushes += metrics.leaf_pushes;
-                rstar_pops += metrics.pops;
-                rstar_parents += metrics.parent_expansions;
-                rstar_leaf_parents += metrics.leaf_parent_expansions;
-                rstar_high_water = rstar_high_water.max(metrics.high_water);
-            }
-
-            boost_leaf_expansions_per_query.sort_unstable();
-            eprintln!(
-                "[rtree-leaf-release] distribution={distribution} expected_yields={} observed_value_pushes={boost_value_pushes} observed_value_pops={boost_value_pops} observed_leaf_expansions={boost_leaves} observed_leaf_expansions_p50={} observed_leaf_expansions_p95={} observed_leaf_expansions_max={} observed_contributing_leaves={boost_contributing_leaves} observed_max_yields_per_leaf={boost_max_yields_per_leaf} observed_leaf_yield_histogram={boost_leaf_yield_histogram:?}",
-                Q * K,
-                boost_leaf_expansions_per_query[Q / 2],
-                boost_leaf_expansions_per_query[Q * 95 / 100],
-                boost_leaf_expansions_per_query[Q - 1],
-            );
-            eprintln!(
-                "[rtree-rstar-iterator-shape] distribution={distribution} boost_pushes={boost_pushes} boost_pops={boost_pops} boost_branches={boost_branches} boost_leaves={boost_leaves} boost_node_pushes={boost_node_pushes} boost_value_pushes={boost_value_pushes} boost_node_pops={boost_node_pops} boost_value_pops={boost_value_pops} boost_node_high_water={boost_node_high_water} boost_value_high_water={boost_value_high_water} rstar_pushes={rstar_pushes} rstar_parent_pushes={rstar_parent_pushes} rstar_leaf_pushes={rstar_leaf_pushes} rstar_pops={rstar_pops} rstar_parents={rstar_parents} rstar_leaf_parents={rstar_leaf_parents} rstar_high_water={rstar_high_water}"
-            );
         }
     }
 

@@ -90,6 +90,14 @@ mod tests {
     }
 
     #[test]
+    fn append_to_ring_grows_by_one() {
+        let mut r: geometry_model::Ring<Pt> =
+            geometry_model::Ring::from_vec(vec![Pt::new(0., 0.), Pt::new(4., 0.)]);
+        append(&mut r, Pt::new(4., 3.));
+        assert_eq!(r.points().count(), 3);
+    }
+
+    #[test]
     fn append_to_polygon_outer() {
         let mut pg: Polygon<Pt> = polygon![[(0., 0.), (4., 0.), (4., 3.)]];
         append_to_ring(&mut pg, Pt::new(0., 3.), None);
