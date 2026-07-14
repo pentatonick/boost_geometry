@@ -25,20 +25,7 @@ geometry-algorithm = { version = "0.0.6", path = "../geometry-algorithm" }
 heapless           = "0.8"
 
 [dev-dependencies]
-rstar         = "0.12.2"
-iai-callgrind = "0.14"
-
-[[bench]]
-name = "parity_iai"
-harness = false
-
-[[bench]]
-name = "knn_capacity_iai"
-harness = false
-
-[[bench]]
-name = "bulk_layout_iai"
-harness = false
+rstar = "0.12.2"
 
 # Workspace lints, except `unsafe_code` steps down from `forbid` to
 # `deny`: a Cargo-level forbid is a CLI lint that no source attribute
