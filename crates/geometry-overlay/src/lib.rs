@@ -42,9 +42,12 @@ pub mod traverse;
 pub mod turn;
 pub mod validity;
 
-pub use buffer::{JoinStrategy, PointStrategy, buffer_convex_polygon, buffer_point};
-pub use merge::{merge_multipolygon, merge_polygons};
-pub use operation::{OverlayError, difference, intersection, sym_difference, union_poly};
-pub use relate::{De9im, Dimension, crosses, overlaps, relate as relate_matrix, touches};
+pub use buffer::{JoinStrategy, PointStrategy, buffer, buffer_convex_polygon, buffer_point};
+pub use merge::{merge_elements, merge_multipolygon, merge_polygons};
+pub use operation::{OverlayError, difference, intersection, sym_difference, r#union, union_poly};
+pub use relate::{
+    De9im, Dimension, RelateError, crosses, overlaps, relate as relate_matrix, relate as relation,
+    relate_mask as relate, touches,
+};
 pub use surface_point::point_on_surface;
-pub use validity::{ValidityFailure, is_valid_polygon, is_valid_ring};
+pub use validity::{ValidityFailure, is_valid, is_valid_polygon, is_valid_ring};

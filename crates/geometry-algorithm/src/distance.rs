@@ -98,6 +98,7 @@ where
 /// [`DistanceStrategy::Comparable`], the Rust analogue of Boost's
 /// `boost::geometry::strategy::distance::services::comparable_type<…>::type`.
 #[inline]
+#[must_use]
 pub fn comparable_distance<A, B>(
     a: &A,
     b: &B,
@@ -114,6 +115,28 @@ where
     DefaultDistanceStrategy::<A, B>::default()
         .comparable()
         .distance(a, b)
+}
+
+/// Comparable distance using an explicitly supplied strategy.
+///
+/// Mirrors the strategy overload of `boost::geometry::comparable_distance`
+/// from `boost/geometry/algorithms/detail/comparable_distance/interface.hpp:226-254`.
+/// The supplied
+/// strategy is converted through [`DistanceStrategy::comparable`] before the
+/// distance is evaluated.
+#[inline]
+#[must_use]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "distance strategies are zero-sized or small Copy values and match distance_with's public call shape"
+)]
+pub fn comparable_distance_with<A, B, S>(a: &A, b: &B, strategy: S) -> S::Out
+where
+    A: Geometry,
+    B: Geometry,
+    S: DistanceStrategy<A, B>,
+{
+    strategy.comparable().distance(a, b)
 }
 
 #[cfg(test)]

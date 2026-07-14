@@ -205,6 +205,15 @@ pub trait DefaultLength<Family> {
     type Strategy: Default;
 }
 
+/// "Which perimeter strategy do we pick by default for this CS family?"
+///
+/// Mirrors the default-strategy resolution used by
+/// `boost::geometry::perimeter` in `algorithms/perimeter.hpp:115-159`.
+pub trait DefaultPerimeter<Family> {
+    /// The perimeter strategy chosen for this family.
+    type Strategy: Default;
+}
+
 /// Cartesian family defaults to [`CartesianLength`].
 ///
 /// Mirrors the `services::default_strategy<Geometry, cartesian_tag>`
@@ -229,6 +238,27 @@ impl DefaultLength<GeographicFamily> for GeographicFamily {
     type Strategy = crate::geographic::GeographicLength;
 }
 
+/// Selects Boost's Cartesian length strategy for perimeter dispatch.
+///
+/// Mirrors `strategies/length/cartesian.hpp:42-49`.
+impl DefaultPerimeter<CartesianFamily> for CartesianFamily {
+    type Strategy = CartesianPerimeter;
+}
+
+/// Selects Boost's spherical length strategy for perimeter dispatch.
+///
+/// Mirrors `strategies/length/spherical.hpp:57-64`.
+impl DefaultPerimeter<SphericalFamily> for SphericalFamily {
+    type Strategy = crate::spherical::SphericalPerimeter;
+}
+
+/// Selects Boost's geographic length strategy for perimeter dispatch.
+///
+/// Mirrors `strategies/length/geographic.hpp:61-68`.
+impl DefaultPerimeter<GeographicFamily> for GeographicFamily {
+    type Strategy = crate::geographic::GeographicPerimeter;
+}
+
 /// Type alias resolving the default length strategy for geometry `G`
 /// by walking `G -> G::Point -> Cs -> Family -> DefaultLength::Strategy`.
 ///
@@ -237,6 +267,15 @@ impl DefaultLength<GeographicFamily> for GeographicFamily {
 /// monomorphises against this at the call site.
 pub type DefaultLengthStrategy<G> =
     <<<<G as Geometry>::Point as Point>::Cs as CoordinateSystem>::Family as DefaultLength<
+        <<<G as Geometry>::Point as Point>::Cs as CoordinateSystem>::Family,
+    >>::Strategy;
+
+/// Default perimeter strategy for the coordinate-system family of `G`.
+///
+/// Mirrors the default-strategy projection in
+/// `algorithms/perimeter.hpp:145-158`.
+pub type DefaultPerimeterStrategy<G> =
+    <<<<G as Geometry>::Point as Point>::Cs as CoordinateSystem>::Family as DefaultPerimeter<
         <<<G as Geometry>::Point as Point>::Cs as CoordinateSystem>::Family,
     >>::Strategy;
 

@@ -21,12 +21,12 @@ functions (`intersection`, `union`, `difference`, `sym_difference`), plus
 | `turn` (+ `info`, `get_turns`, `classify`) | OVL2 | The turn graph — where two boundaries meet, and what to do there |
 | `traverse` (+ `enrich`, `state`) | OVL3 | Weiler–Atherton-style ring traversal — walk the turn graph, assemble output rings |
 | `assemble` | OVL4 | Nest traversed rings into `Polygon`/`MultiPolygon` by containment |
-| `operation` | OVL5 | `intersection`, `union_poly`, `difference`, `sym_difference`, `OverlayError` |
-| `relate` | OVL6 | `De9im` matrix, `crosses`/`overlaps`/`touches`, `Dimension` |
-| `validity` | OVL6 | `is_valid_ring`/`is_valid_polygon`, `ValidityFailure` |
+| `operation` | OVL5 | `intersection`, `r#union` (`union_poly` compatibility name), `difference`, `sym_difference`, `OverlayError` |
+| `relate` | OVL6 | `relation` matrix, `relate` mask, `De9im`, `crosses`/`overlaps`/`touches`, `Dimension` |
+| `validity` | OVL6 | generic `is_valid`, `is_valid_ring`/`is_valid_polygon`, `ValidityFailure` |
 | `surface_point` | — | `point_on_surface` — a representative interior point, used by `assemble` and `relate` |
-| `buffer` | OVL7 | `buffer_point`, `buffer_convex_polygon`, `JoinStrategy`, `PointStrategy` |
-| `merge` | — | `merge_polygons`, `merge_multipolygon` |
+| `buffer` | OVL7 | generic `buffer`, `buffer_point`, `buffer_convex_polygon`, `JoinStrategy`, `PointStrategy` |
+| `merge` | — | `merge_elements`, `merge_polygons`, `merge_multipolygon` |
 
 ## Robustness policy
 

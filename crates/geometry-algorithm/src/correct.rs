@@ -21,9 +21,14 @@
 
 use geometry_coords::CoordinateScalar;
 use geometry_cs::CoordinateSystem;
-use geometry_model::{MultiPolygon, Polygon, Ring};
+use geometry_model::{
+    Box as ModelBox, DynGeometry, DynGeometryCollection, Linestring, MultiLinestring, MultiPoint,
+    MultiPolygon, Point as ModelPoint, Polygon, Ring, Segment,
+};
 use geometry_strategy::{AreaStrategy, ShoelaceArea};
-use geometry_trait::{Closure, Point as PointTrait, Ring as RingTrait};
+use geometry_trait::{
+    Closure, Linestring as LinestringTrait, Point as PointTrait, Ring as RingTrait,
+};
 
 /// Fix closure and orientation of `g` in place.
 ///
@@ -33,10 +38,31 @@ pub fn correct<G: Correct>(g: &mut G) {
     g.correct();
 }
 
+/// Fix only ring closure, leaving orientation unchanged.
+///
+/// Mirrors `boost::geometry::correct_closure(g)` from
+/// `boost/geometry/algorithms/correct_closure.hpp:211-224`. Closed rings
+/// gain a copy of their first point when needed; open rings lose a
+/// duplicated closing point. Polygons apply the same rule to their exterior
+/// and interior rings, and multi-polygons apply it to every member.
+#[inline]
+pub fn correct_closure<G: CorrectClosure>(g: &mut G) {
+    g.correct_closure();
+}
+
 /// Per-kind correction dispatch.
 #[doc(hidden)]
 pub trait Correct {
     fn correct(&mut self);
+}
+
+/// Per-kind closure-correction dispatch.
+///
+/// Mirrors the tag-specialized `dispatch::correct_closure` family from
+/// `algorithms/correct_closure.hpp:102-160`.
+#[doc(hidden)]
+pub trait CorrectClosure {
+    fn correct_closure(&mut self);
 }
 
 /// Add or drop the closing vertex so the stored point sequence matches
@@ -115,6 +141,17 @@ where
     }
 }
 
+/// Mirrors the ring-tag closure arm at
+/// `algorithms/correct_closure.hpp:131-134`.
+impl<P, const CW: bool, const CL: bool> CorrectClosure for Ring<P, CW, CL>
+where
+    P: PointTrait + Copy,
+{
+    fn correct_closure(&mut self) {
+        fix_closure(self);
+    }
+}
+
 impl<P, const CW: bool, const CL: bool> Correct for Polygon<P, CW, CL>
 where
     P: PointTrait + Copy,
@@ -137,10 +174,112 @@ where
     }
 }
 
+/// Mirrors the polygon-tag closure arm at
+/// `algorithms/correct_closure.hpp:136-139`.
+impl<P, const CW: bool, const CL: bool> CorrectClosure for Polygon<P, CW, CL>
+where
+    P: PointTrait + Copy,
+{
+    fn correct_closure(&mut self) {
+        fix_closure(&mut self.outer);
+        for inner in &mut self.inners {
+            fix_closure(inner);
+        }
+    }
+}
+
 impl<Pg: Correct + geometry_trait::Polygon> Correct for MultiPolygon<Pg> {
     fn correct(&mut self) {
         for p in &mut self.0 {
             p.correct();
+        }
+    }
+}
+
+/// Mirrors the multi-polygon closure arm at
+/// `algorithms/correct_closure.hpp:154-160`.
+impl<Pg> CorrectClosure for MultiPolygon<Pg>
+where
+    Pg: CorrectClosure + geometry_trait::Polygon,
+{
+    fn correct_closure(&mut self) {
+        for polygon in &mut self.0 {
+            polygon.correct_closure();
+        }
+    }
+}
+
+/// Mirrors the no-op point arm at `algorithms/correct_closure.hpp:110-113`.
+impl<T, const D: usize, Cs> CorrectClosure for ModelPoint<T, D, Cs>
+where
+    T: CoordinateScalar,
+    Cs: CoordinateSystem,
+{
+    fn correct_closure(&mut self) {}
+}
+
+/// Mirrors the no-op linestring arm at
+/// `algorithms/correct_closure.hpp:115-118`.
+impl<P: PointTrait> CorrectClosure for Linestring<P> {
+    fn correct_closure(&mut self) {}
+}
+
+/// Mirrors the no-op segment arm at `algorithms/correct_closure.hpp:120-123`.
+impl<P: PointTrait> CorrectClosure for Segment<P> {
+    fn correct_closure(&mut self) {}
+}
+
+/// Mirrors the no-op box arm at `algorithms/correct_closure.hpp:126-129`.
+impl<P: PointTrait> CorrectClosure for ModelBox<P> {
+    fn correct_closure(&mut self) {}
+}
+
+/// Mirrors the no-op multi-point arm at
+/// `algorithms/correct_closure.hpp:142-145`.
+impl<P: PointTrait> CorrectClosure for MultiPoint<P> {
+    fn correct_closure(&mut self) {}
+}
+
+/// Mirrors the no-op multi-linestring arm at
+/// `algorithms/correct_closure.hpp:148-151`.
+impl<L: LinestringTrait> CorrectClosure for MultiLinestring<L> {
+    fn correct_closure(&mut self) {}
+}
+
+/// Mirrors Boost's dynamic-geometry visitor at
+/// `algorithms/correct_closure.hpp:180-189`.
+impl<T, Cs> CorrectClosure for DynGeometry<T, Cs>
+where
+    T: CoordinateScalar,
+    Cs: CoordinateSystem + Copy,
+{
+    fn correct_closure(&mut self) {
+        match self {
+            DynGeometry::Point(_)
+            | DynGeometry::LineString(_)
+            | DynGeometry::MultiPoint(_)
+            | DynGeometry::MultiLineString(_) => {}
+            DynGeometry::Polygon(polygon) => polygon.correct_closure(),
+            DynGeometry::MultiPolygon(multi_polygon) => multi_polygon.correct_closure(),
+            DynGeometry::GeometryCollection(geometries) => {
+                for geometry in geometries {
+                    geometry.correct_closure();
+                }
+            }
+        }
+    }
+}
+
+/// Mirrors Boost's breadth-first geometry-collection visitor at
+/// `algorithms/correct_closure.hpp:192-203`.
+impl<T, Cs> CorrectClosure for DynGeometryCollection<T, Cs>
+where
+    T: CoordinateScalar,
+    Cs: CoordinateSystem + Copy,
+{
+    fn correct_closure(&mut self) {
+        for geometry in &mut self.0 {
+            geometry.correct_closure();
         }
     }
 }

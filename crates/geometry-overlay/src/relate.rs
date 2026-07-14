@@ -98,6 +98,65 @@ impl De9im {
     pub fn exterior_interior(&self) -> Dimension {
         self.m[feature::EXTERIOR][feature::INTERIOR]
     }
+
+    /// Test this matrix against a nine-character DE-9IM mask.
+    ///
+    /// Mirrors Boost's `de9im::mask` matching from
+    /// `algorithms/detail/relate/result.hpp:425-505`: `*` accepts any cell, `T`
+    /// accepts any non-empty cell, `F` accepts an empty cell, and `0`/`1`/`2`
+    /// require an exact point/curve/area dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelateError::InvalidMask`] unless `mask` contains exactly
+    /// nine valid ASCII mask characters.
+    pub fn matches(&self, mask: &str) -> Result<bool, RelateError> {
+        let bytes = mask.as_bytes();
+        if bytes.len() != 9
+            || !bytes
+                .iter()
+                .all(|byte| matches!(byte, b'*' | b'T' | b'F' | b'0' | b'1' | b'2'))
+        {
+            return Err(RelateError::InvalidMask);
+        }
+
+        Ok(self
+            .m
+            .iter()
+            .flatten()
+            .zip(bytes)
+            .all(|(dimension, expected)| match expected {
+                b'*' => true,
+                b'T' => dimension.is_set(),
+                b'F' => *dimension == Dimension::Empty,
+                b'0' => *dimension == Dimension::Point,
+                b'1' => *dimension == Dimension::Curve,
+                b'2' => *dimension == Dimension::Area,
+                _ => false,
+            }))
+    }
+}
+
+/// Failure while evaluating a DE-9IM relate mask.
+///
+/// Rust error adaptation for `boost::geometry::relate(g1, g2, mask)` from
+/// `algorithms/detail/relate/interface.hpp:347-382`; Boost reports a boolean,
+/// while this port preserves unsupported-kernel and malformed-mask failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelateError {
+    /// The relation matrix could not be computed for the supplied geometry
+    /// pair.
+    Overlay(OverlayError),
+    /// The mask was not exactly nine characters drawn from `*TF012`.
+    InvalidMask,
+}
+
+/// Converts the overlay failure into the Rust relate-error adaptation for
+/// `algorithms/detail/relate/interface.hpp:347-382`.
+impl From<OverlayError> for RelateError {
+    fn from(error: OverlayError) -> Self {
+        Self::Overlay(error)
+    }
 }
 
 /// Compute the DE-9IM matrix relating two polygons.
@@ -218,6 +277,30 @@ where
     m[feature::EXTERIOR][feature::EXTERIOR] = Dimension::Area;
 
     Ok(De9im { m })
+}
+
+/// Test whether two polygons satisfy a DE-9IM mask.
+///
+/// Mirrors `boost::geometry::relate(g1, g2, mask)` from
+/// `boost/geometry/algorithms/detail/relate/interface.hpp:347-382`. Use the
+/// crate-root `relation(g1, g2)` entry to obtain the matrix itself, matching
+/// `boost::geometry::relation` from `algorithms/relation.hpp`.
+///
+/// # Errors
+///
+/// Returns [`RelateError::Overlay`] when the areal relation is unsupported,
+/// or [`RelateError::InvalidMask`] for a malformed mask.
+#[inline]
+#[must_use = "relate can fail and its predicate result should be used"]
+pub fn relate_mask<G1, G2, P>(g1: &G1, g2: &G2, mask: &str) -> Result<bool, RelateError>
+where
+    G1: PolygonTrait<Point = P>,
+    G2: PolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    relate(g1, g2)?.matches(mask)
 }
 
 /// `touches`: the boundaries meet but the interiors do not.

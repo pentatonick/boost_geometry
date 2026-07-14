@@ -10,13 +10,17 @@
 //! **Deferred:** ring×ring edge-crossing detection (a hole whose
 //! representative vertex is covered by the exterior but whose edges
 //! cross the exterior or another hole; Boost's polygon-level
-//! `failure_self_intersections`) and consecutive duplicate points
-//! (Boost's `failure_duplicate_points`) are not checked.
+//! `failure_self_intersections`) and intersections between distinct
+//! members of a multi-polygon are not checked.
 //!
-//! v1 scope: `Ring` and `Polygon` (areal). The linear / multi cases
-//! reuse the same primitives and are added alongside the linear
-//! overlay. Coordinate validity (NaN / infinity) is checked because the
-//! robustness gate depends on finite input.
+//! v1 scope: `Ring`, `Polygon`, and per-member `MultiPolygon` validation.
+//! Coordinate validity (NaN / infinity) is checked because the robustness
+//! gate depends on finite input.
+//!
+//! Unlike Boost's default validity policy, which permits consecutive repeated
+//! points, this Rust entry selects Boost's strict-policy behavior and returns
+//! [`ValidityFailure::DuplicatePoints`]. Boost exercises that policy in
+//! `test/algorithms/is_valid.cpp:1626-1634`.
 
 use alloc::vec::Vec;
 
@@ -24,8 +28,11 @@ use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::Segment;
 use geometry_strategy::{AreaStrategy, ShoelaceArea, WithinRing, WithinStrategy};
-use geometry_tag::SameAs;
-use geometry_trait::{Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait};
+use geometry_tag::{MultiPolygonTag, PolygonTag, RingTag, SameAs};
+use geometry_trait::{
+    Geometry, MultiPolygon as MultiPolygonTrait, Point, PointMut, Polygon as PolygonTrait,
+    Ring as RingTrait,
+};
 
 use crate::predicate::range_guard::coordinate_in_range;
 use crate::predicate::segment_intersection::{SegmentIntersection, segment_intersection};
@@ -33,7 +40,7 @@ use crate::predicate::segment_intersection::{SegmentIntersection, segment_inters
 /// Why a geometry failed [`is_valid_ring`] / [`is_valid_polygon`].
 ///
 /// Mirrors the subset of Boost's `validity_failure_type`
-/// (`algorithms/validity_failure_type.hpp`) that the v1 areal validator
+/// (`algorithms/validity_failure_type.hpp:33-106`) that the v1 areal validator
 /// can produce. The numeric groupings (few-points, not-closed,
 /// self-intersections, …) match Boost's categories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +48,9 @@ pub enum ValidityFailure {
     /// Fewer than the 4 points a closed ring needs (3 distinct + the
     /// repeated closing vertex). Boost's `failure_few_points`.
     FewPoints,
+    /// Two consecutive vertices are equal. Boost's
+    /// `failure_duplicate_points`.
+    DuplicatePoints,
     /// The ring's first and last vertices differ — it is not closed.
     /// Boost's `failure_not_closed`.
     NotClosed,
@@ -71,6 +81,134 @@ pub enum ValidityFailure {
     /// in their declared order (strategy-level signed area positive);
     /// interior rings the opposite. Boost's `failure_wrong_orientation`.
     WrongOrientation,
+}
+
+/// Per-kind validity implementation selected by [`is_valid`].
+///
+/// Rust tag-dispatch adapter for `boost::geometry::is_valid` from
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+#[doc(hidden)]
+pub trait ValidityStrategy<G> {
+    fn apply(&self, geometry: &G) -> Result<(), ValidityFailure>;
+}
+
+/// Tag-to-validity implementation picker.
+///
+/// Rust counterpart to the geometry-kind resolution behind
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+#[doc(hidden)]
+pub trait ValidityStrategyForKind {
+    type S: Default;
+}
+
+/// Ring validity implementation.
+///
+/// Implements the ring arm selected by the entry at
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RingValidity;
+
+/// Polygon validity implementation.
+///
+/// Implements the polygon arm selected by the entry at
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PolygonValidity;
+
+/// Multi-polygon validity implementation.
+///
+/// Implements the multi-polygon arm selected by the entry at
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MultiPolygonValidity;
+
+/// Selects Boost's ring validity dispatch behind
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl ValidityStrategyForKind for RingTag {
+    type S = RingValidity;
+}
+
+/// Selects Boost's polygon validity dispatch behind
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl ValidityStrategyForKind for PolygonTag {
+    type S = PolygonValidity;
+}
+
+/// Selects Boost's multi-polygon validity dispatch behind
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl ValidityStrategyForKind for MultiPolygonTag {
+    type S = MultiPolygonValidity;
+}
+
+/// Validate an areal geometry through its public geometry-kind tag.
+///
+/// Mirrors `boost::geometry::is_valid` from
+/// `boost/geometry/algorithms/detail/is_valid/interface.hpp:155-202`.
+/// Rings, polygons, and
+/// multi-polygons use their corresponding validators; unsupported kinds fail
+/// at compile time instead of returning an uninformative runtime value.
+///
+/// # Errors
+///
+/// Returns the first [`ValidityFailure`] detected by the selected areal
+/// validator.
+#[inline]
+#[must_use = "validity failures must be handled"]
+pub fn is_valid<G>(geometry: &G) -> Result<(), ValidityFailure>
+where
+    G: Geometry,
+    G::Kind: ValidityStrategyForKind,
+    <G::Kind as ValidityStrategyForKind>::S: ValidityStrategy<G>,
+{
+    <<G::Kind as ValidityStrategyForKind>::S as Default>::default().apply(geometry)
+}
+
+/// Implements the ring validity arm selected by
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl<G, P> ValidityStrategy<G> for RingValidity
+where
+    G: RingTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn apply(&self, ring: &G) -> Result<(), ValidityFailure> {
+        is_valid_ring(ring)
+    }
+}
+
+/// Implements the polygon validity arm selected by
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl<G, P> ValidityStrategy<G> for PolygonValidity
+where
+    G: PolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn apply(&self, polygon: &G) -> Result<(), ValidityFailure> {
+        is_valid_polygon(polygon)
+    }
+}
+
+/// Implements the multi-polygon validity arm selected by
+/// `algorithms/detail/is_valid/interface.hpp:153-203`.
+impl<G, P> ValidityStrategy<G> for MultiPolygonValidity
+where
+    G: MultiPolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn apply(&self, multi_polygon: &G) -> Result<(), ValidityFailure> {
+        for polygon in multi_polygon.polygons() {
+            is_valid_polygon(polygon)?;
+        }
+        Ok(())
+    }
 }
 
 /// Validate a single ring.
@@ -154,6 +292,10 @@ where
     // First and last vertex must coincide.
     if !same_point(&pts[0], &pts[pts.len() - 1]) {
         return Err(ValidityFailure::NotClosed);
+    }
+
+    if pts.windows(2).any(|pair| same_point(&pair[0], &pair[1])) {
+        return Err(ValidityFailure::DuplicatePoints);
     }
 
     // A vertex triple that folds back on itself along one line — Boost's

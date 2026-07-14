@@ -1,7 +1,7 @@
 # Overlay engine deep-dive
 
 `geometry-overlay` is the largest single subsystem in the port. It powers
-`intersection`, `union`, `difference`, `sym_difference`, and indirectly
+`intersection`, `r#union`, `difference`, `sym_difference`, and indirectly
 `buffer`, `is_valid`, `relate`, `crosses`, `overlaps`, `touches`, and
 `point_on_surface`. Boost concentrates all of this under one `detail/`
 directory (`boost/geometry/algorithms/detail/overlay/`); the port gives it
@@ -38,19 +38,19 @@ flowchart TD
 
     subgraph OVL5["OVL5 — public operations"]
         intersection_fn["intersection"]
-        union_fn["union_poly"]
+        union_fn["r#union / union_poly"]
         difference_fn["difference"]
         symdiff_fn["sym_difference"]
     end
 
     subgraph OVL6["OVL6 — relate / validity"]
-        relate_fn["relate → De9im matrix"]
+        relate_fn["relation → De9im<br/>relate → mask"]
         preds["touches / overlaps / crosses"]
-        is_valid["is_valid_ring / is_valid_polygon"]
+        is_valid["is_valid tag dispatch"]
     end
 
     subgraph OVL7["OVL7 — buffer"]
-        buffer_fn["buffer_point / buffer_convex_polygon"]
+        buffer_fn["buffer tag dispatch"]
     end
 
     orientation --> get_turns
@@ -170,7 +170,7 @@ Thin orchestration over the pipeline above:
 | Function | Boost equivalent | Behavior on no crossings |
 |---|---|---|
 | `intersection(a, b)` | `algorithms/intersection.hpp` | inner polygon if one contains the other, else empty |
-| `union_poly(a, b)` | `algorithms/union_.hpp` (renamed — `union` is a Rust keyword) | outer polygon if one contains the other, else both side by side |
+| `r#union(a, b)` | `algorithms/union.hpp` (raw identifier because `union` is a Rust keyword; `union_poly` remains as a compatibility name) | outer polygon if one contains the other, else both side by side |
 | `difference(a, b)` | `algorithms/difference.hpp` | `A` whole if disjoint; empty if `A` inside `B`; **refused** if `B` inside `A` (would need a hole the exterior-only assembler can't build yet) |
 | `sym_difference(a, b)` | `algorithms/sym_difference.hpp` | computed as `(A−B) ∪ (B−A)`, concatenated since the two differences are disjoint by construction |
 
@@ -181,18 +181,19 @@ Thin orchestration over the pipeline above:
 
 ### OVL6 — Relate & validity (`relate.rs`, `validity.rs`)
 
-* **`relate`** computes a DE-9IM 3×3 matrix (`De9im`) — for each pair drawn
+* **`relation`** computes a DE-9IM 3×3 matrix (`De9im`) — for each pair drawn
   from {Interior, Boundary, Exterior} of the two geometries, the
   *dimension* of their intersection (`Dimension::{Empty,Point,Curve,Area}`).
-  `touches`, `overlaps`, and `crosses` are thin predicates over that matrix.
-  Built from the turn graph plus interior-point sampling; areal × areal
-  only in v1.
-* **`is_valid_ring`/`is_valid_polygon`** check the OGC simple-feature rules:
+  **`relate`** tests that matrix against a DE-9IM mask; `touches`, `overlaps`,
+  and `crosses` are thin predicates over the same matrix. Built from the turn
+  graph plus interior-point sampling; areal × areal only in v1.
+* **`is_valid`** tag-dispatches to the ring/polygon validators (and validates
+  each multi-polygon member). The validators check the OGC simple-feature rules:
   finite in-range coordinates, enough points, closed boundary, no spikes, no
-  self-intersections, correct orientation, and (for polygons) every
-  interior ring covered by the exterior. Deferred: ring×ring edge-crossing
-  between a hole and the exterior/other holes, and consecutive
-  duplicate-point detection.
+  consecutive duplicate points, no self-intersections, correct orientation,
+  and (for polygons) every interior ring covered by the exterior. Deferred:
+  ring×ring edge-crossing between a hole and the exterior/other holes and
+  intersections between distinct multi-polygon members.
 
 Both `relate` and the boolean ops share the same honesty policy: a
 non-transversal boundary contact (edge-aligned or vertex-only) that the
@@ -203,8 +204,9 @@ exactly this failure mode being caught.
 
 ### OVL7 — Buffer (`buffer.rs`)
 
-Grows a geometry outward by a fixed distance, offsetting and then unioning
-the offset pieces — built on OVL5's `union_poly`.
+The public `buffer` entry tag-dispatches by geometry kind and grows a geometry
+outward by a fixed distance. Its point and convex-polygon kernels are also
+available directly as `buffer_point` and `buffer_convex_polygon`.
 
 **v1 scope:** positive-distance buffers of a **point** (→ circle, via
 `PointStrategy::{Circle,Square}`) and a **convex polygon** (→ grown polygon

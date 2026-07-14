@@ -5,14 +5,15 @@
 //! [`geometry_strategy::DefaultLength`] — Cartesian linestrings resolve
 //! to [`geometry_strategy::CartesianLength`], spherical to
 //! [`geometry_strategy::SphericalLength`], geographic to
-//! [`geometry_strategy::GeographicLength`]. `perimeter` /
-//! `ring_perimeter` remain Cartesian-pinned (the spherical / geographic
-//! perimeter strategies are reachable directly via
-//! [`geometry_strategy::SphericalPerimeter`] /
-//! [`geometry_strategy::GeographicPerimeter`]).
+//! [`geometry_strategy::GeographicLength`]. `perimeter` and
+//! `ring_perimeter` use the parallel
+//! [`geometry_strategy::DefaultPerimeter`] family dispatch.
 
 use geometry_cs::CoordinateSystem;
-use geometry_strategy::{CartesianPerimeter, DefaultLength, DefaultLengthStrategy, LengthStrategy};
+use geometry_strategy::{
+    DefaultLength, DefaultLengthStrategy, DefaultPerimeter, DefaultPerimeterStrategy,
+    LengthStrategy,
+};
 use geometry_trait::{Geometry, Linestring, Point, Polygon, Ring};
 
 /// Shorthand for the CS family of `G`'s point type. Keeps the `where`
@@ -77,19 +78,36 @@ where
 /// of the lengths of the interior rings.
 ///
 /// Mirrors `boost::geometry::perimeter` from
-/// `boost/geometry/algorithms/perimeter.hpp`.
+/// `boost/geometry/algorithms/perimeter.hpp:230-236`.
 #[inline]
 #[must_use]
-pub fn perimeter<P>(p: &P) -> <CartesianPerimeter as LengthStrategy<P::Ring>>::Out
+pub fn perimeter<P>(p: &P) -> <DefaultPerimeterStrategy<P> as LengthStrategy<P::Ring>>::Out
 where
     P: Polygon,
-    CartesianPerimeter: LengthStrategy<P::Ring>,
-    <CartesianPerimeter as LengthStrategy<P::Ring>>::Out:
-        core::ops::Add<Output = <CartesianPerimeter as LengthStrategy<P::Ring>>::Out>,
+    Family<P>: DefaultPerimeter<Family<P>>,
+    DefaultPerimeterStrategy<P>: LengthStrategy<P::Ring> + Default,
 {
-    let mut total = CartesianPerimeter.length(p.exterior());
+    perimeter_with(p, DefaultPerimeterStrategy::<P>::default())
+}
+
+/// Perimeter of a polygon using an explicitly supplied ring-length strategy.
+///
+/// Mirrors the strategy overload of `boost::geometry::perimeter` from
+/// `boost/geometry/algorithms/perimeter.hpp:252-258`.
+#[inline]
+#[must_use]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "perimeter strategies are zero-sized or small Copy values, matching length_with"
+)]
+pub fn perimeter_with<P, S>(p: &P, strategy: S) -> S::Out
+where
+    P: Polygon,
+    S: LengthStrategy<P::Ring>,
+{
+    let mut total = strategy.length(p.exterior());
     for inner in p.interiors() {
-        total = total + CartesianPerimeter.length(inner);
+        total = total + strategy.length(inner);
     }
     total
 }
@@ -97,15 +115,34 @@ where
 /// Standalone helper to compute the perimeter of a `Ring` directly,
 /// without wrapping it in a polygon. Mirrors Boost's
 /// `perimeter(ring)` overload which dispatches via the
-/// `ring_tag` arm of `algorithms/perimeter.hpp`.
+/// `ring_tag` arm of `algorithms/perimeter.hpp:66-73`.
 #[inline]
 #[must_use]
-pub fn ring_perimeter<R>(r: &R) -> <CartesianPerimeter as LengthStrategy<R>>::Out
+pub fn ring_perimeter<R>(r: &R) -> <DefaultPerimeterStrategy<R> as LengthStrategy<R>>::Out
 where
     R: Ring,
-    CartesianPerimeter: LengthStrategy<R>,
+    Family<R>: DefaultPerimeter<Family<R>>,
+    DefaultPerimeterStrategy<R>: LengthStrategy<R> + Default,
 {
-    CartesianPerimeter.length(r)
+    ring_perimeter_with(r, DefaultPerimeterStrategy::<R>::default())
+}
+
+/// Perimeter of a ring using an explicitly supplied strategy.
+///
+/// Mirrors the strategy overload of the ring-tag arm in
+/// `boost/geometry/algorithms/perimeter.hpp:252-258`.
+#[inline]
+#[must_use]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "perimeter strategies are zero-sized or small Copy values, matching length_with"
+)]
+pub fn ring_perimeter_with<R, S>(ring: &R, strategy: S) -> S::Out
+where
+    R: Ring,
+    S: LengthStrategy<R>,
+{
+    strategy.length(ring)
 }
 
 #[cfg(test)]

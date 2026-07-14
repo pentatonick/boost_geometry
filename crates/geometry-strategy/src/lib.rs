@@ -152,7 +152,8 @@ pub use geographic::{
 };
 pub use intersects::{CartesianIntersects, IntersectsPairStrategy, IntersectsStrategy};
 pub use length::{
-    CartesianLength, CartesianPerimeter, DefaultLength, DefaultLengthStrategy, LengthStrategy,
+    CartesianLength, CartesianPerimeter, DefaultLength, DefaultLengthStrategy, DefaultPerimeter,
+    DefaultPerimeterStrategy, LengthStrategy,
 };
 pub use line_interpolate::{CartesianLineInterpolate, LineInterpolateStrategy};
 pub use simplify::{DouglasPeucker, SimplifyStrategy};

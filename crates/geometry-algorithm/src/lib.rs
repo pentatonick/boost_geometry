@@ -1,17 +1,15 @@
 //! Free-function algorithm entry points users actually call.
 //!
 //! Each function mirrors the matching free function in
-//! `boost/geometry/algorithms/`. T23 lands the strategy-dispatch layer
-//! for `distance` / `comparable_distance`; subsequent tasks add
-//! `length`, `area`, `envelope`, `within`, `intersects`, … on the same
-//! pattern (a strategy-less default plus a `_with` explicit-strategy
-//! companion).
+//! `boost/geometry/algorithms/`. Strategy-driven algorithms expose a
+//! strategy-less default plus a `_with` explicit-strategy companion. Algorithms
+//! that require the overlay engine live in `geometry-overlay` to preserve the
+//! workspace's one-way dependency graph.
 //!
 //! # References
 //!
-//! * `boost/geometry/algorithms/distance.hpp`
-//! * `boost/geometry/algorithms/comparable_distance.hpp`
-//! * `boost/geometry/algorithms/detail/distance/interface.hpp`
+//! * `boost/geometry/algorithms/`
+//! * `boost/geometry/algorithms/detail/`
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
@@ -35,6 +33,7 @@ pub mod disjoint;
 pub mod distance;
 pub mod envelope;
 pub mod equals;
+pub mod expand;
 pub mod for_each;
 pub mod intersects;
 pub mod is_convex;
@@ -70,20 +69,23 @@ pub use clear::clear;
 pub use closest_points::closest_points;
 pub use convert::convert;
 pub use convex_hull::convex_hull;
-pub use correct::correct;
+pub use correct::{correct, correct_closure};
 pub use densify::densify;
 pub use discrete_frechet::{discrete_frechet_distance, discrete_frechet_distance_with};
 pub use discrete_hausdorff::{discrete_hausdorff_distance, discrete_hausdorff_distance_with};
 pub use disjoint::{disjoint, disjoint_box_box};
-pub use distance::{comparable_distance, distance, distance_with};
+pub use distance::{comparable_distance, comparable_distance_with, distance, distance_with};
 pub use envelope::envelope;
 pub use equals::equals;
+pub use expand::{expand, expand_with};
 pub use for_each::{for_each_point, for_each_segment};
 pub use intersects::{intersects, intersects_reversed};
 pub use is_convex::is_convex;
 pub use is_empty::is_empty;
 pub use is_simple::is_simple;
-pub use length::{length, length_with, perimeter, ring_perimeter};
+pub use length::{
+    length, length_with, perimeter, perimeter_with, ring_perimeter, ring_perimeter_with,
+};
 pub use line_interpolate::line_interpolate;
 pub use make::{make_box, make_point, make_segment};
 pub use num_geometries::num_geometries;

@@ -184,6 +184,31 @@ where
     Ok(assemble_multipolygon(rings))
 }
 
+/// Union of two polygons — the region inside either input.
+///
+/// This is the Boost-style public spelling of [`union_poly`]. Rust reserves
+/// `union`, so callers write the raw identifier `r#union(a, b)`; the exported
+/// symbol is still named `union`.
+///
+/// Mirrors `boost::geometry::union_` from
+/// `boost/geometry/algorithms/union.hpp:866-880`.
+///
+/// # Errors
+///
+/// Propagates [`OverlayError::Unsupported`] from [`union_poly`].
+#[inline]
+#[must_use = "union can fail and the resulting geometry should be used"]
+pub fn r#union<G1, G2, P>(g1: &G1, g2: &G2) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    G1: PolygonTrait<Point = P>,
+    G2: PolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    union_poly(g1, g2)
+}
+
 /// Difference of two polygons — the region inside the first but outside
 /// the second (`A − B`).
 ///

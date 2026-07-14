@@ -34,9 +34,11 @@ use alloc::vec::Vec;
 
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem, FromF64};
-use geometry_model::{Polygon, Ring};
-use geometry_tag::SameAs;
-use geometry_trait::{Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait};
+use geometry_model::{MultiPolygon, Polygon, Ring};
+use geometry_tag::{PointTag, PolygonTag, SameAs};
+use geometry_trait::{Geometry, Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait};
+
+use crate::operation::OverlayError;
 
 /// How to fill the wedge at a convex corner of the offset boundary.
 ///
@@ -78,6 +80,144 @@ pub enum PointStrategy {
     /// Approximate the buffer with an axis-aligned square. Boost's
     /// `point_square`.
     Square,
+}
+
+/// Per-geometry implementation selected by [`buffer`].
+///
+/// Rust tag-dispatch adapter for the geometry-specialized call behind
+/// `boost::geometry::buffer` in
+/// `algorithms/detail/buffer/interface.hpp:246-273`.
+#[doc(hidden)]
+pub trait BufferStrategy<G: Geometry> {
+    fn apply(
+        &self,
+        geometry: &G,
+        distance: f64,
+        join: JoinStrategy,
+        point: PointStrategy,
+    ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError>;
+}
+
+/// Tag-to-buffer implementation picker.
+///
+/// Rust counterpart to the geometry dispatch performed by
+/// `boost::geometry::buffer` in
+/// `algorithms/detail/buffer/interface.hpp:246-273`.
+#[doc(hidden)]
+pub trait BufferStrategyForKind {
+    type S: Default;
+}
+
+/// Point buffer implementation selected for [`PointTag`].
+///
+/// Implements the point arm of the public buffer dispatch from
+/// `algorithms/detail/buffer/interface.hpp:246-273`.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PointBuffer;
+
+/// Polygon buffer implementation selected for [`PolygonTag`].
+///
+/// Implements the polygon arm of the public buffer dispatch from
+/// `algorithms/detail/buffer/interface.hpp:246-273`.
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PolygonBuffer;
+
+/// Selects the point arm of `buffer_all` from
+/// `algorithms/detail/buffer/interface.hpp:269-273`.
+impl BufferStrategyForKind for PointTag {
+    type S = PointBuffer;
+}
+
+/// Selects the polygon arm of `buffer_all` from
+/// `algorithms/detail/buffer/interface.hpp:269-273`.
+impl BufferStrategyForKind for PolygonTag {
+    type S = PolygonBuffer;
+}
+
+/// Buffer a geometry using the public point and join strategies.
+///
+/// Mirrors `boost::geometry::buffer` from
+/// `boost/geometry/algorithms/detail/buffer/interface.hpp:246-273`. The current
+/// Cartesian dispatch supports points and positive-distance convex polygons.
+/// Point inputs use `point`; polygon inputs use `join`. Unsupported geometry
+/// kinds are rejected at compile time, while non-convex, holed, non-positive,
+/// or non-finite polygon cases return [`OverlayError::Unsupported`].
+///
+/// # Errors
+///
+/// Returns [`OverlayError::Unsupported`] for cases outside the current
+/// positive-distance point/convex-polygon kernel.
+#[inline]
+#[must_use = "buffering can fail and the generated geometry should be used"]
+pub fn buffer<G>(
+    geometry: &G,
+    distance: f64,
+    join: JoinStrategy,
+    point: PointStrategy,
+) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError>
+where
+    G: Geometry,
+    G::Kind: BufferStrategyForKind,
+    <G::Kind as BufferStrategyForKind>::S: BufferStrategy<G>,
+{
+    <<G::Kind as BufferStrategyForKind>::S as Default>::default()
+        .apply(geometry, distance, join, point)
+}
+
+/// Implements the point arm selected by `buffer_all` at
+/// `algorithms/detail/buffer/interface.hpp:269-273`.
+impl<G> BufferStrategy<G> for PointBuffer
+where
+    G: Point + PointMut + Default + Copy,
+    G::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn apply(
+        &self,
+        point_geometry: &G,
+        distance: f64,
+        _join: JoinStrategy,
+        point: PointStrategy,
+    ) -> Result<MultiPolygon<Polygon<G>>, OverlayError> {
+        if !distance.is_finite() || distance <= 0.0 {
+            return Err(OverlayError::Unsupported);
+        }
+        let ring = buffer_point(point_geometry, distance, point);
+        Ok(MultiPolygon(alloc::vec![Polygon::new(ring)]))
+    }
+}
+
+/// Implements the polygon arm selected by `buffer_all` at
+/// `algorithms/detail/buffer/interface.hpp:269-273`.
+impl<G> BufferStrategy<G> for PolygonBuffer
+where
+    G: PolygonTrait,
+    G::Point: PointMut + Default + Copy,
+    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn apply(
+        &self,
+        polygon: &G,
+        distance: f64,
+        join: JoinStrategy,
+        _point: PointStrategy,
+    ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
+        let vertices = distinct_vertices(polygon.exterior());
+        if !distance.is_finite()
+            || distance <= 0.0
+            || polygon.interiors().next().is_some()
+            || !vertices_are_convex(&vertices)
+        {
+            return Err(OverlayError::Unsupported);
+        }
+
+        Ok(MultiPolygon(alloc::vec![buffer_convex_polygon(
+            polygon, distance, join,
+        )]))
+    }
 }
 
 /// Buffer a point by `distance`, producing the disc (or square)
@@ -303,6 +443,30 @@ where
         }
     }
     pts
+}
+
+fn vertices_are_convex(vertices: &[(f64, f64)]) -> bool {
+    if vertices.len() < 3 {
+        return false;
+    }
+
+    let mut sign = None;
+    for index in 0..vertices.len() {
+        let a = vertices[index];
+        let b = vertices[(index + 1) % vertices.len()];
+        let c = vertices[(index + 2) % vertices.len()];
+        let cross = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0);
+        if cross == 0.0 {
+            continue;
+        }
+        let positive = cross > 0.0;
+        match sign {
+            None => sign = Some(positive),
+            Some(previous) if previous != positive => return false,
+            _ => {}
+        }
+    }
+    sign.is_some()
 }
 
 /// The standard math signed area of the vertex ring (counter-clockwise
