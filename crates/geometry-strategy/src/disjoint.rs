@@ -78,7 +78,10 @@ mod tests {
 
     /// Invoke the read-only-point witness so its body runs too.
     #[test]
-    #[allow(clippy::used_underscore_items, reason = "the test exists to run the compile-time witness's body")]
+    #[allow(
+        clippy::used_underscore_items,
+        reason = "the test exists to run the compile-time witness's body"
+    )]
     fn readonly_point_witness_computes_disjointness() {
         assert!(_accepts_readonly_point(
             &CartesianDisjoint,

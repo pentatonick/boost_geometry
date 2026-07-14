@@ -168,6 +168,9 @@ mod tests {
         let gg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
 
         let got = azimuth(&gg(179.5, 0.), &gg(-179.5, 0.));
-        assert!((got - core::f64::consts::FRAC_PI_2).abs() < 1e-6, "got {got}");
+        assert!(
+            (got - core::f64::consts::FRAC_PI_2).abs() < 1e-6,
+            "got {got}"
+        );
     }
 }

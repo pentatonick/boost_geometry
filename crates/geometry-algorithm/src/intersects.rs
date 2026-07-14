@@ -206,13 +206,8 @@ mod tests {
     #[test]
     fn polygon_polygon_containment_crossing_disjoint() {
         let a = square(0.0); // (0,0)-(4,4)
-        let contained: Polygon<P> = polygon![[
-            (1.0, 1.0),
-            (2.0, 1.0),
-            (2.0, 2.0),
-            (1.0, 2.0),
-            (1.0, 1.0)
-        ]];
+        let contained: Polygon<P> =
+            polygon![[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0), (1.0, 1.0)]];
         let overlapping = square(2.0); // (2,2)-(6,6): edges cross
         let disjoint = square(100.0);
 
@@ -238,13 +233,7 @@ mod tests {
             [(2.0, 2.0), (6.0, 2.0), (6.0, 6.0), (2.0, 6.0), (2.0, 2.0)]
         ];
         // `b` sits inside the hole but its edges cross the hole boundary.
-        let b: Polygon<P> = polygon![[
-            (4.0, 4.0),
-            (8.0, 4.0),
-            (8.0, 8.0),
-            (4.0, 8.0),
-            (4.0, 4.0)
-        ]];
+        let b: Polygon<P> = polygon![[(4.0, 4.0), (8.0, 4.0), (8.0, 8.0), (4.0, 8.0), (4.0, 4.0)]];
         assert!(intersects(&a, &b));
     }
 

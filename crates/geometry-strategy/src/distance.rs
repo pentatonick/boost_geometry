@@ -291,7 +291,10 @@ mod tests {
     /// (`Pythagoras` over two cartesian points) proves the trait bounds
     /// they encode actually resolve, and executes their bodies.
     #[test]
-    #[allow(clippy::used_underscore_items, reason = "the test exists to run the compile-time witness's body")]
+    #[allow(
+        clippy::used_underscore_items,
+        reason = "the test exists to run the compile-time witness's body"
+    )]
     fn witnesses_resolve_for_pythagoras_over_cartesian_points() {
         _accepts_strategy::<P, P, Pythagoras>();
         _reversed_witness::<P, P, Pythagoras>();
@@ -303,7 +306,10 @@ mod tests {
     /// with the arguments swapped, and its `comparable()` returns the
     /// wrapped comparable strategy (squared distance).
     #[test]
-    #[allow(clippy::float_cmp, reason = "compared values are exact integer-valued literals")]
+    #[allow(
+        clippy::float_cmp,
+        reason = "compared values are exact integer-valued literals"
+    )]
     fn reversed_swaps_arguments_and_forwards_comparable() {
         let a = P::new(0.0, 0.0);
         let b = P::new(3.0, 4.0);

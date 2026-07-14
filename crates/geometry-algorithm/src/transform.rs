@@ -203,8 +203,7 @@ mod tests {
     /// A `MultiPolygon` transforms each member polygon.
     #[test]
     fn multipolygon_scaled() {
-        let member: Polygon<Pt> =
-            polygon![[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 1.0)]];
+        let member: Polygon<Pt> = polygon![[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 1.0)]];
         let mpg: MultiPolygon<Polygon<Pt>> = MultiPolygon(vec![member.clone(), member]);
         let out = transform(&mpg, &Affine2::scale(10.0, 10.0));
         assert_eq!(out.polygons().count(), 2);

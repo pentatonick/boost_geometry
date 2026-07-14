@@ -142,8 +142,11 @@ mod tests {
     /// degenerate/collinear rings are not rejected as concave).
     #[test]
     fn collinear_ring_is_convex() {
-        let r: Ring<Pt> =
-            Ring::from_vec(alloc::vec![Pt::new(0., 0.), Pt::new(1., 1.), Pt::new(2., 2.)]);
+        let r: Ring<Pt> = Ring::from_vec(alloc::vec![
+            Pt::new(0., 0.),
+            Pt::new(1., 1.),
+            Pt::new(2., 2.)
+        ]);
         assert!(is_convex(&r));
     }
 

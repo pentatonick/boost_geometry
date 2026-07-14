@@ -370,7 +370,10 @@ mod tests {
         let h = DistanceStrategy::<GP, GP>::comparable(&Haversine::UNIT).distance(&a, &b);
         // Reconstruct the angle from the comparable term.
         let reconstructed = 2.0 * h.sqrt().asin();
-        assert!((full - reconstructed).abs() < 1e-12, "{full} vs {reconstructed}");
+        assert!(
+            (full - reconstructed).abs() < 1e-12,
+            "{full} vs {reconstructed}"
+        );
     }
 
     /// `ComparableHaversine::comparable()` returns itself, and its
@@ -387,7 +390,10 @@ mod tests {
 
     /// The read-only-point witness computes a distance when invoked.
     #[test]
-    #[allow(clippy::used_underscore_items, reason = "the test exists to run the compile-time witness's body")]
+    #[allow(
+        clippy::used_underscore_items,
+        reason = "the test exists to run the compile-time witness's body"
+    )]
     fn readonly_witness_computes_distance() {
         let d = _accepts_readonly_point(&Haversine::UNIT, &deg(0.0, 0.0), &deg(1.0, 0.0));
         assert!(d > 0.0, "got {d}");

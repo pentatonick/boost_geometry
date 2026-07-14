@@ -116,8 +116,11 @@ mod tests {
 
     #[test]
     fn clear_ring() {
-        let mut r: Ring<Pt> =
-            Ring::from_vec(alloc::vec![Pt::new(0., 0.), Pt::new(1., 0.), Pt::new(1., 1.)]);
+        let mut r: Ring<Pt> = Ring::from_vec(alloc::vec![
+            Pt::new(0., 0.),
+            Pt::new(1., 0.),
+            Pt::new(1., 1.)
+        ]);
         clear(&mut r);
         assert!(is_empty(&r));
     }

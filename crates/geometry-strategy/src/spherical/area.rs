@@ -336,5 +336,4 @@ mod tests {
         assert_eq!(SphericalArea::default().radius, 6_371_000.0);
         assert_eq!(SphericalPolygonArea::default().radius, 6_371_000.0);
     }
-
 }

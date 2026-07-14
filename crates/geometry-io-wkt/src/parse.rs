@@ -884,7 +884,10 @@ mod tests {
     fn typed_parsers_accept_their_own_kind() {
         assert_eq!(parse_point("POINT (1 2)").unwrap().get::<0>(), 1.0);
         assert_eq!(
-            parse_linestring("LINESTRING (0 0, 1 1)").unwrap().points().len(),
+            parse_linestring("LINESTRING (0 0, 1 1)")
+                .unwrap()
+                .points()
+                .len(),
             2
         );
         assert_eq!(
@@ -896,7 +899,10 @@ mod tests {
             4
         );
         assert_eq!(
-            parse_multi_point("MULTIPOINT (0 0, 1 1)").unwrap().points().len(),
+            parse_multi_point("MULTIPOINT (0 0, 1 1)")
+                .unwrap()
+                .points()
+                .len(),
             2
         );
         assert_eq!(

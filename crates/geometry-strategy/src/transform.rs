@@ -264,5 +264,4 @@ mod tests {
         assert_eq!(out.get::<0>(), 3.0);
         assert_eq!(out.get::<1>(), 3.0);
     }
-
 }

@@ -126,9 +126,7 @@ mod tests {
         assert_eq!(ls.points().count(), 3);
     }
 
-    use geometry_model::{
-        MultiLinestring, MultiPolygon, Point, Point3D, Polygon, Ring, polygon,
-    };
+    use geometry_model::{MultiLinestring, MultiPolygon, Point, Point3D, Polygon, Ring, polygon};
     use geometry_trait::{
         MultiLinestring as _, MultiPolygon as _, PointMut as _, Polygon as _, Ring as _,
     };
@@ -175,23 +173,15 @@ mod tests {
             linestring![(2.0, 2.0), (3.0, 3.0), (3.0, 3.0)],
         ]);
         unique(&mut mls);
-        let counts: Vec<usize> = mls
-            .linestrings()
-            .map(|l| l.points().count())
-            .collect();
+        let counts: Vec<usize> = mls.linestrings().map(|l| l.points().count()).collect();
         assert_eq!(counts, vec![2, 2]);
     }
 
     /// A `MultiPolygon` dedups each member polygon.
     #[test]
     fn multi_polygon_dedups_each_member() {
-        let member: Polygon<P> = polygon![[
-            (0.0, 0.0),
-            (0.0, 0.0),
-            (1.0, 0.0),
-            (1.0, 1.0),
-            (0.0, 0.0)
-        ]];
+        let member: Polygon<P> =
+            polygon![[(0.0, 0.0), (0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]];
         let mut mpg: MultiPolygon<Polygon<P>> = MultiPolygon(vec![member.clone(), member]);
         unique(&mut mpg);
         for pg in mpg.polygons() {
@@ -227,8 +217,7 @@ mod tests {
         let mut b = a;
         b.set::<3>(9.0); // differ only in the 4th ordinate
         let dup = a;
-        let mut ls: geometry_model::Linestring<P4> =
-            geometry_model::Linestring(vec![a, b, dup]);
+        let mut ls: geometry_model::Linestring<P4> = geometry_model::Linestring(vec![a, b, dup]);
         unique(&mut ls);
         // a, b differ (4th ordinate); dup == a but is not adjacent to a,
         // so nothing collapses.

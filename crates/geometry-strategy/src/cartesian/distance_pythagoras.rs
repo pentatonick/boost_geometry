@@ -336,7 +336,10 @@ mod tests {
     /// The read-only-point witness computes the same value when actually
     /// invoked with a concrete strategy and points.
     #[test]
-    #[allow(clippy::used_underscore_items, reason = "the test exists to run the compile-time witness's body")]
+    #[allow(
+        clippy::used_underscore_items,
+        reason = "the test exists to run the compile-time witness's body"
+    )]
     fn readonly_witness_computes_distance() {
         let a = Point2D::<f64, Cartesian>::new(0.0, 0.0);
         let b = Point2D::<f64, Cartesian>::new(3.0, 4.0);

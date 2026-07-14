@@ -203,7 +203,10 @@ fn geo_rect_round_trips() {
 fn geo_multi_point_iterates_and_round_trips() {
     let original = GtMultiPoint::from(vec![(0.0_f64, 0.0), (1.0, 2.0), (3.0, 4.0)]);
     let wrapped = GeoMultiPoint::new(original.clone());
-    let read: Vec<(f64, f64)> = wrapped.points().map(|p| (p.get::<0>(), p.get::<1>())).collect();
+    let read: Vec<(f64, f64)> = wrapped
+        .points()
+        .map(|p| (p.get::<0>(), p.get::<1>()))
+        .collect();
     assert_eq!(read, vec![(0.0, 0.0), (1.0, 2.0), (3.0, 4.0)]);
     assert_eq!(wrapped.points().len(), 3);
     assert_eq!(wrapped.into_inner(), original);
@@ -218,7 +221,10 @@ fn geo_multi_line_string_iterates_and_round_trips() {
         LineString::from(vec![(2.0, 2.0), (3.0, 3.0), (4.0, 4.0)]),
     ]);
     let wrapped = GeoMultiLineString::new(original.clone());
-    let lens: Vec<usize> = wrapped.linestrings().map(|ls| ls.points().count()).collect();
+    let lens: Vec<usize> = wrapped
+        .linestrings()
+        .map(|ls| ls.points().count())
+        .collect();
     assert_eq!(lens, vec![2, 3]);
     assert_eq!(wrapped.linestrings().len(), 2);
     // First member's first vertex is (0,0), last member's last is (4,4).
@@ -234,7 +240,10 @@ fn geo_multi_line_string_iterates_and_round_trips() {
 fn geo_line_string_preserves_vertices() {
     let original = LineString::from(vec![(0.0_f64, 0.0), (3.0, 4.0), (6.0, 8.0)]);
     let wrapped = GeoLineString::new(original.clone());
-    let read: Vec<(f64, f64)> = wrapped.points().map(|c| (c.get::<0>(), c.get::<1>())).collect();
+    let read: Vec<(f64, f64)> = wrapped
+        .points()
+        .map(|c| (c.get::<0>(), c.get::<1>()))
+        .collect();
     assert_eq!(read, vec![(0.0, 0.0), (3.0, 4.0), (6.0, 8.0)]);
     assert_eq!(wrapped.into_inner(), original);
 }
@@ -315,8 +324,18 @@ fn to_dyn_geometry_normalises_rect_to_polygon() {
         DynGeometry::Polygon(p) => {
             // Rect::to_polygon emits a closed 5-vertex ring; its x-range
             // is [0,2] and y-range [0,3].
-            let xs: Vec<f64> = p.outer.0.iter().map(geometry_trait::Point::get::<0>).collect();
-            let ys: Vec<f64> = p.outer.0.iter().map(geometry_trait::Point::get::<1>).collect();
+            let xs: Vec<f64> = p
+                .outer
+                .0
+                .iter()
+                .map(geometry_trait::Point::get::<0>)
+                .collect();
+            let ys: Vec<f64> = p
+                .outer
+                .0
+                .iter()
+                .map(geometry_trait::Point::get::<1>)
+                .collect();
             assert_eq!(xs.iter().copied().fold(f64::INFINITY, f64::min), 0.0);
             assert_eq!(xs.iter().copied().fold(f64::NEG_INFINITY, f64::max), 2.0);
             assert_eq!(ys.iter().copied().fold(f64::INFINITY, f64::min), 0.0);
@@ -330,16 +349,23 @@ fn to_dyn_geometry_normalises_rect_to_polygon() {
 /// ring carries the three triangle vertices.
 #[test]
 fn to_dyn_geometry_normalises_triangle_to_polygon() {
-    let g: GtGeometry<f64> =
-        Triangle::new(coord! {x: 0.0, y: 0.0}, coord! {x: 4.0, y: 0.0}, coord! {x: 0.0, y: 3.0})
-            .into();
+    let g: GtGeometry<f64> = Triangle::new(
+        coord! {x: 0.0, y: 0.0},
+        coord! {x: 4.0, y: 0.0},
+        coord! {x: 0.0, y: 3.0},
+    )
+    .into();
     let dyn_g = to_dyn_geometry(g);
     assert_eq!(dyn_g.kind(), DynKind::Polygon);
     match dyn_g {
         DynGeometry::Polygon(p) => {
             // The three distinct vertices are present in the ring.
-            let verts: Vec<(f64, f64)> =
-                p.outer.0.iter().map(|pt| (pt.get::<0>(), pt.get::<1>())).collect();
+            let verts: Vec<(f64, f64)> = p
+                .outer
+                .0
+                .iter()
+                .map(|pt| (pt.get::<0>(), pt.get::<1>()))
+                .collect();
             assert!(verts.contains(&(0.0, 0.0)));
             assert!(verts.contains(&(4.0, 0.0)));
             assert!(verts.contains(&(0.0, 3.0)));

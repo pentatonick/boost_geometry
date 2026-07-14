@@ -595,5 +595,4 @@ mod tests {
         );
         assert_2d(&EnvelopeSegment.envelope(&s), 1.0, 3.0, 1.0, 3.0);
     }
-
 }

@@ -403,5 +403,4 @@ mod tests {
             .distance(&pt(3.0, 4.0), &seg(0.0, 0.0, 0.0, 0.0));
         assert!((d - 5.0).abs() < 1e-12);
     }
-
 }

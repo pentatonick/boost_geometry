@@ -801,9 +801,20 @@ mod tests {
     /// The read-only-point witness compiles *and* returns the correct
     /// membership when actually invoked.
     #[test]
-    #[allow(clippy::used_underscore_items, reason = "the test exists to run the compile-time witness's body")]
+    #[allow(
+        clippy::used_underscore_items,
+        reason = "the test exists to run the compile-time witness's body"
+    )]
     fn readonly_point_witness_computes_equality() {
-        assert!(_accepts_readonly_point(&IxPointPoint, &pt(1.0, 1.0), &pt(1.0, 1.0)));
-        assert!(!_accepts_readonly_point(&IxPointPoint, &pt(1.0, 1.0), &pt(2.0, 2.0)));
+        assert!(_accepts_readonly_point(
+            &IxPointPoint,
+            &pt(1.0, 1.0),
+            &pt(1.0, 1.0)
+        ));
+        assert!(!_accepts_readonly_point(
+            &IxPointPoint,
+            &pt(1.0, 1.0),
+            &pt(2.0, 2.0)
+        ));
     }
 }

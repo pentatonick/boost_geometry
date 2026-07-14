@@ -359,9 +359,4 @@ mod tests {
         assert!((ca.get::<1>() - 1.0).abs() < 1e-12);
         assert!(Pythagoras.distance(&ca, &cb) < 1e-12);
     }
-
-
-
-
-
 }

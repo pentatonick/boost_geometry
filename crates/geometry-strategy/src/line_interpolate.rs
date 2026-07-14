@@ -163,5 +163,4 @@ mod tests {
         let p = CartesianLineInterpolate.interpolate(&ls, 0.6);
         assert!(close(p, 2., 1.));
     }
-
 }

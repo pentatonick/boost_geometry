@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn multi_linestring_sums_members() {
         let mls = geometry_model::MultiLinestring::<Ls>(vec![
-            linestring![(0.0, 0.0), (1.0, 1.0)],                         // 1 edge
+            linestring![(0.0, 0.0), (1.0, 1.0)], // 1 edge
             linestring![(2.0, 2.0), (3.0, 3.0), (4.0, 4.0), (5.0, 5.0)], // 3 edges
         ]);
         assert_eq!(num_segments(&mls), 4);

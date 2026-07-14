@@ -535,7 +535,10 @@ mod tests {
         let cases: Vec<(GeoJsonError, &str)> = vec![
             (GeoJsonError::Json("boom".to_string()), "invalid JSON: boom"),
             (GeoJsonError::UnexpectedEof, "unexpected end of input"),
-            (GeoJsonError::ExpectedType, "missing GeoJSON \"type\" member"),
+            (
+                GeoJsonError::ExpectedType,
+                "missing GeoJSON \"type\" member",
+            ),
             (
                 GeoJsonError::UnknownGeometryType("Xyz".to_string()),
                 "unknown GeoJSON geometry type \"Xyz\"",

@@ -148,8 +148,11 @@ mod tests {
     #[test]
     fn other_single_kinds_are_one() {
         use geometry_model::{Box, Ring, Segment};
-        let ring: Ring<Pt> =
-            Ring::from_vec(vec![Pt::new(0.0, 0.0), Pt::new(1.0, 0.0), Pt::new(0.0, 0.0)]);
+        let ring: Ring<Pt> = Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(1.0, 0.0),
+            Pt::new(0.0, 0.0),
+        ]);
         assert_eq!(num_geometries(&ring), 1);
         assert_eq!(
             num_geometries(&Segment::new(Pt::new(0.0, 0.0), Pt::new(1.0, 1.0))),

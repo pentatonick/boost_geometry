@@ -239,7 +239,8 @@ mod tests {
     #[test]
     fn ring_to_linestring_copies_points() {
         use geometry_model::Ring;
-        let ring: Ring<Pt> = Ring::from_vec(vec![Pt::new(2., 3.), Pt::new(4., 5.), Pt::new(2., 3.)]);
+        let ring: Ring<Pt> =
+            Ring::from_vec(vec![Pt::new(2., 3.), Pt::new(4., 5.), Pt::new(2., 3.)]);
         let ls: Linestring<Pt> = convert(&ring);
         assert_eq!(ls.0.len(), 3);
         assert_eq!((ls.0[1].get::<0>(), ls.0[1].get::<1>()), (4., 5.));

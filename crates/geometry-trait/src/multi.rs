@@ -355,7 +355,10 @@ mod tests {
     /// `Xy` is a full `PointMut`: `set` writes each ordinate and `get`
     /// reads it back — covering the `get`/`set` `D == 1` branches.
     #[test]
-    #[allow(clippy::float_cmp, reason = "compared values are exact integer-valued literals")]
+    #[allow(
+        clippy::float_cmp,
+        reason = "compared values are exact integer-valued literals"
+    )]
     fn xy_get_set_round_trips_both_ordinates() {
         let mut p = Xy(0.0, 0.0);
         p.set::<0>(3.0);

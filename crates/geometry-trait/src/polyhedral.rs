@@ -198,7 +198,10 @@ mod tests {
         // rings (`interiors()` is empty for these quads).
         let first_face = ps.faces().next().unwrap();
         let v0 = first_face.exterior().points().next().unwrap();
-        assert_eq!((v0.get::<0>(), v0.get::<1>(), v0.get::<2>()), (0.0, 0.0, 0.0));
+        assert_eq!(
+            (v0.get::<0>(), v0.get::<1>(), v0.get::<2>()),
+            (0.0, 0.0, 0.0)
+        );
         for face in ps.faces() {
             assert_eq!(face.interiors().count(), 0);
         }

@@ -276,8 +276,7 @@ mod tests {
     /// A `MultiPolygon` visits every stored point across its members.
     #[test]
     fn multipolygon_visits_all_member_points() {
-        let member: Polygon<Pt> =
-            polygon![[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]];
+        let member: Polygon<Pt> = polygon![[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]];
         let mpg: MultiPolygon<Polygon<Pt>> = MultiPolygon(vec![member.clone(), member]);
         let mut count = 0;
         for_each_point(&mpg, |_| count += 1);
@@ -290,8 +289,12 @@ mod tests {
     fn open_ring_emits_implicit_closing_edge() {
         // 4 distinct vertices, open (CL = false): 3 windowed edges + the
         // implicit closing edge = 4.
-        let ring: Ring<Pt, true, false> =
-            Ring::from_vec(vec![Pt::new(0.0, 0.0), Pt::new(2.0, 0.0), Pt::new(2.0, 2.0), Pt::new(0.0, 2.0)]);
+        let ring: Ring<Pt, true, false> = Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(2.0, 0.0),
+            Pt::new(2.0, 2.0),
+            Pt::new(0.0, 2.0),
+        ]);
         let mut edges = alloc::vec::Vec::new();
         for_each_segment(&ring, |a, b| {
             edges.push(((a.get::<0>(), a.get::<1>()), (b.get::<0>(), b.get::<1>())));
@@ -315,7 +318,7 @@ mod tests {
     #[test]
     fn multilinestring_visits_all_member_segments() {
         let mls: MultiLinestring<Linestring<Pt>> = MultiLinestring(vec![
-            linestring![(0.0, 0.0), (1.0, 1.0)],          // 1 edge
+            linestring![(0.0, 0.0), (1.0, 1.0)],             // 1 edge
             linestring![(2.0, 2.0), (3.0, 3.0), (4.0, 4.0)], // 2 edges
         ]);
         let mut count = 0;

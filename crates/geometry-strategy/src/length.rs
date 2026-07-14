@@ -310,7 +310,10 @@ mod tests {
     /// Invoke the read-only-point witness so its body is exercised too
     /// (the compile-time guarantee is unchanged; this just runs it).
     #[test]
-    #[allow(clippy::used_underscore_items, reason = "the test exists to run the compile-time witness's body")]
+    #[allow(
+        clippy::used_underscore_items,
+        reason = "the test exists to run the compile-time witness's body"
+    )]
     fn readonly_point_witness_computes_length() {
         let ls: Linestring<Point2D<f64, Cartesian>> = linestring![(0.0, 0.0), (3.0, 4.0)];
         let got = _accepts_readonly_point(&CartesianLength, &ls);
