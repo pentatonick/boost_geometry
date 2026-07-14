@@ -131,7 +131,8 @@ pub use area::{
 pub use azimuth::{AzimuthStrategy, CartesianAzimuth, DefaultAzimuth, DefaultAzimuthStrategy};
 pub use buffer::{
     BufferDistanceStrategy, BufferEndStrategy, BufferJoinStrategy, BufferPointStrategy,
-    BufferSettings, BufferSideStrategy,
+    BufferSettings, BufferSideStrategy, CartesianBuffer, DefaultBuffer, DefaultBufferStrategy,
+    GeographicBuffer, SphericalBuffer,
 };
 pub use cartesian::{ComparablePythagoras, PointToSegment, Pythagoras};
 pub use centroid::{

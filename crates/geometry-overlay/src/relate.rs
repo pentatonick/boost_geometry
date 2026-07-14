@@ -9,26 +9,35 @@
 //! (`algorithms/{crosses,overlaps,touches}.hpp`) are then thin tests on
 //! that matrix.
 //!
-//! Cartesian point, linestring, and polygon pairs are dispatched through the
-//! same matrix interface. Polygon relations include interior rings and exact
-//! point/curve dimensions for colocated boundaries; the public mask-string
-//! interface consumes the completed matrix.
+//! Cartesian points, segments, linestrings, rings, boxes, polygons,
+//! homogeneous multis, runtime geometries, and heterogeneous geometry
+//! collections are dispatched through the same matrix interface. Union
+//! topology follows OGC boundary rules, including the mod-2 boundary of a
+//! multilinestring and absorption of members covered by areal interiors. The
+//! public mask-string interface consumes the completed matrix.
 
 #![allow(
     clippy::float_cmp,
     reason = "exact equality identifies stored endpoint identity for DE-9IM boundary classification"
 )]
 
+use alloc::vec::Vec;
+
 use geometry_coords::{CoordinateScalar, precise_math};
-use geometry_cs::{CartesianFamily, CoordinateSystem};
-use geometry_tag::{LinestringTag, PointTag, PolygonTag, SameAs};
+use geometry_cs::{Cartesian, CartesianFamily, CoordinateSystem};
+use geometry_model::{DynGeometry, Point2D, Polygon, Ring};
+use geometry_tag::{
+    BoxTag, DynamicGeometryTag, GeometryCollectionTag, LinestringTag, MultiLinestringTag,
+    MultiPointTag, MultiPolygonTag, PointTag, PolygonTag, RingTag, SameAs, SegmentTag,
+};
 use geometry_trait::{
-    Geometry, Linestring as LinestringTrait, Point, PointMut, Polygon as PolygonTrait,
-    Ring as RingTrait,
+    Box as BoxTrait, Geometry, GeometryCollection, Linestring as LinestringTrait, MultiLinestring,
+    MultiPoint, MultiPolygon, Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
+    Segment as SegmentTrait, corner,
 };
 
 use crate::operation::OverlayError;
-use crate::predicate::range_guard::polygon_in_range;
+use crate::predicate::range_guard::{SAFE_ABS_MAX, polygon_in_range};
 
 /// The dimension of an intersection cell in a [`De9im`] matrix.
 ///
@@ -220,6 +229,9 @@ pub struct RelatePolygonLinestring;
 #[doc(hidden)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RelatePolygonPolygon;
+#[doc(hidden)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RelateTopology;
 
 impl RelatePairStrategy<PointTag> for PointTag {
     type Strategy = RelatePointPoint;
@@ -249,13 +261,97 @@ impl RelatePairStrategy<PolygonTag> for PolygonTag {
     type Strategy = RelatePolygonPolygon;
 }
 
+trait TopologyKind {}
+
+impl TopologyKind for PointTag {}
+impl TopologyKind for LinestringTag {}
+impl TopologyKind for PolygonTag {}
+impl TopologyKind for SegmentTag {}
+impl TopologyKind for RingTag {}
+impl TopologyKind for BoxTag {}
+impl TopologyKind for MultiPointTag {}
+impl TopologyKind for MultiLinestringTag {}
+impl TopologyKind for MultiPolygonTag {}
+impl TopologyKind for DynamicGeometryTag {}
+impl TopologyKind for GeometryCollectionTag {}
+
+macro_rules! topology_pair_for_single {
+    ($single:ty, $($other:ty),+ $(,)?) => {
+        $(
+            impl RelatePairStrategy<$other> for $single {
+                type Strategy = RelateTopology;
+            }
+        )+
+    };
+}
+
+topology_pair_for_single!(
+    PointTag,
+    SegmentTag,
+    RingTag,
+    BoxTag,
+    MultiPointTag,
+    MultiLinestringTag,
+    MultiPolygonTag,
+    DynamicGeometryTag,
+    GeometryCollectionTag,
+);
+topology_pair_for_single!(
+    LinestringTag,
+    SegmentTag,
+    RingTag,
+    BoxTag,
+    MultiPointTag,
+    MultiLinestringTag,
+    MultiPolygonTag,
+    DynamicGeometryTag,
+    GeometryCollectionTag,
+);
+topology_pair_for_single!(
+    PolygonTag,
+    SegmentTag,
+    RingTag,
+    BoxTag,
+    MultiPointTag,
+    MultiLinestringTag,
+    MultiPolygonTag,
+    DynamicGeometryTag,
+    GeometryCollectionTag,
+);
+
+impl<Other: TopologyKind> RelatePairStrategy<Other> for SegmentTag {
+    type Strategy = RelateTopology;
+}
+impl<Other: TopologyKind> RelatePairStrategy<Other> for RingTag {
+    type Strategy = RelateTopology;
+}
+impl<Other: TopologyKind> RelatePairStrategy<Other> for BoxTag {
+    type Strategy = RelateTopology;
+}
+impl<Other: TopologyKind> RelatePairStrategy<Other> for MultiPointTag {
+    type Strategy = RelateTopology;
+}
+impl<Other: TopologyKind> RelatePairStrategy<Other> for MultiLinestringTag {
+    type Strategy = RelateTopology;
+}
+impl<Other: TopologyKind> RelatePairStrategy<Other> for MultiPolygonTag {
+    type Strategy = RelateTopology;
+}
+impl<Other: TopologyKind> RelatePairStrategy<Other> for DynamicGeometryTag {
+    type Strategy = RelateTopology;
+}
+impl<Other: TopologyKind> RelatePairStrategy<Other> for GeometryCollectionTag {
+    type Strategy = RelateTopology;
+}
+
 type PairStrategy<A, B> =
     <<A as Geometry>::Kind as RelatePairStrategy<<B as Geometry>::Kind>>::Strategy;
 
 /// Compute the DE-9IM matrix for a supported pointlike, linear, or areal pair.
 ///
 /// Mirrors the pair dispatch in
-/// `algorithms/detail/relate/interface.hpp:275-382`.
+/// `algorithms/detail/relate/interface.hpp:275-382`, including the
+/// geometry-collection path in `detail/relate/implementation_gc.hpp`.
 ///
 /// # Errors
 ///
@@ -382,6 +478,286 @@ where
 {
     fn relate(&self, first: &A, second: &B) -> Result<De9im, OverlayError> {
         relate_polygon_polygon(first, second)
+    }
+}
+
+type TopologyPointModel = Point2D<f64, Cartesian>;
+
+#[derive(Debug, Default, Clone)]
+struct Topology {
+    points: Vec<[f64; 2]>,
+    lines: Vec<Vec<[f64; 2]>>,
+    polygons: Vec<Polygon<TopologyPointModel>>,
+}
+
+impl Topology {
+    fn in_range(&self) -> bool {
+        let in_range = |point: [f64; 2]| {
+            point[0].is_finite()
+                && point[1].is_finite()
+                && point[0].abs() <= SAFE_ABS_MAX
+                && point[1].abs() <= SAFE_ABS_MAX
+        };
+        if !self
+            .points
+            .iter()
+            .chain(self.lines.iter().flatten())
+            .copied()
+            .all(in_range)
+        {
+            return false;
+        }
+        self.polygons.iter().all(|polygon| {
+            polygon
+                .outer
+                .0
+                .iter()
+                .chain(polygon.inners.iter().flat_map(|ring| ring.0.iter()))
+                .all(|point| in_range([point.x(), point.y()]))
+        })
+    }
+}
+
+trait TopologyBuilder<G> {
+    fn append(&self, geometry: &G, topology: &mut Topology);
+}
+
+trait TopologyBuilderForKind {
+    type Strategy: Default;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologyPoint;
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologyLinestring;
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologyPolygon;
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologySegment;
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologyRing;
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologyBox;
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologyMultiPoint;
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologyMultiLinestring;
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologyMultiPolygon;
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologyDynamic;
+#[derive(Debug, Default, Clone, Copy)]
+struct TopologyCollection;
+
+impl TopologyBuilderForKind for PointTag {
+    type Strategy = TopologyPoint;
+}
+impl TopologyBuilderForKind for LinestringTag {
+    type Strategy = TopologyLinestring;
+}
+impl TopologyBuilderForKind for PolygonTag {
+    type Strategy = TopologyPolygon;
+}
+impl TopologyBuilderForKind for SegmentTag {
+    type Strategy = TopologySegment;
+}
+impl TopologyBuilderForKind for RingTag {
+    type Strategy = TopologyRing;
+}
+impl TopologyBuilderForKind for BoxTag {
+    type Strategy = TopologyBox;
+}
+impl TopologyBuilderForKind for MultiPointTag {
+    type Strategy = TopologyMultiPoint;
+}
+impl TopologyBuilderForKind for MultiLinestringTag {
+    type Strategy = TopologyMultiLinestring;
+}
+impl TopologyBuilderForKind for MultiPolygonTag {
+    type Strategy = TopologyMultiPolygon;
+}
+impl TopologyBuilderForKind for DynamicGeometryTag {
+    type Strategy = TopologyDynamic;
+}
+impl TopologyBuilderForKind for GeometryCollectionTag {
+    type Strategy = TopologyCollection;
+}
+
+type TopologyBuilderStrategy<G> = <<G as Geometry>::Kind as TopologyBuilderForKind>::Strategy;
+
+impl<G> TopologyBuilder<G> for TopologyPoint
+where
+    G: Point,
+    G::Scalar: Into<f64>,
+    <G::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn append(&self, geometry: &G, topology: &mut Topology) {
+        topology.points.push(xy(geometry));
+    }
+}
+
+impl<G> TopologyBuilder<G> for TopologyLinestring
+where
+    G: LinestringTrait,
+    <G::Point as Point>::Scalar: Into<f64>,
+    <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn append(&self, geometry: &G, topology: &mut Topology) {
+        append_topology_line(geometry.points().map(xy).collect(), topology);
+    }
+}
+
+impl<G> TopologyBuilder<G> for TopologyPolygon
+where
+    G: PolygonTrait,
+    <G::Point as Point>::Scalar: Into<f64>,
+    <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn append(&self, geometry: &G, topology: &mut Topology) {
+        append_topology_polygon(geometry, topology);
+    }
+}
+
+impl<G> TopologyBuilder<G> for TopologySegment
+where
+    G: SegmentTrait,
+    <G::Point as Point>::Scalar: Into<f64>,
+    <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn append(&self, geometry: &G, topology: &mut Topology) {
+        append_topology_line(
+            alloc::vec![
+                [
+                    geometry.get_indexed::<0, 0>().into(),
+                    geometry.get_indexed::<0, 1>().into(),
+                ],
+                [
+                    geometry.get_indexed::<1, 0>().into(),
+                    geometry.get_indexed::<1, 1>().into(),
+                ],
+            ],
+            topology,
+        );
+    }
+}
+
+impl<G> TopologyBuilder<G> for TopologyRing
+where
+    G: RingTrait,
+    <G::Point as Point>::Scalar: Into<f64>,
+    <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn append(&self, geometry: &G, topology: &mut Topology) {
+        topology
+            .polygons
+            .push(Polygon::new(topology_ring(geometry)));
+    }
+}
+
+impl<G> TopologyBuilder<G> for TopologyBox
+where
+    G: BoxTrait,
+    <G::Point as Point>::Scalar: Into<f64>,
+    <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn append(&self, geometry: &G, topology: &mut Topology) {
+        let minimum = [
+            geometry.get_indexed::<{ corner::MIN }, 0>().into(),
+            geometry.get_indexed::<{ corner::MIN }, 1>().into(),
+        ];
+        let maximum = [
+            geometry.get_indexed::<{ corner::MAX }, 0>().into(),
+            geometry.get_indexed::<{ corner::MAX }, 1>().into(),
+        ];
+        topology
+            .polygons
+            .push(Polygon::new(Ring::from_vec(alloc::vec![
+                topology_point(minimum),
+                topology_point([minimum[0], maximum[1]]),
+                topology_point(maximum),
+                topology_point([maximum[0], minimum[1]]),
+                topology_point(minimum),
+            ])));
+    }
+}
+
+impl<G> TopologyBuilder<G> for TopologyMultiPoint
+where
+    G: MultiPoint,
+    <G::ItemPoint as Point>::Scalar: Into<f64>,
+    <<G::ItemPoint as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn append(&self, geometry: &G, topology: &mut Topology) {
+        topology.points.extend(geometry.points().map(xy));
+    }
+}
+
+impl<G> TopologyBuilder<G> for TopologyMultiLinestring
+where
+    G: MultiLinestring,
+    <G::Point as Point>::Scalar: Into<f64>,
+    <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn append(&self, geometry: &G, topology: &mut Topology) {
+        for line in geometry.linestrings() {
+            append_topology_line(line.points().map(xy).collect(), topology);
+        }
+    }
+}
+
+impl<G> TopologyBuilder<G> for TopologyMultiPolygon
+where
+    G: MultiPolygon,
+    <G::Point as Point>::Scalar: Into<f64>,
+    <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    fn append(&self, geometry: &G, topology: &mut Topology) {
+        for polygon in geometry.polygons() {
+            append_topology_polygon(polygon, topology);
+        }
+    }
+}
+
+impl<Scalar, Cs> TopologyBuilder<DynGeometry<Scalar, Cs>> for TopologyDynamic
+where
+    Scalar: CoordinateScalar + Into<f64>,
+    Cs: CoordinateSystem,
+    Cs::Family: SameAs<CartesianFamily>,
+{
+    fn append(&self, geometry: &DynGeometry<Scalar, Cs>, topology: &mut Topology) {
+        append_dynamic_topology(geometry, topology);
+    }
+}
+
+impl<G> TopologyBuilder<G> for TopologyCollection
+where
+    G: GeometryCollection,
+    G::Item: Geometry,
+    <G::Item as Geometry>::Kind: TopologyBuilderForKind,
+    TopologyBuilderStrategy<G::Item>: TopologyBuilder<G::Item> + Default,
+{
+    fn append(&self, geometry: &G, topology: &mut Topology) {
+        for item in geometry.items() {
+            TopologyBuilderStrategy::<G::Item>::default().append(item, topology);
+        }
+    }
+}
+
+impl<A, B> RelateStrategy<A, B> for RelateTopology
+where
+    A: Geometry,
+    B: Geometry,
+    A::Kind: TopologyBuilderForKind,
+    B::Kind: TopologyBuilderForKind,
+    TopologyBuilderStrategy<A>: TopologyBuilder<A> + Default,
+    TopologyBuilderStrategy<B>: TopologyBuilder<B> + Default,
+{
+    fn relate(&self, first: &A, second: &B) -> Result<De9im, OverlayError> {
+        let mut first_topology = Topology::default();
+        TopologyBuilderStrategy::<A>::default().append(first, &mut first_topology);
+        let mut second_topology = Topology::default();
+        TopologyBuilderStrategy::<B>::default().append(second, &mut second_topology);
+        relate_topologies(&first_topology, &second_topology)
     }
 }
 
@@ -843,6 +1219,350 @@ fn interpolate(first: [f64; 2], second: [f64; 2], fraction: f64) -> [f64; 2] {
         first[0] + (second[0] - first[0]) * fraction,
         first[1] + (second[1] - first[1]) * fraction,
     ]
+}
+
+fn topology_point(coordinates: [f64; 2]) -> TopologyPointModel {
+    TopologyPointModel::new(coordinates[0], coordinates[1])
+}
+
+fn topology_ring<R>(ring: &R) -> Ring<TopologyPointModel>
+where
+    R: RingTrait,
+    <R::Point as Point>::Scalar: Into<f64>,
+{
+    Ring::from_vec(
+        ring.points()
+            .map(|point| topology_point(xy(point)))
+            .collect(),
+    )
+}
+
+fn append_topology_line(mut points: Vec<[f64; 2]>, topology: &mut Topology) {
+    points.dedup_by(|first, second| xy_equal(*first, *second));
+    if points.len() >= 2 {
+        topology.lines.push(points);
+    } else if let Some(point) = points.first() {
+        topology.points.push(*point);
+    }
+}
+
+fn append_topology_polygon<G>(polygon: &G, topology: &mut Topology)
+where
+    G: PolygonTrait,
+    <G::Point as Point>::Scalar: Into<f64>,
+{
+    let outer = topology_ring(polygon.exterior());
+    if outer.0.len() < 3 {
+        append_topology_line(outer.0.iter().map(xy).collect(), topology);
+        return;
+    }
+    topology.polygons.push(Polygon::with_inners(
+        outer,
+        polygon.interiors().map(topology_ring).collect(),
+    ));
+}
+
+fn append_dynamic_topology<Scalar, Cs>(geometry: &DynGeometry<Scalar, Cs>, topology: &mut Topology)
+where
+    Scalar: CoordinateScalar + Into<f64>,
+    Cs: CoordinateSystem,
+    Cs::Family: SameAs<CartesianFamily>,
+{
+    match geometry {
+        DynGeometry::Point(point) => topology.points.push(xy(point)),
+        DynGeometry::LineString(line) => {
+            append_topology_line(line.points().map(xy).collect(), topology);
+        }
+        DynGeometry::Polygon(polygon) => append_topology_polygon(polygon, topology),
+        DynGeometry::MultiPoint(points) => topology.points.extend(points.points().map(xy)),
+        DynGeometry::MultiLineString(lines) => {
+            for line in lines.linestrings() {
+                append_topology_line(line.points().map(xy).collect(), topology);
+            }
+        }
+        DynGeometry::MultiPolygon(polygons) => {
+            for polygon in polygons.polygons() {
+                append_topology_polygon(polygon, topology);
+            }
+        }
+        DynGeometry::GeometryCollection(items) => {
+            for item in items {
+                append_dynamic_topology(item, topology);
+            }
+        }
+    }
+}
+
+fn topology_segments(topology: &Topology) -> Vec<([f64; 2], [f64; 2])> {
+    let mut segments = Vec::new();
+    for line in &topology.lines {
+        for points in line.windows(2) {
+            if !xy_equal(points[0], points[1]) {
+                segments.push((points[0], points[1]));
+            }
+        }
+    }
+    for polygon in &topology.polygons {
+        append_boundary_segments(&polygon.outer, &mut segments);
+        for ring in &polygon.inners {
+            append_boundary_segments(ring, &mut segments);
+        }
+    }
+    segments
+}
+
+fn topology_location(topology: &Topology, point: [f64; 2]) -> Location {
+    let mut polygon_boundary = false;
+    for polygon in &topology.polygons {
+        match xy_location_polygon(point, polygon) {
+            Location::Interior => return Location::Interior,
+            Location::Boundary => polygon_boundary = true,
+            Location::Exterior => {}
+        }
+    }
+
+    let mut on_line = false;
+    let mut endpoint_count = 0usize;
+    for line in &topology.lines {
+        for segment in line.windows(2) {
+            if point_on_segment(point, segment[0], segment[1]) {
+                on_line = true;
+            }
+        }
+        if let (Some(first), Some(last)) = (line.first(), line.last())
+            && !xy_equal(*first, *last)
+        {
+            endpoint_count += usize::from(xy_equal(point, *first));
+            endpoint_count += usize::from(xy_equal(point, *last));
+        }
+    }
+    if on_line {
+        return if endpoint_count % 2 == 1 && !polygon_boundary {
+            Location::Boundary
+        } else {
+            Location::Interior
+        };
+    }
+    if topology
+        .points
+        .iter()
+        .any(|candidate| xy_equal(*candidate, point))
+    {
+        return Location::Interior;
+    }
+    if polygon_boundary {
+        Location::Boundary
+    } else {
+        Location::Exterior
+    }
+}
+
+fn dimension_rank(dimension: Dimension) -> u8 {
+    match dimension {
+        Dimension::Empty => 0,
+        Dimension::Point => 1,
+        Dimension::Curve => 2,
+        Dimension::Area => 3,
+    }
+}
+
+fn set_dimension(matrix: &mut De9im, row: Location, column: Location, dimension: Dimension) {
+    let cell = &mut matrix.m[row.index()][column.index()];
+    if dimension_rank(dimension) > dimension_rank(*cell) {
+        *cell = dimension;
+    }
+}
+
+fn segment_parameter(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> f64 {
+    let dx = end[0] - start[0];
+    let dy = end[1] - start[1];
+    if dx.abs() >= dy.abs() && dx != 0.0 {
+        (point[0] - start[0]) / dx
+    } else if dy != 0.0 {
+        (point[1] - start[1]) / dy
+    } else {
+        0.0
+    }
+}
+
+fn segment_parameters(
+    segment: ([f64; 2], [f64; 2]),
+    all_segments: &[([f64; 2], [f64; 2])],
+) -> Vec<f64> {
+    let mut parameters = alloc::vec![0.0, 1.0];
+    for &(start, end) in all_segments {
+        match segment_relation(segment.0, segment.1, start, end) {
+            SegmentRelation::Point(point) => {
+                parameters.push(segment_parameter(point, segment.0, segment.1));
+            }
+            SegmentRelation::Overlap => {
+                for point in [start, end] {
+                    if point_on_segment(point, segment.0, segment.1) {
+                        parameters.push(segment_parameter(point, segment.0, segment.1));
+                    }
+                }
+            }
+            SegmentRelation::Disjoint => {}
+        }
+    }
+    parameters.retain(|parameter| (-f64::EPSILON..=1.0 + f64::EPSILON).contains(parameter));
+    parameters.sort_by(f64::total_cmp);
+    parameters.dedup_by(|first, second| (*first - *second).abs() <= f64::EPSILON);
+    parameters
+}
+
+fn record_segment_cells(
+    matrix: &mut De9im,
+    first: &Topology,
+    second: &Topology,
+    segment: ([f64; 2], [f64; 2]),
+    all_segments: &[([f64; 2], [f64; 2])],
+) {
+    for interval in segment_parameters(segment, all_segments).windows(2) {
+        if interval[1] - interval[0] <= f64::EPSILON {
+            continue;
+        }
+        let midpoint = interpolate(segment.0, segment.1, (interval[0] + interval[1]) * 0.5);
+        let first_location = topology_location(first, midpoint);
+        let second_location = topology_location(second, midpoint);
+        if first_location != Location::Exterior {
+            set_dimension(matrix, first_location, second_location, Dimension::Curve);
+        }
+    }
+}
+
+fn append_topology_candidates(
+    topology: &Topology,
+    segments: &[([f64; 2], [f64; 2])],
+    output: &mut Vec<[f64; 2]>,
+) {
+    output.extend(topology.points.iter().copied());
+    for &(start, end) in segments {
+        output.push(start);
+        output.push(end);
+    }
+}
+
+fn areas_intersect(first: &Topology, second: &Topology) -> Result<bool, OverlayError> {
+    for first_polygon in &first.polygons {
+        for second_polygon in &second.polygons {
+            if !crate::operation::intersection(first_polygon, second_polygon)?
+                .0
+                .is_empty()
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn has_area_outside(first: &Topology, second: &Topology) -> Result<bool, OverlayError> {
+    for polygon in &first.polygons {
+        let mut pieces = alloc::vec![polygon.clone()];
+        for clip in &second.polygons {
+            let mut remainder = Vec::new();
+            for piece in pieces {
+                remainder.extend(crate::operation::difference(&piece, clip)?.0);
+            }
+            pieces = remainder;
+            if pieces.is_empty() {
+                break;
+            }
+        }
+        if !pieces.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn relate_topologies(first: &Topology, second: &Topology) -> Result<De9im, OverlayError> {
+    if !first.in_range() || !second.in_range() {
+        return Err(OverlayError::Unsupported);
+    }
+
+    let first_segments = topology_segments(first);
+    let second_segments = topology_segments(second);
+    let all_segments = first_segments
+        .iter()
+        .chain(&second_segments)
+        .copied()
+        .collect::<Vec<_>>();
+    let mut matrix = empty_matrix();
+
+    if areas_intersect(first, second)? {
+        matrix.m[feature::INTERIOR][feature::INTERIOR] = Dimension::Area;
+    }
+    if has_area_outside(first, second)? {
+        matrix.m[feature::INTERIOR][feature::EXTERIOR] = Dimension::Area;
+    }
+    if has_area_outside(second, first)? {
+        matrix.m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Area;
+    }
+
+    for &segment in &first_segments {
+        record_segment_cells(&mut matrix, first, second, segment, &all_segments);
+    }
+    for &segment in &second_segments {
+        for interval in segment_parameters(segment, &all_segments).windows(2) {
+            if interval[1] - interval[0] <= f64::EPSILON {
+                continue;
+            }
+            let midpoint = interpolate(segment.0, segment.1, (interval[0] + interval[1]) * 0.5);
+            let first_location = topology_location(first, midpoint);
+            let second_location = topology_location(second, midpoint);
+            if second_location != Location::Exterior {
+                set_dimension(
+                    &mut matrix,
+                    first_location,
+                    second_location,
+                    Dimension::Curve,
+                );
+            }
+        }
+    }
+
+    let mut candidates = Vec::new();
+    append_topology_candidates(first, &first_segments, &mut candidates);
+    append_topology_candidates(second, &second_segments, &mut candidates);
+    for &(first_start, first_end) in &first_segments {
+        for &(second_start, second_end) in &second_segments {
+            match segment_relation(first_start, first_end, second_start, second_end) {
+                SegmentRelation::Point(point) => candidates.push(point),
+                SegmentRelation::Overlap => {
+                    for point in [first_start, first_end, second_start, second_end] {
+                        if point_on_segment(point, first_start, first_end)
+                            && point_on_segment(point, second_start, second_end)
+                        {
+                            candidates.push(point);
+                        }
+                    }
+                }
+                SegmentRelation::Disjoint => {}
+            }
+        }
+    }
+    candidates.sort_by(|first, second| {
+        first[0]
+            .total_cmp(&second[0])
+            .then_with(|| first[1].total_cmp(&second[1]))
+    });
+    candidates.dedup_by(|first, second| xy_equal(*first, *second));
+    for point in candidates {
+        let first_location = topology_location(first, point);
+        let second_location = topology_location(second, point);
+        if first_location != Location::Exterior || second_location != Location::Exterior {
+            set_dimension(
+                &mut matrix,
+                first_location,
+                second_location,
+                Dimension::Point,
+            );
+        }
+    }
+
+    Ok(matrix)
 }
 
 /// Compute the DE-9IM matrix relating two polygons.

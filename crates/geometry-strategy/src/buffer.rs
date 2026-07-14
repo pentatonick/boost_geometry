@@ -5,6 +5,102 @@
 //! data-only and live below the overlay engine so algorithms can consume them
 //! without creating a dependency cycle.
 
+use geometry_cs::{CartesianFamily, CoordinateSystem, GeographicFamily, SphericalFamily, Spheroid};
+use geometry_trait::Geometry;
+
+/// Cartesian coordinate strategy bundle for buffer construction.
+///
+/// Mirrors `boost::geometry::strategies::buffer::cartesian<>` from
+/// `strategies/buffer/cartesian.hpp:24-31`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CartesianBuffer;
+
+/// Spherical coordinate strategy bundle for buffer construction.
+///
+/// Mirrors `boost::geometry::strategies::buffer::spherical` from
+/// `strategies/buffer/spherical.hpp:24-46`. Distances use the same unit as
+/// `radius`. The overlay consumer applies this bundle through a local tangent
+/// projection, an explicitly recorded approximation for local buffers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SphericalBuffer {
+    /// Sphere radius in the buffer distance unit.
+    pub radius: f64,
+}
+
+impl SphericalBuffer {
+    /// Unit-sphere strategy matching Boost's default radius.
+    pub const UNIT: Self = Self { radius: 1.0 };
+
+    /// Construct a spherical buffer strategy with an explicit radius.
+    #[must_use]
+    pub const fn new(radius: f64) -> Self {
+        Self { radius }
+    }
+}
+
+impl Default for SphericalBuffer {
+    fn default() -> Self {
+        Self::UNIT
+    }
+}
+
+/// Geographic coordinate strategy bundle for buffer construction.
+///
+/// Mirrors `boost::geometry::strategies::buffer::geographic` from
+/// `strategies/buffer/geographic.hpp:25-48`. The overlay consumer derives the
+/// local meridional and prime-vertical scales from this spheroid before using
+/// its Cartesian offset engine.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GeographicBuffer {
+    /// Reference spheroid used to convert angular coordinates and metric
+    /// buffer distances.
+    pub spheroid: Spheroid,
+}
+
+impl GeographicBuffer {
+    /// WGS84 geographic buffer strategy.
+    pub const WGS84: Self = Self {
+        spheroid: Spheroid::WGS84,
+    };
+
+    /// Construct a geographic buffer strategy with an explicit spheroid.
+    #[must_use]
+    pub const fn new(spheroid: Spheroid) -> Self {
+        Self { spheroid }
+    }
+}
+
+impl Default for GeographicBuffer {
+    fn default() -> Self {
+        Self::WGS84
+    }
+}
+
+/// Select the default coordinate strategy bundle for a buffer input family.
+///
+/// Mirrors `strategies::buffer::services::default_strategy` from
+/// `strategies/buffer/services.hpp:24-40` and its Cartesian, spherical, and
+/// geographic specializations.
+pub trait DefaultBuffer<Family> {
+    /// Default coordinate strategy for this family.
+    type Strategy: Default;
+}
+
+impl DefaultBuffer<CartesianFamily> for CartesianFamily {
+    type Strategy = CartesianBuffer;
+}
+
+impl DefaultBuffer<SphericalFamily> for SphericalFamily {
+    type Strategy = SphericalBuffer;
+}
+
+impl DefaultBuffer<GeographicFamily> for GeographicFamily {
+    type Strategy = GeographicBuffer;
+}
+
+/// Coordinate strategy selected by the point coordinate-system family of `G`.
+pub type DefaultBufferStrategy<G> = <<<<G as Geometry>::Point as geometry_trait::Point>::Cs as CoordinateSystem>::Family as DefaultBuffer<<<<G as Geometry>::Point as geometry_trait::Point>::Cs as CoordinateSystem>::Family>>::Strategy;
+
 /// Signed offset distance policy.
 ///
 /// Mirrors `strategy::buffer::distance_symmetric` and `distance_asymmetric`

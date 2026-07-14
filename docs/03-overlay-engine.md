@@ -185,8 +185,10 @@ Thin orchestration over the pipeline above:
   from {Interior, Boundary, Exterior} of the two geometries, the
   *dimension* of their intersection (`Dimension::{Empty,Point,Curve,Area}`).
   **`relate`** tests that matrix against a DE-9IM mask; `touches`, `overlaps`,
-  and `crosses` are thin predicates over the same matrix. Built from the turn
-  graph plus interior-point sampling; areal × areal only in v1.
+  and `crosses` are thin predicates over the same matrix. Cartesian dispatch
+  covers static single kinds, homogeneous multis, runtime geometries, and
+  heterogeneous geometry collections. Collection topology uses OGC union
+  semantics, including mod-2 multiline boundaries.
 * **`is_valid`** tag-dispatches to the ring/polygon validators (and validates
   each multi-polygon member). The validators check the OGC simple-feature rules:
   finite in-range coordinates, enough points, closed boundary, no spikes, no
@@ -204,17 +206,15 @@ exactly this failure mode being caught.
 
 ### OVL7 — Buffer (`buffer.rs`)
 
-The public `buffer` entry tag-dispatches by geometry kind and grows a geometry
-outward by a fixed distance. Its point and convex-polygon kernels are also
-available directly as `buffer_point` and `buffer_convex_polygon`.
-
-**v1 scope:** positive-distance buffers of a **point** (→ circle, via
-`PointStrategy::{Circle,Square}`) and a **convex polygon** (→ grown polygon
-with `JoinStrategy::{Round,Miter}` corners). The general non-convex /
-negative-distance buffer needs the full offset-and-self-union machinery and
-is deferred. Note: `JoinStrategy::Miter` is currently **uncapped** — Boost's
-`miter_limit` (default 5× distance) isn't implemented yet, so a near-180°
-corner produces a proportionally long spike.
+The public `buffer` entry tag-dispatches every static single and homogeneous
+multi kind and grows or erodes it using explicit distance, side, join, end,
+and point roles. Cartesian offsets are native and include holes, non-convex
+polygons, signed distances, asymmetric linear widths, capped miters, and
+round/flat ends. Spherical and geographic inputs use family-selected radius
+or spheroid bundles, project into a local tangent plane, reuse the Cartesian
+engine, and transform back. That angular path is an intentional local-extent
+approximation; the feature-parity assumptions identify global/polar accuracy
+as the revisit trigger.
 
 ## The recurring design principle: refuse, don't guess
 

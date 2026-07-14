@@ -36,7 +36,7 @@ kind and coordinate-system family — combine).
 | `envelope` | `EnvelopeStrategy`, `EnvelopeStrategyForKind` | `Envelope{Point,Segment,Linestring,Ring,Polygon,Box,MultiPoint,MultiLinestring,MultiPolygon}` — see [tag-dispatch pattern](../02-tag-dispatch-pattern.md) |
 | `within` | `WithinStrategy`, `WithinStrategyForKind` | `WithinRing`, `WithinPoly`, `WithinBox` |
 | `intersects` | `IntersectsStrategy`, `IntersectsPairStrategy` | `CartesianIntersects` |
-| `buffer` | data strategy bundle consumed by overlay | `BufferDistanceStrategy`, `BufferSideStrategy`, `BufferJoinStrategy`, `BufferEndStrategy`, `BufferPointStrategy`, `BufferSettings` |
+| `buffer` | coordinate-family default plus five-role data bundle consumed by overlay | `CartesianBuffer`, `SphericalBuffer`, `GeographicBuffer`, `DefaultBuffer`; `BufferDistanceStrategy`, `BufferSideStrategy`, `BufferJoinStrategy`, `BufferEndStrategy`, `BufferPointStrategy`, `BufferSettings` |
 | `disjoint` | `DisjointStrategy` | `CartesianDisjoint` |
 | `equals` | `EqualsStrategy`, `EqualsPairStrategy` | `EqPointPoint`, `EqSegmentSegment`, `EqPolygonPolygon` |
 | `centroid` | `CentroidStrategy`, `CentroidStrategyForKind` | `Cartesian{Polygon,Ring,Linestring,Segment,Box,MultiPoint}Centroid` |

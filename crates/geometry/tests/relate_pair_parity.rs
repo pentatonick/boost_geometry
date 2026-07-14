@@ -1,10 +1,14 @@
 //! Public-facade DE-9IM tests across pointlike, linear, and areal pairs.
 
 use boost_geometry::cs::Cartesian;
-use boost_geometry::model::{Linestring, Point2D, Polygon, Ring, polygon};
+use boost_geometry::model::{
+    Box as ModelBox, DynGeometry, DynGeometryCollection, Linestring, MultiLinestring, MultiPoint,
+    MultiPolygon, Point2D, Polygon, Ring, Segment, polygon,
+};
 use boost_geometry::overlay::{
     De9im, Dimension, OverlayError, RelateError, crosses, overlaps, relate, relation, touches,
 };
+use boost_geometry::trait_::Polygon as _;
 
 type P = Point2D<f64, Cartesian>;
 
@@ -284,5 +288,153 @@ fn public_matrix_masks_cover_every_symbol_and_overlay_errors() {
     assert_eq!(
         relate(&huge, &square(), "*********"),
         Err(RelateError::Overlay(OverlayError::Unsupported))
+    );
+}
+
+/// `test/algorithms/overlaps/overlaps_box.cpp:21-35` and
+/// `test/algorithms/relate/relate_pointlike_geometry.cpp:166-174` — boxes
+/// participate in the same areal matrix dispatch as polygons.
+#[test]
+fn boxes_and_rings_use_public_areal_relate_dispatch() {
+    let first = ModelBox::from_corners(P::new(1.0, 1.0), P::new(3.0, 3.0));
+    let second = ModelBox::from_corners(P::new(0.0, 0.0), P::new(2.0, 2.0));
+    assert!(
+        relation(&first, &second)
+            .unwrap()
+            .matches("212101212")
+            .unwrap()
+    );
+    assert!(overlaps(&first, &second).unwrap());
+
+    let ring = square().exterior().clone();
+    assert!(
+        relation(&P::new(2.0, 2.0), &ring)
+            .unwrap()
+            .matches("0FFFFF212")
+            .unwrap()
+    );
+    assert!(touches(&P::new(0.0, 2.0), &ring).unwrap());
+}
+
+/// `test/algorithms/relate/relate_pointlike_geometry.cpp:31-45,87-93` —
+/// multi-point membership and the mod-2 boundary of a multi-linestring.
+#[test]
+fn pointlike_and_linear_multis_preserve_union_boundary_rules() {
+    let first = MultiPoint::from_vec(vec![P::new(0.0, 0.0), P::new(1.0, 1.0)]);
+    let second = MultiPoint::from_vec(vec![P::new(0.0, 0.0), P::new(1.0, 0.0)]);
+    assert!(
+        relation(&first, &second)
+            .unwrap()
+            .matches("0F0FFF0F2")
+            .unwrap()
+    );
+
+    let lines = MultiLinestring::from_vec(vec![
+        Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(2.0, 0.0), P::new(2.0, 2.0)]),
+        Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(0.0, 2.0)]),
+    ]);
+    assert!(
+        relation(&P::new(0.0, 0.0), &lines)
+            .unwrap()
+            .matches("0FFFFF102")
+            .unwrap()
+    );
+}
+
+/// `test/algorithms/relate/relate_pointlike_geometry.cpp:181-219` — polygon
+/// members are related as one multi-polygon point set, including a shared
+/// boundary vertex.
+#[test]
+fn multipolygon_relate_uses_the_public_union_topology() {
+    let polygons =
+        MultiPolygon::from_vec(vec![box_at(0.0, 0.0, 5.0, 5.0), box_at(5.0, 5.0, 9.0, 9.0)]);
+    assert!(
+        relation(&P::new(5.0, 5.0), &polygons)
+            .unwrap()
+            .matches("F0FFFF212")
+            .unwrap()
+    );
+    assert!(
+        relation(&P::new(6.0, 6.0), &polygons)
+            .unwrap()
+            .matches("0FFFFF212")
+            .unwrap()
+    );
+}
+
+/// `test/algorithms/relate/relate_gc.cpp:55-65` — heterogeneous collections
+/// use the OGC union topology rather than treating members as independent
+/// matrices.
+#[test]
+fn geometry_collections_relate_through_runtime_public_dispatch() {
+    let joined_lines = DynGeometryCollection(vec![
+        DynGeometry::LineString(Linestring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(1.0, 1.0),
+        ])),
+        DynGeometry::LineString(Linestring::from_vec(vec![
+            P::new(1.0, 1.0),
+            P::new(2.0, 2.0),
+        ])),
+    ]);
+    let point = DynGeometryCollection(vec![DynGeometry::Point(P::new(1.0, 1.0))]);
+    assert!(
+        relation(&point, &joined_lines)
+            .unwrap()
+            .matches("0FFFFF102")
+            .unwrap()
+    );
+
+    let first = DynGeometryCollection(vec![
+        DynGeometry::Polygon(box_at(0.0, 0.0, 5.0, 5.0)),
+        DynGeometry::LineString(Linestring::from_vec(vec![
+            P::new(1.0, 1.0),
+            P::new(6.0, 6.0),
+        ])),
+    ]);
+    let second = DynGeometryCollection(vec![
+        DynGeometry::Polygon(box_at(0.0, 0.0, 5.0, 5.0)),
+        DynGeometry::LineString(Linestring::from_vec(vec![
+            P::new(5.0, 5.0),
+            P::new(6.0, 6.0),
+        ])),
+    ]);
+    let matrix = relation(&first, &second).unwrap();
+    assert!(matrix.matches("2FFF1FFF2").unwrap());
+}
+
+/// `test/algorithms/relate/relate_linear_areal.cpp:44-64` and
+/// `relate_gc.cpp:107-111` — segment, runtime-variant, and static-to-collection
+/// ordered pairs all use the same public matrix contract.
+#[test]
+fn segment_dynamic_and_collection_reverse_pairs_are_public() {
+    let segment = Segment::new(P::new(-1.0, 2.0), P::new(5.0, 2.0));
+    let bounds = ModelBox::from_corners(P::new(0.0, 0.0), P::new(4.0, 4.0));
+    let segment_box = relation(&segment, &bounds).unwrap();
+    assert!(segment_box.matches("101FF0212").unwrap());
+    assert_eq!(
+        relation(&bounds, &segment).unwrap(),
+        segment_box.transposed()
+    );
+    assert!(crosses(&segment, &bounds).unwrap());
+
+    let dynamic_point = DynGeometry::Point(P::new(2.0, 2.0));
+    let dynamic_polygon = DynGeometry::Polygon(square());
+    let dynamic_matrix = relation(&dynamic_point, &dynamic_polygon).unwrap();
+    assert!(dynamic_matrix.matches("0FFFFF212").unwrap());
+    assert_eq!(
+        relation(&dynamic_polygon, &dynamic_point).unwrap(),
+        dynamic_matrix.transposed()
+    );
+
+    let adjacent = DynGeometryCollection(vec![
+        DynGeometry::Polygon(box_at(10.0, 0.0, 20.0, 10.0)),
+        DynGeometry::Point(P::new(15.0, 5.0)),
+    ]);
+    assert!(
+        relation(&box_at(0.0, 0.0, 10.0, 10.0), &adjacent)
+            .unwrap()
+            .matches("FF2F11212")
+            .unwrap()
     );
 }
