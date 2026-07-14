@@ -1,18 +1,20 @@
 //! Public-facade tests for Boost's composable buffer strategy family.
 
-use boost_geometry::cs::Cartesian;
+use boost_geometry::cs::{Cartesian, Degree, Geographic, Spherical, Spheroid};
 use boost_geometry::model::{
     Box as ModelBox, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D, Polygon, Ring,
     Segment, polygon,
 };
 use boost_geometry::overlay::{
     JoinStrategy, OverlayError, PointStrategy, buffer, buffer_convex_polygon, buffer_with,
+    buffer_with_strategy,
 };
-use boost_geometry::prelude::area;
+use boost_geometry::prelude::{area, distance_with};
 use boost_geometry::strategy::buffer::{
     BufferDistanceStrategy, BufferEndStrategy, BufferJoinStrategy, BufferPointStrategy,
-    BufferSettings, BufferSideStrategy,
+    BufferSettings, BufferSideStrategy, GeographicBuffer, SphericalBuffer,
 };
+use boost_geometry::strategy::{Haversine, Vincenty};
 use boost_geometry::trait_::{MultiPolygon as _, Polygon as _, Ring as _};
 
 type P = Point2D<f64, Cartesian>;
@@ -462,4 +464,214 @@ fn areal_offset_handles_collinear_duplicate_and_collapsed_boundaries() {
     let collapsed_result = buffer_with(&collapsed, miter_settings(1.0)).unwrap();
     assert_eq!(collapsed_result.0.len(), 1);
     assert!((buffered_area(&collapsed_result) - 1.0).abs() < 1e-12);
+}
+
+/// `test/algorithms/buffer/buffer_point_geo.cpp:34-49` — the default
+/// geographic coordinate strategy interprets buffer distance in metres and
+/// constructs a geodesic point circle through the public facade.
+#[test]
+fn geographic_point_buffer_uses_wgs84_by_default() {
+    type GeographicPoint = Point2D<f64, Geographic<Degree>>;
+
+    let center = GeographicPoint::new(4.9, 52.0);
+    let result = buffer_with(&center, BufferSettings::round(10.0, 360)).unwrap();
+    let polygon = result.polygons().next().unwrap();
+    assert_eq!(polygon.exterior().points().count(), 361);
+    for point in polygon.exterior().points().take(360) {
+        let distance = distance_with(&center, point, Vincenty::WGS84);
+        assert!((distance - 10.0).abs() < 0.05);
+    }
+    let observed_area = area(polygon).abs();
+    assert!((observed_area - 314.15).abs() < 314.15 * 0.005);
+}
+
+/// `strategies/buffer/spherical.hpp:24-58` — an explicit sphere radius is
+/// carried by the spherical strategy bundle. The great-circle distance of
+/// each generated vertex is the self-contained oracle because Boost has no
+/// spherical buffer-algorithm fixture.
+#[test]
+fn spherical_point_buffer_honors_the_explicit_radius_strategy() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+
+    let radius = 6_371_008.8;
+    let center = SphericalPoint::new(-113.49, 53.54);
+    let result = buffer_with_strategy(
+        &center,
+        BufferSettings::round(1_000.0, 72),
+        SphericalBuffer::new(radius),
+    )
+    .unwrap();
+    let polygon = result.polygons().next().unwrap();
+    for point in polygon.exterior().points().take(72) {
+        let distance = distance_with(&center, point, Haversine { radius });
+        assert!((distance - 1_000.0).abs() < 0.5);
+    }
+}
+
+/// `test/algorithms/buffer/buffer_geo_spheroid.cpp:107-121` — a caller can
+/// replace WGS84 with the alternate spheroid used by Boost's oracle fixture.
+#[test]
+fn geographic_point_buffer_accepts_an_explicit_spheroid() {
+    type GeographicPoint = Point2D<f64, Geographic<Degree>>;
+
+    let spheroid = Spheroid {
+        equatorial_radius: 6_378_000.0,
+        flattening: (6_378_000.0 - 6_375_000.0) / 6_378_000.0,
+    };
+    let center = GeographicPoint::new(10.393_775_9, 63.430_232_3);
+    let result = buffer_with_strategy(
+        &center,
+        BufferSettings::round(100.0, 360),
+        GeographicBuffer::new(spheroid),
+    )
+    .unwrap();
+    let polygon = result.polygons().next().unwrap();
+    let distance_strategy = Vincenty {
+        spheroid,
+        max_iterations: 1_000,
+        tolerance: 1e-12,
+    };
+    for point in polygon.exterior().points().take(360) {
+        let distance = distance_with(&center, point, distance_strategy);
+        assert!((distance - 100.0).abs() < 0.5);
+    }
+    let observed_area = area(polygon).abs();
+    assert!((observed_area - 31_414.33).abs() < 31_414.33 * 0.005);
+}
+
+/// `test/algorithms/buffer/buffer_linestring_geo.cpp:15-64` and
+/// `buffer_polygon_geo.cpp:15-55` — geographic linear and areal inputs use
+/// the same five public strategy roles as Cartesian inputs.
+#[test]
+fn geographic_linear_and_areal_buffers_use_public_strategy_roles() {
+    type GeographicPoint = Point2D<f64, Geographic<Degree>>;
+
+    let line = Linestring::from_vec(vec![
+        GeographicPoint::new(10.396_562_8, 63.427_678_6),
+        GeographicPoint::new(10.395_313_4, 63.429_963_4),
+    ]);
+    let line_settings = BufferSettings {
+        end: BufferEndStrategy::Flat,
+        ..BufferSettings::round(5.0, 360)
+    };
+    let line_result = buffer_with(&line, line_settings).unwrap();
+    let line_area: f64 = line_result
+        .polygons()
+        .map(|polygon| area(polygon).abs())
+        .sum();
+    assert!((line_area - 2_622.0).abs() < 35.0);
+
+    let polygon: Polygon<GeographicPoint> = Polygon::new(Ring::from_vec(vec![
+        GeographicPoint::new(10.400_658_7, 63.437_798_2),
+        GeographicPoint::new(10.405_090_4, 63.439_599_3),
+        GeographicPoint::new(10.407_499_4, 63.438_252_7),
+        GeographicPoint::new(10.400_658_7, 63.437_798_2),
+    ]));
+    let polygon_result = buffer_with(&polygon, BufferSettings::round(5.0, 36)).unwrap();
+    let polygon_area: f64 = polygon_result
+        .polygons()
+        .map(|polygon| area(polygon).abs())
+        .sum();
+    assert!((polygon_area - 32_940.0).abs() < 600.0);
+}
+
+/// `test/algorithms/buffer/buffer_multi_linestring_geo.cpp:18-73` and
+/// `buffer_multi_polygon_geo.cpp:59-122` — every static geometry-kind arm is
+/// available with an angular coordinate strategy, not only point/polygon.
+#[test]
+fn angular_segment_ring_box_and_multi_dispatch_is_public() {
+    type GeographicPoint = Point2D<f64, Geographic<Degree>>;
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let spherical = SphericalBuffer::new(6_371_008.8);
+    let round = BufferSettings::round(100.0, 36);
+
+    let segment = Segment::new(
+        SphericalPoint::new(-113.50, 53.54),
+        SphericalPoint::new(-113.49, 53.54),
+    );
+    assert!(
+        !buffer_with_strategy(&segment, round, spherical)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+
+    let ring: Ring<SphericalPoint> = Ring::from_vec(vec![
+        SphericalPoint::new(-113.50, 53.53),
+        SphericalPoint::new(-113.50, 53.54),
+        SphericalPoint::new(-113.49, 53.54),
+        SphericalPoint::new(-113.49, 53.53),
+        SphericalPoint::new(-113.50, 53.53),
+    ]);
+    assert!(
+        !buffer_with_strategy(&ring, round, spherical)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+
+    let bounds = ModelBox::from_corners(
+        SphericalPoint::new(-113.50, 53.53),
+        SphericalPoint::new(-113.49, 53.54),
+    );
+    assert!(
+        !buffer_with_strategy(&bounds, round, spherical)
+            .unwrap()
+            .0
+            .is_empty()
+    );
+
+    let points = MultiPoint::from_vec(vec![
+        SphericalPoint::new(-113.50, 53.54),
+        SphericalPoint::new(-113.48, 53.54),
+    ]);
+    assert_eq!(
+        buffer_with_strategy(&points, round, spherical)
+            .unwrap()
+            .polygons()
+            .count(),
+        2
+    );
+
+    let lines = MultiLinestring::from_vec(vec![
+        Linestring::from_vec(vec![
+            GeographicPoint::new(10.396, 63.427),
+            GeographicPoint::new(10.399, 63.428),
+        ]),
+        Linestring::from_vec(vec![
+            GeographicPoint::new(10.406, 63.427),
+            GeographicPoint::new(10.409, 63.428),
+        ]),
+    ]);
+    assert_eq!(
+        buffer_with(&lines, BufferSettings::round(5.0, 36))
+            .unwrap()
+            .polygons()
+            .count(),
+        2
+    );
+
+    let polygons: MultiPolygon<Polygon<GeographicPoint>> = MultiPolygon::from_vec(vec![
+        Polygon::new(Ring::from_vec(vec![
+            GeographicPoint::new(10.396, 63.427),
+            GeographicPoint::new(10.396, 63.428),
+            GeographicPoint::new(10.397, 63.428),
+            GeographicPoint::new(10.397, 63.427),
+            GeographicPoint::new(10.396, 63.427),
+        ])),
+        Polygon::new(Ring::from_vec(vec![
+            GeographicPoint::new(10.406, 63.427),
+            GeographicPoint::new(10.406, 63.428),
+            GeographicPoint::new(10.407, 63.428),
+            GeographicPoint::new(10.407, 63.427),
+            GeographicPoint::new(10.406, 63.427),
+        ])),
+    ]);
+    assert_eq!(
+        buffer_with(&polygons, BufferSettings::round(5.0, 36))
+            .unwrap()
+            .polygons()
+            .count(),
+        2
+    );
 }

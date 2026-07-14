@@ -44,6 +44,7 @@ pub mod validity;
 
 pub use buffer::{
     JoinStrategy, PointStrategy, buffer, buffer_convex_polygon, buffer_point, buffer_with,
+    buffer_with_strategy,
 };
 pub use merge::{merge_elements, merge_multipolygon, merge_polygons};
 pub use operation::{OverlayError, difference, intersection, sym_difference, r#union, union_poly};

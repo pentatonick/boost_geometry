@@ -5,7 +5,13 @@
 //! the input outward by `distance`, rounding or mitering the corners,
 //! and unions the offset pieces into an output polygon.
 //!
-//! Cartesian dispatch covers points, linestrings, and simple polygons.
+//! Cartesian dispatch covers every static single and homogeneous multi kind.
+//! Spherical and geographic inputs are projected into a local tangent plane,
+//! buffered by the same Cartesian engine, and transformed back. The angular
+//! path is intended for local buffers: unlike Boost's per-segment geodesic
+//! offset formulas, its error grows with the geometry's angular extent and it
+//! rejects projection centers at the poles. This deliberate approximation is
+//! recorded in the project feature-parity map for later reassessment.
 //! Polygon offsets are signed, handle convex and reflex vertices, and move
 //! interior rings in the opposite topological direction from the exterior.
 //!
@@ -32,13 +38,19 @@ use alloc::vec::Vec;
 
 use geometry_coords::{
     CoordinateScalar,
-    math::{atan2, ceil, cos, hypot, mul_add, sin},
+    math::{atan2, ceil, cos, hypot, mul_add, sin, sqrt},
 };
-use geometry_cs::{CartesianFamily, CoordinateSystem, FromF64};
-use geometry_model::{Linestring, MultiPolygon, Polygon, Ring};
+use geometry_cs::{
+    AngleUnit, Cartesian, CartesianFamily, CoordinateSystem, FromF64, Geographic, GeographicFamily,
+    Spherical, SphericalFamily,
+};
+use geometry_model::{
+    Box as ModelBox, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D, Polygon, Ring,
+};
 use geometry_strategy::buffer::{
     BufferDistanceStrategy, BufferEndStrategy, BufferJoinStrategy, BufferPointStrategy,
-    BufferSettings,
+    BufferSettings, CartesianBuffer, DefaultBuffer, DefaultBufferStrategy, GeographicBuffer,
+    SphericalBuffer,
 };
 use geometry_tag::{
     BoxTag, LinestringTag, MultiLinestringTag, MultiPointTag, MultiPolygonTag, PointTag,
@@ -100,11 +112,12 @@ pub enum PointStrategy {
 /// `boost::geometry::buffer` in
 /// `algorithms/detail/buffer/interface.hpp:246-273`.
 #[doc(hidden)]
-pub trait BufferStrategy<G: Geometry> {
+pub trait BufferStrategy<G: Geometry, CoordinateStrategy> {
     fn apply(
         &self,
         geometry: &G,
         settings: BufferSettings,
+        coordinate_strategy: &CoordinateStrategy,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError>;
 }
 
@@ -212,11 +225,11 @@ impl BufferStrategyForKind for MultiPolygonTag {
 /// Buffer a geometry using the public point and join strategies.
 ///
 /// Mirrors `boost::geometry::buffer` from
-/// `boost/geometry/algorithms/detail/buffer/interface.hpp:246-273`. Cartesian
-/// dispatch supports point, segment, linestring, ring, polygon, box, and all
-/// three homogeneous multi-geometry kinds. Point inputs use `point`, linear
-/// inputs use all five strategy roles, and areal inputs use signed distance
-/// and join policies.
+/// `boost/geometry/algorithms/detail/buffer/interface.hpp:246-273`. Cartesian,
+/// spherical, and geographic dispatch supports point, segment, linestring,
+/// ring, polygon, box, and all three homogeneous multi-geometry kinds. Point
+/// inputs use `point`, linear inputs use all five strategy roles, and areal
+/// inputs use signed distance and join policies.
 ///
 /// # Errors
 ///
@@ -233,7 +246,9 @@ pub fn buffer<G>(
 where
     G: Geometry,
     G::Kind: BufferStrategyForKind,
-    <G::Kind as BufferStrategyForKind>::S: BufferStrategy<G>,
+    <<G::Point as Point>::Cs as CoordinateSystem>::Family:
+        DefaultBuffer<<<G::Point as Point>::Cs as CoordinateSystem>::Family>,
+    <G::Kind as BufferStrategyForKind>::S: BufferStrategy<G, DefaultBufferStrategy<G>>,
 {
     let settings = BufferSettings {
         distance: BufferDistanceStrategy::Symmetric(distance),
@@ -276,14 +291,56 @@ pub fn buffer_with<G>(
 where
     G: Geometry,
     G::Kind: BufferStrategyForKind,
-    <G::Kind as BufferStrategyForKind>::S: BufferStrategy<G>,
+    <<G::Point as Point>::Cs as CoordinateSystem>::Family:
+        DefaultBuffer<<<G::Point as Point>::Cs as CoordinateSystem>::Family>,
+    <G::Kind as BufferStrategyForKind>::S: BufferStrategy<G, DefaultBufferStrategy<G>>,
 {
-    <<G::Kind as BufferStrategyForKind>::S as Default>::default().apply(geometry, settings)
+    buffer_with_strategy(geometry, settings, DefaultBufferStrategy::<G>::default())
+}
+
+/// Buffer a geometry with explicit coordinate-system and five-role strategy
+/// bundles.
+///
+/// Mirrors the explicit strategy overload of `boost::geometry::buffer` from
+/// `algorithms/detail/buffer/interface.hpp:246-273`, together with the
+/// Cartesian, spherical, and geographic umbrella strategies under
+/// `strategies/buffer/`.
+///
+/// [`SphericalBuffer`] and [`GeographicBuffer`] use a geometry-centered local
+/// tangent projection before invoking the Cartesian offset engine. This keeps
+/// distance units explicit and `no_std` compatible, but is a local-extent
+/// approximation rather than Boost's per-segment geodesic construction.
+///
+/// # Errors
+///
+/// Returns [`OverlayError::Unsupported`] for invalid strategy values,
+/// non-finite/inapplicable distances, or degenerate linear input.
+#[inline]
+#[must_use = "buffering can fail and the generated geometry should be used"]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Boost buffer coordinate strategies are small value objects passed explicitly"
+)]
+pub fn buffer_with_strategy<G, CoordinateStrategy>(
+    geometry: &G,
+    settings: BufferSettings,
+    coordinate_strategy: CoordinateStrategy,
+) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError>
+where
+    G: Geometry,
+    G::Kind: BufferStrategyForKind,
+    <G::Kind as BufferStrategyForKind>::S: BufferStrategy<G, CoordinateStrategy>,
+{
+    <<G::Kind as BufferStrategyForKind>::S as Default>::default().apply(
+        geometry,
+        settings,
+        &coordinate_strategy,
+    )
 }
 
 /// Implements the point arm selected by `buffer_all` at
 /// `algorithms/detail/buffer/interface.hpp:269-273`.
-impl<G> BufferStrategy<G> for PointBuffer
+impl<G> BufferStrategy<G, CartesianBuffer> for PointBuffer
 where
     G: Point + PointMut + Default + Copy,
     G::Scalar: CoordinateScalar + Into<f64> + FromF64,
@@ -293,6 +350,7 @@ where
         &self,
         point_geometry: &G,
         settings: BufferSettings,
+        _coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G>>, OverlayError> {
         let BufferDistanceStrategy::Symmetric(distance) = settings.distance else {
             return Err(OverlayError::Unsupported);
@@ -316,7 +374,7 @@ where
 
 /// Implements the polygon arm selected by `buffer_all` at
 /// `algorithms/detail/buffer/interface.hpp:269-273`.
-impl<G> BufferStrategy<G> for PolygonBuffer
+impl<G> BufferStrategy<G, CartesianBuffer> for PolygonBuffer
 where
     G: PolygonTrait,
     G::Point: PointMut + Default + Copy,
@@ -327,6 +385,7 @@ where
         &self,
         polygon: &G,
         settings: BufferSettings,
+        _coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
         let BufferDistanceStrategy::Symmetric(distance) = settings.distance else {
             return Err(OverlayError::Unsupported);
@@ -357,7 +416,7 @@ where
     }
 }
 
-impl<G> BufferStrategy<G> for LinestringBuffer
+impl<G> BufferStrategy<G, CartesianBuffer> for LinestringBuffer
 where
     G: LinestringTrait,
     G::Point: PointMut + Default + Copy,
@@ -368,6 +427,7 @@ where
         &self,
         line: &G,
         settings: BufferSettings,
+        _coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
         let (left, right) = match settings.distance {
             BufferDistanceStrategy::Symmetric(distance) => (distance, distance),
@@ -384,7 +444,7 @@ where
     }
 }
 
-impl<G> BufferStrategy<G> for SegmentBuffer
+impl<G> BufferStrategy<G, CartesianBuffer> for SegmentBuffer
 where
     G: SegmentTrait,
     G::Point: PointMut + Default + Copy,
@@ -395,14 +455,15 @@ where
         &self,
         segment: &G,
         settings: BufferSettings,
+        coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
         let line: Linestring<G::Point> =
             Linestring::from_vec(alloc::vec![segment_start(segment), segment_end(segment)]);
-        LinestringBuffer.apply(&line, settings)
+        LinestringBuffer.apply(&line, settings, coordinate_strategy)
     }
 }
 
-impl<G> BufferStrategy<G> for RingBuffer
+impl<G> BufferStrategy<G, CartesianBuffer> for RingBuffer
 where
     G: RingTrait,
     G::Point: PointMut + Default + Copy,
@@ -413,6 +474,7 @@ where
         &self,
         ring: &G,
         settings: BufferSettings,
+        _coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
         let BufferDistanceStrategy::Symmetric(distance) = settings.distance else {
             return Err(OverlayError::Unsupported);
@@ -427,7 +489,7 @@ where
     }
 }
 
-impl<G> BufferStrategy<G> for BoxBuffer
+impl<G> BufferStrategy<G, CartesianBuffer> for BoxBuffer
 where
     G: BoxTrait,
     G::Point: PointMut + Default + Copy,
@@ -438,6 +500,7 @@ where
         &self,
         bounds: &G,
         settings: BufferSettings,
+        coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
         let minimum = box_min(bounds);
         let maximum = box_max(bounds);
@@ -452,11 +515,11 @@ where
             make_point(max_x, min_y),
             make_point(min_x, min_y),
         ]);
-        RingBuffer.apply(&ring, settings)
+        RingBuffer.apply(&ring, settings, coordinate_strategy)
     }
 }
 
-impl<G> BufferStrategy<G> for MultiPointBuffer
+impl<G> BufferStrategy<G, CartesianBuffer> for MultiPointBuffer
 where
     G: MultiPointTrait<ItemPoint = <G as Geometry>::Point>,
     G::Point: PointMut + Default + Copy,
@@ -467,16 +530,19 @@ where
         &self,
         points: &G,
         settings: BufferSettings,
+        coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
         let mut output = MultiPolygon::new();
         for point in points.points() {
-            output.0.extend(PointBuffer.apply(point, settings)?.0);
+            output
+                .0
+                .extend(PointBuffer.apply(point, settings, coordinate_strategy)?.0);
         }
         crate::merge::merge_polygons(output.0)
     }
 }
 
-impl<G> BufferStrategy<G> for MultiLinestringBuffer
+impl<G> BufferStrategy<G, CartesianBuffer> for MultiLinestringBuffer
 where
     G: MultiLinestringTrait,
     G::Point: PointMut + Default + Copy,
@@ -487,16 +553,21 @@ where
         &self,
         lines: &G,
         settings: BufferSettings,
+        coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
         let mut output = MultiPolygon::new();
         for line in lines.linestrings() {
-            output.0.extend(LinestringBuffer.apply(line, settings)?.0);
+            output.0.extend(
+                LinestringBuffer
+                    .apply(line, settings, coordinate_strategy)?
+                    .0,
+            );
         }
         crate::merge::merge_polygons(output.0)
     }
 }
 
-impl<G> BufferStrategy<G> for MultiPolygonBuffer
+impl<G> BufferStrategy<G, CartesianBuffer> for MultiPolygonBuffer
 where
     G: MultiPolygonTrait,
     G::Point: PointMut + Default + Copy,
@@ -507,14 +578,573 @@ where
         &self,
         polygons: &G,
         settings: BufferSettings,
+        coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
         let mut output = MultiPolygon::new();
         for polygon in polygons.polygons() {
-            output.0.extend(PolygonBuffer.apply(polygon, settings)?.0);
+            output.0.extend(
+                PolygonBuffer
+                    .apply(polygon, settings, coordinate_strategy)?
+                    .0,
+            );
         }
         crate::merge::merge_polygons(output.0)
     }
 }
+
+trait AngularCoordinateSystem {
+    type Units: AngleUnit;
+}
+
+impl<Units: AngleUnit> AngularCoordinateSystem for Spherical<Units> {
+    type Units = Units;
+}
+
+impl<Units: AngleUnit> AngularCoordinateSystem for Geographic<Units> {
+    type Units = Units;
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LocalProjection {
+    longitude: f64,
+    latitude: f64,
+    east_scale: f64,
+    north_scale: f64,
+}
+
+impl LocalProjection {
+    fn project(self, longitude: f64, latitude: f64) -> (f64, f64) {
+        let mut delta_longitude = longitude - self.longitude;
+        if delta_longitude > core::f64::consts::PI {
+            delta_longitude -= 2.0 * core::f64::consts::PI;
+        } else if delta_longitude < -core::f64::consts::PI {
+            delta_longitude += 2.0 * core::f64::consts::PI;
+        }
+        (
+            delta_longitude * self.east_scale,
+            (latitude - self.latitude) * self.north_scale,
+        )
+    }
+
+    fn unproject(self, x: f64, y: f64) -> (f64, f64) {
+        let mut longitude = self.longitude + x / self.east_scale;
+        if longitude > core::f64::consts::PI {
+            longitude -= 2.0 * core::f64::consts::PI;
+        } else if longitude < -core::f64::consts::PI {
+            longitude += 2.0 * core::f64::consts::PI;
+        }
+        (longitude, self.latitude + y / self.north_scale)
+    }
+}
+
+trait AngularBufferProjection {
+    fn projection(&self, longitude: f64, latitude: f64) -> Result<LocalProjection, OverlayError>;
+}
+
+impl AngularBufferProjection for SphericalBuffer {
+    fn projection(&self, longitude: f64, latitude: f64) -> Result<LocalProjection, OverlayError> {
+        if !self.radius.is_finite() || self.radius <= 0.0 {
+            return Err(OverlayError::Unsupported);
+        }
+        let east_scale = self.radius * cos(latitude);
+        if east_scale.abs() <= f64::EPSILON {
+            return Err(OverlayError::Unsupported);
+        }
+        Ok(LocalProjection {
+            longitude,
+            latitude,
+            east_scale,
+            north_scale: self.radius,
+        })
+    }
+}
+
+impl AngularBufferProjection for GeographicBuffer {
+    fn projection(&self, longitude: f64, latitude: f64) -> Result<LocalProjection, OverlayError> {
+        let spheroid = self.spheroid;
+        if !spheroid.equatorial_radius.is_finite()
+            || spheroid.equatorial_radius <= 0.0
+            || !spheroid.flattening.is_finite()
+            || !(0.0..1.0).contains(&spheroid.flattening)
+        {
+            return Err(OverlayError::Unsupported);
+        }
+
+        let eccentricity_squared = spheroid.eccentricity_squared();
+        let sin_latitude = sin(latitude);
+        let denominator = sqrt(1.0 - eccentricity_squared * sin_latitude * sin_latitude);
+        let prime_vertical = spheroid.equatorial_radius / denominator;
+        let meridional = spheroid.equatorial_radius * (1.0 - eccentricity_squared)
+            / (denominator * denominator * denominator);
+        let east_scale = prime_vertical * cos(latitude);
+        if east_scale.abs() <= f64::EPSILON {
+            return Err(OverlayError::Unsupported);
+        }
+        Ok(LocalProjection {
+            longitude,
+            latitude,
+            east_scale,
+            north_scale: meridional,
+        })
+    }
+}
+
+fn angular_coordinates<P>(point: &P) -> (f64, f64)
+where
+    P: Point,
+    P::Scalar: Into<f64>,
+    P::Cs: AngularCoordinateSystem,
+{
+    let longitude = <P::Cs as AngularCoordinateSystem>::Units::to_radians(point.get::<0>().into());
+    let latitude = <P::Cs as AngularCoordinateSystem>::Units::to_radians(point.get::<1>().into());
+    (longitude, latitude)
+}
+
+fn angular_point<P>(longitude: f64, latitude: f64) -> P
+where
+    P: PointMut + Default,
+    P::Scalar: FromF64,
+    P::Cs: AngularCoordinateSystem,
+{
+    let mut point = P::default();
+    let longitude = <P::Cs as AngularCoordinateSystem>::Units::from_radians(longitude);
+    let latitude = <P::Cs as AngularCoordinateSystem>::Units::from_radians(latitude);
+    point.set::<0>(P::Scalar::from_f64(longitude));
+    point.set::<1>(P::Scalar::from_f64(latitude));
+    point
+}
+
+fn projection_center(coordinates: &[(f64, f64)]) -> Result<(f64, f64), OverlayError> {
+    if coordinates.is_empty() {
+        return Err(OverlayError::Unsupported);
+    }
+    let mut longitude_sine = 0.0;
+    let mut longitude_cosine = 0.0;
+    let mut latitude = 0.0;
+    for &(longitude, point_latitude) in coordinates {
+        longitude_sine += sin(longitude);
+        longitude_cosine += cos(longitude);
+        latitude += point_latitude;
+    }
+    let count = coordinates.len() as f64;
+    Ok((atan2(longitude_sine, longitude_cosine), latitude / count))
+}
+
+type ProjectedPoint = Point2D<f64, Cartesian>;
+
+fn projected_point<P>(point: &P, projection: LocalProjection) -> ProjectedPoint
+where
+    P: Point,
+    P::Scalar: Into<f64>,
+    P::Cs: AngularCoordinateSystem,
+{
+    let (longitude, latitude) = angular_coordinates(point);
+    let (x, y) = projection.project(longitude, latitude);
+    ProjectedPoint::new(x, y)
+}
+
+fn projected_ring<R>(ring: &R, projection: LocalProjection) -> Ring<ProjectedPoint>
+where
+    R: RingTrait,
+    R::Point: Point,
+    <R::Point as Point>::Scalar: Into<f64>,
+    <R::Point as Point>::Cs: AngularCoordinateSystem,
+{
+    Ring::from_vec(
+        ring.points()
+            .map(|point| projected_point(point, projection))
+            .collect(),
+    )
+}
+
+fn projected_polygon<G>(polygon: &G, projection: LocalProjection) -> Polygon<ProjectedPoint>
+where
+    G: PolygonTrait,
+    G::Point: Point,
+    <G::Point as Point>::Scalar: Into<f64>,
+    <G::Point as Point>::Cs: AngularCoordinateSystem,
+{
+    Polygon::with_inners(
+        projected_ring(polygon.exterior(), projection),
+        polygon
+            .interiors()
+            .map(|ring| projected_ring(ring, projection))
+            .collect(),
+    )
+}
+
+fn unprojected_buffer<P>(
+    polygons: MultiPolygon<Polygon<ProjectedPoint>>,
+    projection: LocalProjection,
+) -> MultiPolygon<Polygon<P>>
+where
+    P: PointMut + Default,
+    P::Scalar: FromF64,
+    P::Cs: AngularCoordinateSystem,
+{
+    MultiPolygon::from_vec(
+        polygons
+            .0
+            .into_iter()
+            .map(|polygon| {
+                let outer = Ring::from_vec(
+                    polygon
+                        .outer
+                        .0
+                        .into_iter()
+                        .map(|point| {
+                            let (longitude, latitude) = projection.unproject(point.x(), point.y());
+                            angular_point(longitude, latitude)
+                        })
+                        .collect(),
+                );
+                let inners = polygon
+                    .inners
+                    .into_iter()
+                    .map(|ring| {
+                        Ring::from_vec(
+                            ring.0
+                                .into_iter()
+                                .map(|point| {
+                                    let (longitude, latitude) =
+                                        projection.unproject(point.x(), point.y());
+                                    angular_point(longitude, latitude)
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                Polygon::with_inners(outer, inners)
+            })
+            .collect(),
+    )
+}
+
+fn projection_for_points<'a, P>(
+    points: impl IntoIterator<Item = &'a P>,
+    strategy: &impl AngularBufferProjection,
+) -> Result<LocalProjection, OverlayError>
+where
+    P: Point + 'a,
+    P::Scalar: Into<f64>,
+    P::Cs: AngularCoordinateSystem,
+{
+    let coordinates: Vec<_> = points.into_iter().map(angular_coordinates).collect();
+    let (longitude, latitude) = projection_center(&coordinates)?;
+    strategy.projection(longitude, latitude)
+}
+
+fn projected_point_apply<P>(
+    point: &P,
+    settings: BufferSettings,
+    strategy: &impl AngularBufferProjection,
+) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    P: Point + PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    P::Cs: AngularCoordinateSystem,
+{
+    let projection = projection_for_points(core::iter::once(point), strategy)?;
+    let point = projected_point(point, projection);
+    let output = PointBuffer.apply(&point, settings, &CartesianBuffer)?;
+    Ok(unprojected_buffer(output, projection))
+}
+
+fn projected_linestring_apply<L>(
+    line: &L,
+    settings: BufferSettings,
+    strategy: &impl AngularBufferProjection,
+) -> Result<MultiPolygon<Polygon<L::Point>>, OverlayError>
+where
+    L: LinestringTrait,
+    L::Point: PointMut + Default + Copy,
+    <L::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <L::Point as Point>::Cs: AngularCoordinateSystem,
+{
+    let projection = projection_for_points(line.points(), strategy)?;
+    let projected = Linestring::from_vec(
+        line.points()
+            .map(|point| projected_point(point, projection))
+            .collect(),
+    );
+    let output = LinestringBuffer.apply(&projected, settings, &CartesianBuffer)?;
+    Ok(unprojected_buffer(output, projection))
+}
+
+fn projected_ring_apply<R>(
+    ring: &R,
+    settings: BufferSettings,
+    strategy: &impl AngularBufferProjection,
+) -> Result<MultiPolygon<Polygon<R::Point>>, OverlayError>
+where
+    R: RingTrait,
+    R::Point: PointMut + Default + Copy,
+    <R::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <R::Point as Point>::Cs: AngularCoordinateSystem,
+{
+    let projection = projection_for_points(ring.points(), strategy)?;
+    let output = RingBuffer.apply(
+        &projected_ring(ring, projection),
+        settings,
+        &CartesianBuffer,
+    )?;
+    Ok(unprojected_buffer(output, projection))
+}
+
+fn projected_polygon_apply<G>(
+    polygon: &G,
+    settings: BufferSettings,
+    strategy: &impl AngularBufferProjection,
+) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError>
+where
+    G: PolygonTrait,
+    G::Point: PointMut + Default + Copy,
+    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Cs: AngularCoordinateSystem,
+{
+    let mut coordinates = polygon
+        .exterior()
+        .points()
+        .map(angular_coordinates)
+        .collect::<Vec<_>>();
+    for ring in polygon.interiors() {
+        coordinates.extend(ring.points().map(angular_coordinates));
+    }
+    let (longitude, latitude) = projection_center(&coordinates)?;
+    let projection = strategy.projection(longitude, latitude)?;
+    let output = PolygonBuffer.apply(
+        &projected_polygon(polygon, projection),
+        settings,
+        &CartesianBuffer,
+    )?;
+    Ok(unprojected_buffer(output, projection))
+}
+
+macro_rules! impl_angular_buffer_strategy {
+    ($strategy:ty, $family:ty) => {
+        impl<G> BufferStrategy<G, $strategy> for PointBuffer
+        where
+            G: Point + PointMut + Default + Copy,
+            G::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            G::Cs: AngularCoordinateSystem,
+            <G::Cs as CoordinateSystem>::Family: SameAs<$family>,
+        {
+            fn apply(
+                &self,
+                geometry: &G,
+                settings: BufferSettings,
+                coordinate_strategy: &$strategy,
+            ) -> Result<MultiPolygon<Polygon<G>>, OverlayError> {
+                projected_point_apply(geometry, settings, coordinate_strategy)
+            }
+        }
+
+        impl<G> BufferStrategy<G, $strategy> for LinestringBuffer
+        where
+            G: LinestringTrait,
+            G::Point: PointMut + Default + Copy,
+            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Cs: AngularCoordinateSystem,
+            <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
+        {
+            fn apply(
+                &self,
+                geometry: &G,
+                settings: BufferSettings,
+                coordinate_strategy: &$strategy,
+            ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
+                projected_linestring_apply(geometry, settings, coordinate_strategy)
+            }
+        }
+
+        impl<G> BufferStrategy<G, $strategy> for SegmentBuffer
+        where
+            G: SegmentTrait,
+            G::Point: PointMut + Default + Copy,
+            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Cs: AngularCoordinateSystem,
+            <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
+        {
+            fn apply(
+                &self,
+                geometry: &G,
+                settings: BufferSettings,
+                coordinate_strategy: &$strategy,
+            ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
+                let line = Linestring::from_vec(alloc::vec![
+                    segment_start(geometry),
+                    segment_end(geometry),
+                ]);
+                projected_linestring_apply(&line, settings, coordinate_strategy)
+            }
+        }
+
+        impl<G> BufferStrategy<G, $strategy> for RingBuffer
+        where
+            G: RingTrait,
+            G::Point: PointMut + Default + Copy,
+            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Cs: AngularCoordinateSystem,
+            <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
+        {
+            fn apply(
+                &self,
+                geometry: &G,
+                settings: BufferSettings,
+                coordinate_strategy: &$strategy,
+            ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
+                projected_ring_apply(geometry, settings, coordinate_strategy)
+            }
+        }
+
+        impl<G> BufferStrategy<G, $strategy> for PolygonBuffer
+        where
+            G: PolygonTrait,
+            G::Point: PointMut + Default + Copy,
+            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Cs: AngularCoordinateSystem,
+            <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
+        {
+            fn apply(
+                &self,
+                geometry: &G,
+                settings: BufferSettings,
+                coordinate_strategy: &$strategy,
+            ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
+                projected_polygon_apply(geometry, settings, coordinate_strategy)
+            }
+        }
+
+        impl<G> BufferStrategy<G, $strategy> for BoxBuffer
+        where
+            G: BoxTrait,
+            G::Point: PointMut + Default + Copy,
+            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Cs: AngularCoordinateSystem,
+            <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
+        {
+            fn apply(
+                &self,
+                geometry: &G,
+                settings: BufferSettings,
+                coordinate_strategy: &$strategy,
+            ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
+                let minimum = box_min(geometry);
+                let maximum = box_max(geometry);
+                let projection = projection_for_points([&minimum, &maximum], coordinate_strategy)?;
+                let projected = ModelBox::from_corners(
+                    projected_point(&minimum, projection),
+                    projected_point(&maximum, projection),
+                );
+                let output = BoxBuffer.apply(&projected, settings, &CartesianBuffer)?;
+                Ok(unprojected_buffer(output, projection))
+            }
+        }
+
+        impl<G> BufferStrategy<G, $strategy> for MultiPointBuffer
+        where
+            G: MultiPointTrait<ItemPoint = <G as Geometry>::Point>,
+            G::Point: PointMut + Default + Copy,
+            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Cs: AngularCoordinateSystem,
+            <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
+        {
+            fn apply(
+                &self,
+                geometry: &G,
+                settings: BufferSettings,
+                coordinate_strategy: &$strategy,
+            ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
+                let projection = projection_for_points(geometry.points(), coordinate_strategy)?;
+                let projected = MultiPoint::from_vec(
+                    geometry
+                        .points()
+                        .map(|point| projected_point(point, projection))
+                        .collect(),
+                );
+                let output = MultiPointBuffer.apply(&projected, settings, &CartesianBuffer)?;
+                Ok(unprojected_buffer(output, projection))
+            }
+        }
+
+        impl<G> BufferStrategy<G, $strategy> for MultiLinestringBuffer
+        where
+            G: MultiLinestringTrait,
+            G::Point: PointMut + Default + Copy,
+            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Cs: AngularCoordinateSystem,
+            <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
+        {
+            fn apply(
+                &self,
+                geometry: &G,
+                settings: BufferSettings,
+                coordinate_strategy: &$strategy,
+            ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
+                let coordinates = geometry
+                    .linestrings()
+                    .flat_map(|line| line.points().map(angular_coordinates))
+                    .collect::<Vec<_>>();
+                let (longitude, latitude) = projection_center(&coordinates)?;
+                let projection = coordinate_strategy.projection(longitude, latitude)?;
+                let projected = MultiLinestring::from_vec(
+                    geometry
+                        .linestrings()
+                        .map(|line| {
+                            Linestring::from_vec(
+                                line.points()
+                                    .map(|point| projected_point(point, projection))
+                                    .collect(),
+                            )
+                        })
+                        .collect(),
+                );
+                let output = MultiLinestringBuffer.apply(&projected, settings, &CartesianBuffer)?;
+                Ok(unprojected_buffer(output, projection))
+            }
+        }
+
+        impl<G> BufferStrategy<G, $strategy> for MultiPolygonBuffer
+        where
+            G: MultiPolygonTrait,
+            G::Point: PointMut + Default + Copy,
+            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Cs: AngularCoordinateSystem,
+            <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
+        {
+            fn apply(
+                &self,
+                geometry: &G,
+                settings: BufferSettings,
+                coordinate_strategy: &$strategy,
+            ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
+                let coordinates = geometry
+                    .polygons()
+                    .flat_map(|polygon| {
+                        polygon
+                            .exterior()
+                            .points()
+                            .chain(polygon.interiors().flat_map(RingTrait::points))
+                            .map(angular_coordinates)
+                    })
+                    .collect::<Vec<_>>();
+                let (longitude, latitude) = projection_center(&coordinates)?;
+                let projection = coordinate_strategy.projection(longitude, latitude)?;
+                let projected = MultiPolygon::from_vec(
+                    geometry
+                        .polygons()
+                        .map(|polygon| projected_polygon(polygon, projection))
+                        .collect(),
+                );
+                let output = MultiPolygonBuffer.apply(&projected, settings, &CartesianBuffer)?;
+                Ok(unprojected_buffer(output, projection))
+            }
+        }
+    };
+}
+
+impl_angular_buffer_strategy!(SphericalBuffer, SphericalFamily);
+impl_angular_buffer_strategy!(GeographicBuffer, GeographicFamily);
 
 /// Buffer a point by `distance`, producing the disc (or square)
 /// approximation.
