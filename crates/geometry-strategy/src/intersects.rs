@@ -283,13 +283,16 @@ where
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     fn intersects(&self, ls: &L, pg: &G) -> bool {
-        // (a) Any vertex inside or on the polygon — fast path.
-        for v in ls.points() {
-            if WithinPoly.covered_by(v, pg) {
-                return true;
-            }
+        // A connected line with no polygon-boundary crossing cannot change
+        // between polygon material and its complement, so one representative
+        // point is sufficient for containment.
+        let Some(first) = ls.points().next() else {
+            return false;
+        };
+        if WithinPoly.covered_by(first, pg) {
+            return true;
         }
-        // (b) Any sub-segment crossing any ring sub-segment.
+        // Any sub-segment crossing any ring sub-segment.
         if linestring_crosses_ring(ls, pg.exterior()) {
             return true;
         }
@@ -566,6 +569,30 @@ fn side_sign<T: CoordinateScalar>(a: (T, T), b: (T, T), c: (T, T)) -> i32 {
     }
 }
 
+/// Whether the closed axis-aligned bounds of two segments are disjoint.
+///
+/// Comparisons are written without `min`/`max` so a coordinate that is not
+/// ordered (for example, `NaN`) falls through to the exact segment predicate.
+#[inline]
+fn segment_bounds_disjoint<P>(p1: &P, p2: &P, p3: &P, p4: &P) -> bool
+where
+    P: PointTrait,
+{
+    let x1 = p1.get::<0>();
+    let y1 = p1.get::<1>();
+    let x2 = p2.get::<0>();
+    let y2 = p2.get::<1>();
+    let x3 = p3.get::<0>();
+    let y3 = p3.get::<1>();
+    let x4 = p4.get::<0>();
+    let y4 = p4.get::<1>();
+
+    (x1 < x3 && x1 < x4 && x2 < x3 && x2 < x4)
+        || (x3 < x1 && x3 < x2 && x4 < x1 && x4 < x2)
+        || (y1 < y3 && y1 < y4 && y2 < y3 && y2 < y4)
+        || (y3 < y1 && y3 < y2 && y4 < y1 && y4 < y2)
+}
+
 /// Does any sub-segment of `ls` cross any sub-segment of `r` (with
 /// `r`'s closing edge added explicitly if the ring is open)?
 fn linestring_crosses_ring<L, R, P>(ls: &L, r: &R) -> bool
@@ -600,17 +627,20 @@ where
         return false;
     };
     let first = pr;
+    let mut has_edge = false;
     for qr in ir {
-        if segments_intersect(pls, qls, pr, qr) {
+        has_edge = true;
+        if !segment_bounds_disjoint(pls, qls, pr, qr) && segments_intersect(pls, qls, pr, qr) {
             return true;
         }
         pr = qr;
     }
-    // Close an open ring explicitly. For a closed ring `pr == first`
-    // and the test is degenerate (zero-length edge) — `segments_intersect`
-    // returns `false` unless the linestring edge passes through the
-    // closing vertex, which is the desired behaviour.
-    segments_intersect(pls, qls, pr, first)
+    if has_edge && pr.get::<0>() == first.get::<0>() && pr.get::<1>() == first.get::<1>() {
+        return false;
+    }
+    // Close an open coordinate sequence explicitly. A one-point ring keeps
+    // its degenerate edge so its established point-like behavior is intact.
+    !segment_bounds_disjoint(pls, qls, pr, first) && segments_intersect(pls, qls, pr, first)
 }
 
 /// Does any edge of ring `a` cross any edge of ring `b`? Both rings

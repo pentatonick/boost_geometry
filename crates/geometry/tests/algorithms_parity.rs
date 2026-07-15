@@ -15,6 +15,7 @@ use boost_geometry::model::{
     Box as ModelBox, DynGeometry, DynGeometryCollection, Linestring, MultiLinestring, MultiPoint,
     MultiPolygon, Point as ModelPoint, Point2D, Point3D, Polygon, Ring, Segment,
 };
+use boost_geometry::overlay::{Dimension, relation};
 use boost_geometry::prelude::{
     Cartesian, Degree, Spherical, area, assign_values, azimuth_with, centroid, centroid_with,
     closest_points, comparable_distance_with, correct, correct_closure, densify, distance_with,
@@ -607,6 +608,84 @@ fn intersects_linestring_polygon_checks_both_rings_and_holes() {
     let ls_crosses_hole_boundary: Linestring<P2> =
         Linestring::from_vec(vec![P2::new(3.5, 6.0), P2::new(6.5, 6.0)]);
     assert!(intersects(&ls_crosses_hole_boundary, &polygon));
+}
+
+/// A connected line needs only one representative point plus all boundary
+/// crossings to determine whether it meets polygon material. These cases lock
+/// the public predicate at the two transitions which a first-point-only
+/// containment check must still discover through ring crossings.
+#[test]
+fn intersects_linestring_polygon_uses_boundary_crossings_after_the_first_point() {
+    let polygon = Polygon::with_inners(
+        square_ring(0.0, 0.0, 10.0),
+        vec![square_ring(3.0, 3.0, 4.0)],
+    );
+
+    let exits_hole_into_material: Linestring<P2> =
+        Linestring::from_vec(vec![P2::new(4.0, 5.0), P2::new(2.0, 5.0)]);
+    assert!(intersects(&exits_hole_into_material, &polygon));
+
+    let exits_exterior_into_material: Linestring<P2> =
+        Linestring::from_vec(vec![P2::new(-1.0, 2.0), P2::new(2.0, 2.0)]);
+    assert!(intersects(&exits_exterior_into_material, &polygon));
+
+    let stays_in_hole: Linestring<P2> = Linestring::from_vec(vec![
+        P2::new(4.0, 4.0),
+        P2::new(5.0, 5.0),
+        P2::new(6.0, 6.0),
+    ]);
+    assert!(!intersects(&stays_in_hole, &polygon));
+
+    let stays_outside = Linestring::from_vec(
+        (0..64)
+            .map(|index| P2::new(20.0 + f64::from(index), f64::from(index % 3)))
+            .collect(),
+    );
+    assert!(!intersects(&stays_outside, &polygon));
+
+    assert!(!intersects(&P2::new(5.0, 5.0), &polygon));
+    assert!(intersects(&P2::new(0.0, 5.0), &polygon));
+}
+
+/// Differential public-API oracle: the dedicated boolean predicate must agree
+/// with the independently implemented DE-9IM relation for exterior, material,
+/// boundary, and hole transitions in either segment direction.
+#[test]
+fn intersects_point_and_linestring_polygon_match_public_relation_grid() {
+    let polygon = Polygon::with_inners(
+        square_ring(-2.0, -2.0, 4.0),
+        vec![square_ring(-1.0, -1.0, 2.0)],
+    );
+    let values = [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0];
+
+    for &x in &values {
+        for &y in &values {
+            let point = P2::new(x, y);
+            let matrix = relation(&point, &polygon).unwrap();
+            let related = matrix.m[0][0] != Dimension::Empty || matrix.m[0][1] != Dimension::Empty;
+            assert_eq!(intersects(&point, &polygon), related, "point=({x}, {y})");
+        }
+    }
+
+    for &x1 in &values {
+        for &y1 in &values {
+            for &x2 in &values {
+                for &y2 in &values {
+                    let line = Linestring::from_vec(vec![P2::new(x1, y1), P2::new(x2, y2)]);
+                    let matrix = relation(&line, &polygon).unwrap();
+                    let related = matrix.m[0][0] != Dimension::Empty
+                        || matrix.m[0][1] != Dimension::Empty
+                        || matrix.m[1][0] != Dimension::Empty
+                        || matrix.m[1][1] != Dimension::Empty;
+                    assert_eq!(
+                        intersects(&line, &polygon),
+                        related,
+                        "line=({x1}, {y1})→({x2}, {y2})"
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Empty and undersized areal inputs are total predicates, while the explicit
