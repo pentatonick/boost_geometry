@@ -1717,6 +1717,32 @@ where
     relate(g1, g2)?.matches(mask)
 }
 
+/// `contains_properly`: the second geometry lies strictly inside the first.
+///
+/// Evaluates the OGC DE-9IM mask `T**FF*FF*`: the interiors intersect, and
+/// neither the interior nor boundary of the second geometry intersects the
+/// boundary or exterior of the first.
+///
+/// # Errors
+///
+/// Propagates [`OverlayError::Unsupported`] from [`relate`].
+#[inline]
+#[must_use = "contains_properly can fail and its predicate result should be used"]
+pub fn contains_properly<G1, G2>(g1: &G1, g2: &G2) -> Result<bool, OverlayError>
+where
+    G1: Geometry,
+    G2: Geometry,
+    G1::Kind: RelatePairStrategy<G2::Kind>,
+    PairStrategy<G1, G2>: RelateStrategy<G1, G2> + Default,
+{
+    let matrix = relate(g1, g2)?;
+    Ok(matrix.interior_interior().is_set()
+        && !matrix.m[feature::BOUNDARY][feature::INTERIOR].is_set()
+        && !matrix.m[feature::BOUNDARY][feature::BOUNDARY].is_set()
+        && !matrix.m[feature::EXTERIOR][feature::INTERIOR].is_set()
+        && !matrix.m[feature::EXTERIOR][feature::BOUNDARY].is_set())
+}
+
 /// `touches`: the boundaries meet but the interiors do not.
 ///
 /// Mirrors `boost::geometry::touches` (`algorithms/touches.hpp`) for the
@@ -1802,7 +1828,7 @@ mod tests {
     //! case families in `test/algorithms/relate/` and the
     //! `touches` / `overlaps` test files.
 
-    use super::{Dimension, crosses, overlaps, relate, touches};
+    use super::{Dimension, contains_properly, crosses, overlaps, relate, touches};
     use geometry_cs::Cartesian;
     use geometry_model::{Point2D, Polygon, polygon};
 
@@ -1820,6 +1846,13 @@ mod tests {
         assert!(overlaps(&a, &b).unwrap());
         assert!(!touches(&a, &b).unwrap());
         assert!(!crosses(&a, &b).unwrap());
+    }
+
+    #[test]
+    fn proper_containment_excludes_boundary_contact() {
+        let container = square(0.0, 0.0, 5.0);
+        assert!(contains_properly(&container, &square(1.0, 1.0, 1.0)).unwrap());
+        assert!(!contains_properly(&container, &square(0.0, 1.0, 1.0)).unwrap());
     }
 
     #[test]

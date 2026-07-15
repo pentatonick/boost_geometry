@@ -33,6 +33,7 @@ extern crate alloc;
 
 pub mod assemble;
 pub mod buffer;
+pub mod line_intersection;
 pub mod merge;
 pub mod operation;
 pub mod predicate;
@@ -46,11 +47,12 @@ pub use buffer::{
     JoinStrategy, PointStrategy, buffer, buffer_convex_polygon, buffer_point, buffer_with,
     buffer_with_strategy,
 };
+pub use line_intersection::{LineIntersection, line_intersection};
 pub use merge::{merge_elements, merge_multipolygon, merge_polygons};
 pub use operation::{OverlayError, difference, intersection, sym_difference, r#union, union_poly};
 pub use relate::{
-    De9im, Dimension, RelateError, crosses, overlaps, relate as relate_matrix, relate as relation,
-    relate_mask as relate, touches,
+    De9im, Dimension, RelateError, contains_properly, crosses, overlaps, relate as relate_matrix,
+    relate as relation, relate_mask as relate, touches,
 };
 pub use surface_point::point_on_surface;
 pub use validity::{

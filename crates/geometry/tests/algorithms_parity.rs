@@ -17,15 +17,15 @@ use boost_geometry::model::{
 };
 use boost_geometry::overlay::{Dimension, relation};
 use boost_geometry::prelude::{
-    Cartesian, Degree, Spherical, area, assign_values, azimuth_with, centroid, centroid_with,
-    closest_points, comparable_distance_with, correct, correct_closure, densify, distance_with,
-    equals, expand, expand_with, for_each_segment, intersects, intersects_reversed, is_simple,
-    line_interpolate, perimeter, perimeter_with, remove_spikes, ring_area, ring_perimeter_with,
-    unique, within,
+    Cartesian, CoordinatePosition, Degree, Spherical, area, assign_values, azimuth_with, centroid,
+    centroid_with, closest_points, comparable_distance_with, coordinate_position, correct,
+    correct_closure, densify, distance_with, equals, expand, expand_with, for_each_segment,
+    intersects, intersects_reversed, is_simple, line_interpolate, perimeter, perimeter_with,
+    remove_spikes, ring_area, ring_perimeter_with, simplify_with, unique, within,
 };
 use boost_geometry::strategy::{
     CartesianAzimuth, CartesianBoxCentroid, CartesianPerimeter, EnvelopePoint, PointToSegment,
-    Pythagoras, SphericalPerimeter,
+    Pythagoras, SphericalPerimeter, VisvalingamWhyatt, VisvalingamWhyattPreserve,
 };
 use boost_geometry::trait_::{
     IndexedAccess as _, Point as _, PointMut as _, Polygon as _, Ring as _,
@@ -552,6 +552,87 @@ fn square_ring(x: f64, y: f64, size: f64) -> Ring<P2> {
 fn assert_point2_close(actual: P2, expected: P2) {
     assert!((actual.get::<0>() - expected.get::<0>()).abs() < 1e-12);
     assert!((actual.get::<1>() - expected.get::<1>()).abs() < 1e-12);
+}
+
+/// Visvalingam and Whyatt (1993), using the published `PostGIS` example: the
+/// area-ranked strategy is selectable through the public explicit-strategy
+/// entry while Douglas–Peucker remains the default.
+#[test]
+fn visvalingam_whyatt_is_selectable_through_the_public_facade() {
+    let line = Linestring::from_vec(vec![
+        P2::new(5.0, 2.0),
+        P2::new(3.0, 8.0),
+        P2::new(6.0, 20.0),
+        P2::new(7.0, 25.0),
+        P2::new(10.0, 10.0),
+    ]);
+
+    let simplified = simplify_with(&line, 30.0, VisvalingamWhyatt);
+    assert_eq!(
+        simplified.0,
+        vec![P2::new(5.0, 2.0), P2::new(7.0, 25.0), P2::new(10.0, 10.0),]
+    );
+}
+
+/// The topology-preserving variant follows the Davies refinement: when the
+/// lowest-area removal creates a crossing, its preceding vertex is removed as
+/// part of the same simplification sequence.
+#[test]
+fn visvalingam_whyatt_preserve_avoids_a_new_self_intersection() {
+    let line = Linestring::from_vec(vec![
+        P2::new(10.0, 60.0),
+        P2::new(135.0, 68.0),
+        P2::new(94.0, 48.0),
+        P2::new(126.0, 31.0),
+        P2::new(280.0, 19.0),
+        P2::new(117.0, 48.0),
+        P2::new(300.0, 40.0),
+        P2::new(301.0, 10.0),
+    ]);
+
+    let simplified = simplify_with(&line, 668.6, VisvalingamWhyattPreserve);
+    assert_eq!(
+        simplified.0,
+        vec![
+            P2::new(10.0, 60.0),
+            P2::new(126.0, 31.0),
+            P2::new(280.0, 19.0),
+            P2::new(117.0, 48.0),
+            P2::new(300.0, 40.0),
+            P2::new(301.0, 10.0),
+        ]
+    );
+}
+
+/// The tri-state entry exposes the same Cartesian winding result used by
+/// `within` and `covered_by`, including both exterior and hole boundaries.
+#[test]
+fn coordinate_position_is_public_and_hole_aware() {
+    let polygon = Polygon::with_inners(
+        square_ring(0.0, 0.0, 10.0),
+        vec![square_ring(3.0, 3.0, 4.0)],
+    );
+
+    assert_eq!(
+        coordinate_position(&P2::new(1.0, 1.0), &polygon),
+        CoordinatePosition::Inside
+    );
+    assert_eq!(
+        coordinate_position(&P2::new(0.0, 5.0), &polygon),
+        CoordinatePosition::OnBoundary
+    );
+    assert_eq!(
+        coordinate_position(&P2::new(3.0, 5.0), &polygon),
+        CoordinatePosition::OnBoundary
+    );
+    assert_eq!(
+        coordinate_position(&P2::new(5.0, 5.0), &polygon),
+        CoordinatePosition::Outside
+    );
+    assert_eq!(
+        coordinate_position(&P2::new(11.0, 5.0), &polygon),
+        CoordinatePosition::Outside
+    );
 }
 
 /// `test/algorithms/intersects/intersects.cpp:23-30` — polygons wholly inside

@@ -167,7 +167,9 @@ pub use length::{
 };
 pub use line_interpolate::{CartesianLineInterpolate, LineInterpolateStrategy};
 pub use reversal::Reversed;
-pub use simplify::{DouglasPeucker, SimplifyStrategy};
+pub use simplify::{
+    DouglasPeucker, SimplifyStrategy, VisvalingamWhyatt, VisvalingamWhyattPreserve,
+};
 pub use spherical::{
     ComparableHaversine, Haversine, SphericalArea, SphericalAzimuth, SphericalLength,
     SphericalPerimeter, SphericalPolygonArea,

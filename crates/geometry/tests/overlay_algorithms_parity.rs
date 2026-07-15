@@ -1,10 +1,11 @@
 //! Public-facade tests for overlay-dependent algorithm entry points.
 
-use boost_geometry::model::{Point2D, Polygon, Ring};
+use boost_geometry::model::{Point2D, Polygon, Ring, Segment};
 use boost_geometry::overlay::{OverlayError, traverse::TraversalError};
 use boost_geometry::prelude::{
-    Cartesian, Dimension, JoinStrategy, PointStrategy, RelateError, ValidityFailure, buffer,
-    is_valid, merge_elements, relate, relation, r#union,
+    Cartesian, Dimension, JoinStrategy, LineIntersection, PointStrategy, RelateError,
+    ValidityFailure, buffer, contains_properly, is_valid, line_intersection, merge_elements,
+    relate, relation, r#union,
 };
 use boost_geometry::trait_::{MultiPolygon as _, Polygon as _};
 
@@ -39,6 +40,61 @@ fn relation_matrix_and_relate_mask_are_distinct_public_entries() {
     assert!(relate(&a, &b, "T*T***T**").unwrap());
     assert!(!relate(&a, &b, "FF*FF****").unwrap());
     assert_eq!(relate(&a, &b, "too-short"), Err(RelateError::InvalidMask));
+}
+
+/// DE-9IM `T**FF*FF*`: strict containment rejects every boundary contact.
+#[test]
+fn contains_properly_is_available_from_the_facade() {
+    let container = square(0.0, 0.0, 10.0);
+    let interior = square(2.0, 2.0, 2.0);
+    let touches_boundary = square(0.0, 2.0, 2.0);
+    let overlaps_boundary = square(9.0, 2.0, 2.0);
+
+    assert!(contains_properly(&container, &interior).unwrap());
+    assert!(!contains_properly(&container, &touches_boundary).unwrap());
+    assert!(!contains_properly(&container, &overlaps_boundary).unwrap());
+    assert!(!contains_properly(&interior, &container).unwrap());
+}
+
+/// The public segment entry preserves Boost's robustness refusal and exposes
+/// the proper/touch distinction carried by the turn classifier.
+#[test]
+fn line_intersection_reports_proper_touch_collinear_and_range_cases() {
+    let proper_a = Segment::new(P::new(0.0, 0.0), P::new(4.0, 4.0));
+    let proper_b = Segment::new(P::new(0.0, 4.0), P::new(4.0, 0.0));
+    assert_eq!(
+        line_intersection(&proper_a, &proper_b),
+        Ok(Some(LineIntersection::SinglePoint {
+            intersection: P::new(2.0, 2.0),
+            is_proper: true,
+        }))
+    );
+
+    let touch = Segment::new(P::new(4.0, 4.0), P::new(5.0, 2.0));
+    assert_eq!(
+        line_intersection(&proper_a, &touch),
+        Ok(Some(LineIntersection::SinglePoint {
+            intersection: P::new(4.0, 4.0),
+            is_proper: false,
+        }))
+    );
+
+    let collinear = Segment::new(P::new(2.0, 2.0), P::new(6.0, 6.0));
+    assert_eq!(
+        line_intersection(&proper_a, &collinear),
+        Ok(Some(LineIntersection::Collinear {
+            intersection: Segment::new(P::new(2.0, 2.0), P::new(4.0, 4.0)),
+        }))
+    );
+
+    let disjoint = Segment::new(P::new(0.0, 5.0), P::new(4.0, 5.0));
+    assert_eq!(line_intersection(&proper_a, &disjoint), Ok(None));
+
+    let too_large = Segment::new(P::new(100_000_000.0, 0.0), P::new(100_000_001.0, 1.0));
+    assert_eq!(
+        line_intersection(&proper_a, &too_large),
+        Err(OverlayError::Unsupported)
+    );
 }
 
 /// `test/algorithms/is_valid.cpp:1626-1634` — the generic entry dispatches to
