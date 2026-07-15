@@ -145,7 +145,7 @@ pub use centroid::{
 };
 pub use closest_points::{CartesianClosestPoints, ClosestPointsStrategy};
 pub use compare::{ALL_DIMENSIONS, EqualTo, Greater, Less, LessExact};
-pub use convex_hull::{ConvexHullStrategy, MonotoneChain};
+pub use convex_hull::{CollectPoints, ConvexHullStrategy, MonotoneChain};
 pub use densify::{CartesianDensify, DensifyStrategy};
 pub use destination::{DefaultDestination, DefaultDestinationStrategy, DestinationStrategy};
 pub use disjoint::{CartesianDisjoint, DisjointStrategy};
@@ -161,7 +161,7 @@ pub use equals::{
 pub use geographic::{
     Andoyer, DirectResult, GeographicArea, GeographicAzimuth, GeographicLength,
     GeographicPerimeter, GeographicPolygonArea, InverseResult, Karney, KarneyDirect, KarneyInverse,
-    Thomas, ThomasDirect, Vincenty, VincentyDirect,
+    Rhumb, RhumbFamily, Thomas, ThomasDirect, Vincenty, VincentyDirect,
 };
 pub use intersects::{CartesianIntersects, IntersectsPairStrategy, IntersectsStrategy};
 pub use length::{
@@ -175,8 +175,8 @@ pub use simplify::{
     DouglasPeucker, SimplifyStrategy, VisvalingamWhyatt, VisvalingamWhyattPreserve,
 };
 pub use spherical::{
-    ComparableHaversine, CrossTrack, Haversine, HaversineClosestPoints, SphericalArea,
-    SphericalAzimuth, SphericalLength, SphericalPerimeter, SphericalPolygonArea,
+    ChamberlainDuquetteArea, ComparableHaversine, CrossTrack, Haversine, HaversineClosestPoints,
+    SphericalArea, SphericalAzimuth, SphericalLength, SphericalPerimeter, SphericalPolygonArea,
 };
 pub use transform::{Affine2, Affine3, Rotate, Scale, Skew, TransformStrategy, Translate};
 pub use within::{WithinBox, WithinPoly, WithinRing, WithinStrategy, WithinStrategyForKind};

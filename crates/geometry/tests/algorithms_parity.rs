@@ -11,24 +11,29 @@
 )]
 
 use boost_geometry::adapt::{Adapt, WithCs};
+use boost_geometry::algorithm::ConcaveHullParams;
 use boost_geometry::model::{
     Box as ModelBox, DynGeometry, DynGeometryCollection, Linestring, MultiLinestring, MultiPoint,
     MultiPolygon, Point as ModelPoint, Point2D, Point3D, Polygon, Ring, Segment,
 };
 use boost_geometry::overlay::{Dimension, relation};
 use boost_geometry::prelude::{
-    Cartesian, CoordinatePosition, Degree, Geographic, Spherical, area, assign_values,
+    Cartesian, CoordinatePosition, Degree, Geographic, Spherical, area, area_with, assign_values,
     azimuth_with, centroid, centroid_with, chaikin_smoothing, closest_points, closest_points_with,
-    comparable_distance_with, coordinate_position, correct, correct_closure, densify, destination,
-    distance_with, equals, expand, expand_with, for_each_segment, intersects, intersects_reversed,
-    is_simple, line_interpolate, line_locate_point, linestring_segmentize,
-    linestring_segmentize_with, map_coords, map_coords_in_place, perimeter, perimeter_with,
-    remove_spikes, ring_area, ring_perimeter_with, simplify_with, transform, unique, within,
+    comparable_distance_with, concave_hull, concave_hull_with, coordinate_position, correct,
+    correct_closure, densify, destination, distance_with, equals, expand, expand_with,
+    for_each_segment, intersects, intersects_reversed, is_simple, k_nearest_concave_hull,
+    line_interpolate, line_locate_point, linestring_segmentize, linestring_segmentize_with,
+    map_coords, map_coords_in_place, minimum_rotated_rect, monotone_subdivision, perimeter,
+    perimeter_with, remove_spikes, rhumb_azimuth, rhumb_destination, rhumb_distance,
+    rhumb_distance_with, rhumb_length, ring_area, ring_perimeter_with, simplify_with, transform,
+    triangulate_earcut, unique, within,
 };
 use boost_geometry::strategy::{
-    CartesianAzimuth, CartesianBoxCentroid, CartesianPerimeter, CrossTrack, EnvelopePoint,
-    Haversine, HaversineClosestPoints, PointToSegment, Pythagoras, Rotate, Scale, Skew,
-    SphericalPerimeter, Translate, VisvalingamWhyatt, VisvalingamWhyattPreserve,
+    CartesianAzimuth, CartesianBoxCentroid, CartesianPerimeter, ChamberlainDuquetteArea,
+    CrossTrack, EnvelopePoint, Haversine, HaversineClosestPoints, PointToSegment, Pythagoras,
+    Rhumb, Rotate, Scale, Skew, SphericalPerimeter, Translate, VisvalingamWhyatt,
+    VisvalingamWhyattPreserve,
 };
 use boost_geometry::trait_::{
     IndexedAccess as _, Point as _, PointMut as _, Polygon as _, Ring as _,
@@ -39,6 +44,116 @@ type P3 = Point3D<f64, Cartesian>;
 type P4 = ModelPoint<f64, 4, Cartesian>;
 type P5 = ModelPoint<f64, 5, Cartesian>;
 type D = DynGeometry<f64, Cartesian>;
+
+/// Chamberlain–Duquette is an opt-in spherical area strategy and leaves the
+/// existing spherical default unchanged.
+#[test]
+fn chamberlain_duquette_area_is_public() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let square: Polygon<SphericalPoint> = Polygon::new(Ring::from_vec(vec![
+        SphericalPoint::new(0.0, 0.0),
+        SphericalPoint::new(0.0, 1.0),
+        SphericalPoint::new(1.0, 1.0),
+        SphericalPoint::new(1.0, 0.0),
+        SphericalPoint::new(0.0, 0.0),
+    ]));
+
+    let solid_angle = area_with(&square, ChamberlainDuquetteArea::UNIT);
+    assert!((solid_angle - 0.000_304_601_954_726_850_5).abs() < 1e-12);
+}
+
+/// Rhumb-line distance, bearing, destination, and linestring length are all
+/// reachable through named public entries, with an explicit-radius companion.
+#[test]
+fn rhumb_measure_family_is_public() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let start = SphericalPoint::new(0.0, 0.0);
+    let east = SphericalPoint::new(1.0, 0.0);
+    let distance = rhumb_distance(&start, &east);
+    assert!((distance - 111_195.080_233_532_9).abs() < 1e-6);
+    assert!((rhumb_azimuth(&start, &east) - core::f64::consts::FRAC_PI_2).abs() < 1e-12);
+
+    let destination = rhumb_destination(&start, core::f64::consts::FRAC_PI_2, distance);
+    assert!((destination.get::<0>() - 1.0).abs() < 1e-10);
+    assert!(destination.get::<1>().abs() < 1e-10);
+
+    let line = Linestring::from_vec(vec![start, east, SphericalPoint::new(2.0, 0.0)]);
+    assert!((rhumb_length(&line) - 2.0 * distance).abs() < 1e-6);
+    assert!((rhumb_distance_with(&start, &east, Rhumb::UNIT) - 1.0_f64.to_radians()).abs() < 1e-12);
+}
+
+/// Minimum rectangles and both concave-hull parameter faces operate on public
+/// stock models and retain an interior point when the requested concavity allows.
+#[test]
+fn derived_hulls_are_public() {
+    let diamond = MultiPoint::from_vec(vec![
+        P2::new(0.0, 1.0),
+        P2::new(1.0, 0.0),
+        P2::new(0.0, -1.0),
+        P2::new(-1.0, 0.0),
+        P2::new(0.0, 0.0),
+    ]);
+    let rectangle = minimum_rotated_rect(&diamond);
+    assert!((area(&rectangle).abs() - 2.0).abs() < 1e-12);
+
+    let points = MultiPoint::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(0.0, 4.0),
+        P2::new(4.0, 4.0),
+        P2::new(4.0, 0.0),
+        P2::new(2.0, 1.0),
+    ]);
+    let params = ConcaveHullParams {
+        concavity: 1.2,
+        length_threshold: 0.0,
+    };
+    let refined = concave_hull_with(&points, params);
+    assert!(refined.outer.0.contains(&P2::new(2.0, 1.0)));
+    assert!(area(&refined).abs() < 16.0);
+
+    let defaulted = concave_hull(&points);
+    assert!(defaulted.outer.0.contains(&P2::new(2.0, 1.0)));
+    let knn = k_nearest_concave_hull(&points, 3);
+    assert!(knn.outer.0.contains(&P2::new(2.0, 1.0)));
+}
+
+/// Native ear clipping and monotone subdivision expose owned stock polygons;
+/// the pieces preserve the source area through the public area entry.
+#[test]
+fn native_triangulation_and_monotone_subdivision_are_public() {
+    let polygon: Polygon<P2> = Polygon::new(Ring::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(0.0, 2.0),
+        P2::new(1.0, 1.0),
+        P2::new(2.0, 2.0),
+        P2::new(2.0, 0.0),
+        P2::new(0.0, 0.0),
+    ]));
+
+    let triangles = triangulate_earcut(&polygon);
+    assert_eq!(triangles.len(), 3);
+    let triangle_area: f64 = triangles.iter().map(|triangle| area(triangle).abs()).sum();
+    assert!((triangle_area - area(&polygon).abs()).abs() < 1e-12);
+
+    let monotone = monotone_subdivision(&polygon);
+    assert!(monotone.len() > 1);
+    assert!(monotone.iter().all(|piece| piece.outer.0.len() == 4));
+    let monotone_area: f64 = monotone.iter().map(|piece| area(piece).abs()).sum();
+    assert!((monotone_area - area(&polygon).abs()).abs() < 1e-12);
+}
+
+/// A polygon whose declared interior cannot be bridged into its exterior is
+/// rejected atomically instead of returning a partial exterior triangulation.
+#[test]
+fn earcut_rejects_an_unbridgeable_hole_atomically() {
+    let polygon = Polygon::with_inners(
+        square_ring(0.0, 0.0, 4.0),
+        vec![square_ring(10.0, 10.0, 1.0)],
+    );
+
+    let triangles = triangulate_earcut(&polygon);
+    assert_eq!(triangles.len(), 0);
+}
 
 /// `test/algorithms/correct_closure.cpp:51-84` — fix closure without changing
 /// winding.

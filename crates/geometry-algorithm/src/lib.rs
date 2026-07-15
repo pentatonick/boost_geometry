@@ -24,6 +24,7 @@ pub mod centroid;
 pub mod chaikin_smoothing;
 pub mod clear;
 pub mod closest_points;
+pub mod concave_hull;
 pub mod convert;
 pub mod convex_hull;
 pub mod coordinate_position;
@@ -48,14 +49,18 @@ pub mod line_locate_point;
 pub mod linestring_segmentize;
 pub mod make;
 pub mod map_coords;
+pub mod minimum_rotated_rect;
+pub mod monotone_subdivision;
 pub mod num_geometries;
 pub mod num_interior_rings;
 pub mod num_points;
 pub mod num_segments;
 pub mod remove_spikes;
 pub mod reverse;
+pub mod rhumb;
 pub mod simplify;
 pub mod transform;
+pub mod triangulate_earcut;
 pub mod unique;
 pub mod within;
 
@@ -74,6 +79,9 @@ pub use centroid::{centroid, centroid_with};
 pub use chaikin_smoothing::{ChaikinSmoothing, chaikin_smoothing};
 pub use clear::clear;
 pub use closest_points::{closest_points, closest_points_with};
+pub use concave_hull::{
+    ConcaveHullParams, concave_hull, concave_hull_with, k_nearest_concave_hull,
+};
 pub use convert::convert;
 pub use convex_hull::convex_hull;
 pub use coordinate_position::{CoordinatePosition, coordinate_position};
@@ -100,14 +108,21 @@ pub use line_locate_point::line_locate_point;
 pub use linestring_segmentize::{linestring_segmentize, linestring_segmentize_with};
 pub use make::{make_box, make_point, make_segment};
 pub use map_coords::{MapCoords, MapCoordsInPlace, map_coords, map_coords_in_place};
+pub use minimum_rotated_rect::minimum_rotated_rect;
+pub use monotone_subdivision::monotone_subdivision;
 pub use num_geometries::num_geometries;
 pub use num_interior_rings::num_interior_rings;
 pub use num_points::num_points;
 pub use num_segments::num_segments;
 pub use remove_spikes::remove_spikes;
 pub use reverse::reverse;
+pub use rhumb::{
+    rhumb_azimuth, rhumb_azimuth_with, rhumb_destination, rhumb_destination_with, rhumb_distance,
+    rhumb_distance_with, rhumb_length, rhumb_length_with,
+};
 pub use simplify::{simplify, simplify_with};
 pub use transform::transform;
+pub use triangulate_earcut::triangulate_earcut;
 pub use unique::unique;
 pub use within::{covered_by, within};
 

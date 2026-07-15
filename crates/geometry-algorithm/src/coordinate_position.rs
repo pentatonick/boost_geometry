@@ -26,7 +26,7 @@ pub enum CoordinatePosition {
 
 /// Classify a point as inside, on the boundary, or outside a geometry.
 ///
-/// This preserves the tri-state result that [`within`] and [`covered_by`]
+/// This preserves the tri-state result that [`within()`] and [`covered_by()`]
 /// expose as separate boolean predicates.
 #[inline]
 #[must_use]

@@ -4,7 +4,7 @@
 //! the public `std`/`libm` dispatch boundary.
 
 use geometry_coords::CoordinateScalar;
-use geometry_coords::math::{atan2, ceil, cos, hypot, mul_add, sin};
+use geometry_coords::math::{atan2, ceil, cos, hypot, ln, mul_add, rem_euclid, sin, tan};
 
 #[test]
 fn integer_abs_is_callable() {
@@ -33,4 +33,7 @@ fn public_math_dispatch_covers_robust_and_overlay_primitives() {
     assert!((sin(core::f64::consts::FRAC_PI_2) - 1.0).abs() < 1e-15);
     assert!((cos(core::f64::consts::PI) + 1.0).abs() < 1e-15);
     assert!((atan2(1.0_f64, 0.0) - core::f64::consts::FRAC_PI_2).abs() < 1e-15);
+    assert!((tan(core::f64::consts::FRAC_PI_4) - 1.0).abs() < 1e-15);
+    assert!(ln(1.0_f64).abs() < f64::EPSILON);
+    assert!((rem_euclid(-0.5_f64, 2.0) - 1.5).abs() < f64::EPSILON);
 }

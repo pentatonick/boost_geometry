@@ -6,6 +6,7 @@
 //! point-to-segment / side / intersection kernels on the sphere.
 
 pub mod area;
+pub mod area_chamberlain_duquette;
 pub mod azimuth;
 pub mod closest_points_haversine;
 pub mod distance_cross_track;
@@ -14,6 +15,7 @@ mod great_circle;
 pub mod length;
 
 pub use area::{SphericalArea, SphericalPolygonArea};
+pub use area_chamberlain_duquette::ChamberlainDuquetteArea;
 pub use azimuth::SphericalAzimuth;
 pub use closest_points_haversine::HaversineClosestPoints;
 pub use distance_cross_track::CrossTrack;

@@ -318,6 +318,10 @@ mod tests {
     use super::{map_coords, map_coords_in_place};
 
     #[test]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "small exact fixtures intentionally exercise scalar rebinding"
+    )]
     fn linestring_rebinds_and_mutates() {
         let line = Linestring::from_vec(alloc::vec![
             Point2D::<f64, Cartesian>::new(1.0, 2.0),
