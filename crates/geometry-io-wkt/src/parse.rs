@@ -979,8 +979,8 @@ mod tests {
             assert_eq!(
                 err,
                 &WktError::TypeMismatch {
-                    expected: *want_expected,
-                    found: *want_found,
+                    expected: want_expected,
+                    found: want_found,
                 }
             );
         }

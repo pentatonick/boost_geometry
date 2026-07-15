@@ -1284,6 +1284,8 @@ fn segmentize_with_haversine_uses_spherical_interpolation() {
 /// antipodal spherical endpoints.
 #[test]
 fn segmentize_handles_dimensions_and_degenerate_metrics() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+
     assert!(
         linestring_segmentize(&Linestring::<P2>::from_vec(Vec::new()), 2)
             .0
@@ -1322,7 +1324,6 @@ fn segmentize_handles_dimensions_and_degenerate_metrics() {
         vec![P2::new(0.0, 0.0), P2::new(1.0, 0.0), P2::new(3.0, 0.0)]
     );
 
-    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
     let antipodal = Linestring::from_vec(vec![
         SphericalPoint::new(0.0, 0.0),
         SphericalPoint::new(180.0, 0.0),
@@ -1506,46 +1507,46 @@ fn map_coords_supports_every_stock_geometry() {
     let mut line_mut = Linestring::from_vec(vec![point]);
     let mut ring_mut = ring;
     let mut polygon_mut = polygon;
-    let mut points_mut = points;
-    let mut lines_mut = lines;
-    let mut polygons_mut = polygons;
+    let mut multi_point_mut = points;
+    let mut multi_line_mut = lines;
+    let mut multi_polygon_mut = polygons;
     let mut bounds_mut = bounds;
     let mut segment_mut = segment;
     map_coords_in_place(&mut point_mut, |point| {
-        point.set::<0>(point.get::<0>() + 10.0)
+        point.set::<0>(point.get::<0>() + 10.0);
     });
     map_coords_in_place(&mut line_mut, |point| {
-        point.set::<0>(point.get::<0>() + 10.0)
+        point.set::<0>(point.get::<0>() + 10.0);
     });
     map_coords_in_place(&mut ring_mut, |point| {
-        point.set::<0>(point.get::<0>() + 10.0)
+        point.set::<0>(point.get::<0>() + 10.0);
     });
     map_coords_in_place(&mut polygon_mut, |point| {
-        point.set::<0>(point.get::<0>() + 10.0)
+        point.set::<0>(point.get::<0>() + 10.0);
     });
-    map_coords_in_place(&mut points_mut, |point| {
-        point.set::<0>(point.get::<0>() + 10.0)
+    map_coords_in_place(&mut multi_point_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0);
     });
-    map_coords_in_place(&mut lines_mut, |point| {
-        point.set::<0>(point.get::<0>() + 10.0)
+    map_coords_in_place(&mut multi_line_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0);
     });
-    map_coords_in_place(&mut polygons_mut, |point| {
-        point.set::<0>(point.get::<0>() + 10.0)
+    map_coords_in_place(&mut multi_polygon_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0);
     });
     map_coords_in_place(&mut bounds_mut, |point| {
-        point.set::<0>(point.get::<0>() + 10.0)
+        point.set::<0>(point.get::<0>() + 10.0);
     });
     map_coords_in_place(&mut segment_mut, |point| {
-        point.set::<0>(point.get::<0>() + 10.0)
+        point.set::<0>(point.get::<0>() + 10.0);
     });
 
     assert_eq!(point_mut, P2::new(11.0, 2.0));
     assert_eq!(line_mut.0[0], P2::new(11.0, 2.0));
     assert_eq!(ring_mut.0[2], P2::new(12.0, 2.0));
     assert_eq!(polygon_mut.inners[0].0[0], P2::new(10.5, 0.5));
-    assert_eq!(points_mut.0[1], P2::new(13.0, 4.0));
-    assert_eq!(lines_mut.0[1].0[0], P2::new(12.0, 2.0));
-    assert_eq!(polygons_mut.0[1].outer.0[1], P2::new(12.0, 0.0));
+    assert_eq!(multi_point_mut.0[1], P2::new(13.0, 4.0));
+    assert_eq!(multi_line_mut.0[1].0[0], P2::new(12.0, 2.0));
+    assert_eq!(multi_polygon_mut.0[1].outer.0[1], P2::new(12.0, 0.0));
     assert_eq!(bounds_mut.get_indexed::<0, 0>(), 9.0);
     assert_eq!(segment_mut.get_indexed::<1, 0>(), 14.0);
 }

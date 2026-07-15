@@ -36,10 +36,9 @@ fn direct_equatorial_case_and_longitude_normalization() {
     let karney_equatorial =
         KarneyDirect::WGS84.apply(0.0, 0.0, 250_000.0, core::f64::consts::FRAC_PI_2);
     assert!((karney_equatorial.lon2 * R2D - 2.245_788_210_298_804).abs() < 1e-14);
-    assert_eq!(karney_equatorial.lat2, 0.0);
-    assert_eq!(
-        karney_equatorial.reverse_azimuth,
-        core::f64::consts::FRAC_PI_2
+    assert!(karney_equatorial.lat2.abs() < f64::EPSILON);
+    assert!(
+        (karney_equatorial.reverse_azimuth - core::f64::consts::FRAC_PI_2).abs() < f64::EPSILON
     );
 
     for result in [

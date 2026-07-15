@@ -167,6 +167,8 @@ fn spherical_and_geographic_compare_handle_angular_coordinates() {
 #[test]
 fn angular_compare_covers_dimensions_and_scalar_conversions() {
     type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    type SphericalPoint4 = ModelPoint<f64, 4, Spherical<Degree>>;
+
     let ordinary = SphericalPoint::new(20.0, 10.0);
     let antimeridian = SphericalPoint::new(180.0, 10.0);
     assert!(LESS.apply(&ordinary, &antimeridian));
@@ -194,7 +196,6 @@ fn angular_compare_covers_dimensions_and_scalar_conversions() {
         &SphericalPoint::new(10.0, 20.0),
     ));
 
-    type SphericalPoint4 = ModelPoint<f64, 4, Spherical<Degree>>;
     let point4 = |longitude, latitude, z, m| {
         let mut point = SphericalPoint4::default();
         point.set::<0>(longitude);

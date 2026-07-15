@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn private_degenerate_clipping_and_intersection_guards() {
         type P = Point2D<f64, Cartesian>;
-        assert_eq!(signed_area(&[P::new(0.0, 0.0), P::new(1.0, 0.0)]), 0.0);
+        assert!(signed_area(&[P::new(0.0, 0.0), P::new(1.0, 0.0)]).abs() < f64::EPSILON);
         assert!(clip_ears::<P>(&[]).is_empty());
         assert!(
             clip_ears(&[

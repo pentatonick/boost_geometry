@@ -710,6 +710,10 @@ fn angular_segment_ring_box_and_multi_dispatch_is_public() {
 /// projected members all return `Unsupported` instead of producing non-finite
 /// coordinates.
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one public contract case covers every angular projection rejection path"
+)]
 fn angular_buffer_rejects_invalid_projection_inputs() {
     type GeographicPoint = Point2D<f64, Geographic<Degree>>;
     type SphericalPoint = Point2D<f64, Spherical<Degree>>;
@@ -866,8 +870,8 @@ fn angular_buffer_wraps_antimeridian_and_reprojects_holes() {
         let line = Linestring::from_vec(
             longitudes
                 .into_iter()
-                .enumerate()
-                .map(|(index, longitude)| SphericalPoint::new(longitude, index as f64 * 0.01))
+                .zip([0.0, 0.01, 0.02])
+                .map(|(longitude, latitude)| SphericalPoint::new(longitude, latitude))
                 .collect(),
         );
         assert!(

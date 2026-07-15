@@ -389,9 +389,7 @@ mod tests {
             P::new(0.0, 0.0),
             P::new(2.0, 0.0),
         ));
-        assert_eq!(
-            point_segment_distance(P::new(3.0, 4.0), P::new(0.0, 0.0), P::new(0.0, 0.0)),
-            5.0
-        );
+        let distance = point_segment_distance(P::new(3.0, 4.0), P::new(0.0, 0.0), P::new(0.0, 0.0));
+        assert!((distance - 5.0).abs() < f64::EPSILON);
     }
 }

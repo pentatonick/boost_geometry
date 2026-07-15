@@ -162,9 +162,10 @@ where
             let mut unioned = union_poly(&polygons[first], &polygons[second])?
                 .0
                 .into_iter();
-            if let (Some(polygon), None) = (unioned.next(), unioned.next()) {
-                return Ok(Some((first, second, polygon)));
-            }
+            let (Some(polygon), None) = (unioned.next(), unioned.next()) else {
+                continue;
+            };
+            return Ok(Some((first, second, polygon)));
         }
     }
     Ok(None)

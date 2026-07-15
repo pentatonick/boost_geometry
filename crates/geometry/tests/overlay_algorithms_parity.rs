@@ -318,6 +318,33 @@ fn stitch_triangles_reassembles_a_square() {
     assert!((ring_area(stitched.polygons().next().unwrap().exterior()).abs() - 1.0).abs() < 1e-12);
 }
 
+/// Boost's `test/algorithms/merge_elements.cpp` retains two disjoint areal
+/// components. Boost has no `stitch_triangles` entry, so this adapts that
+/// expectation to the public stitching API with two disjoint triangles.
+#[test]
+fn stitch_triangles_retains_disjoint_components() {
+    let first = Polygon::new(Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(0.0, 1.0),
+        P::new(1.0, 0.0),
+        P::new(0.0, 0.0),
+    ]));
+    let second = Polygon::new(Ring::from_vec(vec![
+        P::new(2.0, 0.0),
+        P::new(2.0, 1.0),
+        P::new(3.0, 0.0),
+        P::new(2.0, 0.0),
+    ]));
+
+    let stitched = stitch_triangles([first, second]).unwrap();
+    assert_eq!(stitched.polygons().count(), 2);
+    let total_area: f64 = stitched
+        .polygons()
+        .map(|polygon| ring_area(polygon.exterior()).abs())
+        .sum();
+    assert!((total_area - 1.0).abs() < 1e-12);
+}
+
 /// `test/algorithms/is_valid.cpp:1626-1634` — the generic entry dispatches to
 /// a polygon validator and reports Boost's strict-policy duplicate category.
 #[test]

@@ -304,6 +304,11 @@ where
 /// # Errors
 ///
 /// Returns the first [`ValidityFailure`] not accepted by `options`.
+///
+/// # Panics
+///
+/// Panics if a custom ring implementation passes validation with a non-empty
+/// point iterator but yields no point when iterated again immediately after.
 #[inline]
 #[must_use = "validity failures must be handled"]
 pub fn is_valid_with<G>(geometry: &G, options: ValidityOptions) -> Result<(), ValidityFailure>
@@ -600,6 +605,11 @@ where
 /// # Errors
 ///
 /// Returns the first [`ValidityFailure`] not accepted by `options`.
+///
+/// # Panics
+///
+/// Panics if a custom ring implementation passes validation with a non-empty
+/// point iterator but yields no point when iterated again immediately after.
 #[inline]
 #[must_use = "validity failures must be handled"]
 pub fn is_valid_polygon_with<G, P>(

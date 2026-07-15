@@ -140,7 +140,7 @@ fn logical_query_predicates_compose_through_the_public_api() {
 
     let outside = tree.query_with(!Predicate::Intersects(window));
     assert_eq!(outside.len(), 1);
-    assert_eq!(outside[0].get::<0>(), 5.0);
+    assert!((outside[0].get::<0>() - 5.0).abs() < f64::EPSILON);
 
     let condition = satisfies(|point: &P| point.get::<1>() >= 0.0);
     assert!(<_ as QueryPredicate<P>>::matches(

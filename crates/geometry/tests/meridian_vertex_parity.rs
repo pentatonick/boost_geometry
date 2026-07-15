@@ -131,7 +131,7 @@ fn spherical_and_geographic_vertices_match_boost() {
 fn geographic_vertex_longitude_covers_southern_wrapped_and_crossing_cases() {
     let spheroid = Spheroid::WGS84;
 
-    let southern_start = (1.0 * D2R, -1.0 * D2R);
+    let southern_start = (D2R, -D2R);
     let southern_end = (100.0 * D2R, -2.0 * D2R);
     let southern_inverse = KarneyInverse::WGS84.apply(
         southern_start.0,
@@ -156,7 +156,7 @@ fn geographic_vertex_longitude_covers_southern_wrapped_and_crossing_cases() {
         "expected 66.25594273 degrees; observed {southern_degrees}"
     );
 
-    let wrapped_start = (0.0, 1.0 * D2R);
+    let wrapped_start = (0.0, D2R);
     let wrapped_end = (270.0 * D2R, 1.0 * D2R);
     let wrapped_inverse = KarneyInverse::WGS84.apply(
         wrapped_start.0,
@@ -177,7 +177,7 @@ fn geographic_vertex_longitude_covers_southern_wrapped_and_crossing_cases() {
     );
     assert!((wrapped_longitude * R2D + 45.0).abs() < 2e-7);
 
-    let crossing_start = (0.0, -1.0 * D2R);
+    let crossing_start = (0.0, -D2R);
     let crossing_end = (100.0 * D2R, 2.0 * D2R);
     let crossing_inverse = KarneyInverse::WGS84.apply(
         crossing_start.0,

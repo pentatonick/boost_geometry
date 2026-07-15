@@ -88,8 +88,7 @@ impl Predicate {
     #[inline]
     pub fn covers_all(&self, node: &Bounds) -> bool {
         match self {
-            Predicate::Intersects(q) => q.contains(node),
-            Predicate::CoveredBy(q) => q.contains(node),
+            Predicate::Intersects(q) | Predicate::CoveredBy(q) => q.contains(node),
             Predicate::Disjoint(q) => q.disjoint(node),
             Predicate::Within(_)
             | Predicate::Contains(_)
