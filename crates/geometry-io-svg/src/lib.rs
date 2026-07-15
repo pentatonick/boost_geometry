@@ -13,4 +13,7 @@ extern crate alloc;
 
 mod mapper;
 
+// feature-group: I/O — SVG
+// feature-desc: Render geometries to SVG (debugging)
+// feature-keep: SvgMapper
 pub use mapper::SvgMapper;

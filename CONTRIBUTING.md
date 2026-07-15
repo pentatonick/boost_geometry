@@ -28,7 +28,30 @@ those blocks by hand — edit the rustdoc or the example, then run:
 python3 .github/scripts/crate_readme.py
 ```
 
-Or let the pre-commit hook do it automatically:
+The **feature table** in the root `README.md` (between the
+`<!-- feature-table:start/end -->` markers) and the **`no_std` support
+table** are generated too:
+
+```sh
+python3 .github/scripts/no_std_support.py   # probes each crate; needs cargo
+python3 .github/scripts/feature_table.py    # reads the no_std table, run it second
+```
+
+The feature table's rows come from the `// feature-group:` comment tags on
+each crate's `pub use` lines. **Adding a public algorithm?** Tag its export
+so it lands in the table — an untagged free-function export fails CI:
+
+```rust
+// feature-group: Measures          // which capability row it belongs to
+// feature-desc: Scalar quantities   // optional; the group's one-line prose
+pub use area::{area, area_with};
+```
+
+Group *display order* is not a tag — it lives in the `GROUP_ORDER` map in
+`feature_table.py` (unranked groups sort last). See that script's header for
+the full tag grammar (`feature-group` / `feature-desc` / `feature-keep`).
+
+Or let the pre-commit hook do all of the above automatically:
 
 ```sh
 git config core.hooksPath .githooks

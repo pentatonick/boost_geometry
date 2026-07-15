@@ -103,8 +103,11 @@ mod parse;
 mod write;
 
 pub use lexer::{Token, WktError};
+// feature-group: I/O — Well-Known Text
+// feature-desc: Parse and write the OGC WKT format
 pub use parse::{
     from_wkt, parse_linestring, parse_multi_linestring, parse_multi_point, parse_multi_polygon,
     parse_point, parse_polygon,
 };
+// feature-group: I/O — Well-Known Text
 pub use write::{WriteWkt, to_wkt, to_wkt_polygon, write_wkt};

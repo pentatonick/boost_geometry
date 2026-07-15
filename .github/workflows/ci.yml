@@ -38,6 +38,10 @@ jobs:
         run: |
           python3 .github/scripts/no_std_support.py
           git diff --exit-code
+      - name: Check feature table is in sync with the pub-use tags
+        run: |
+          python3 .github/scripts/feature_table.py
+          git diff --exit-code
 
   coverage:
     name: Coverage

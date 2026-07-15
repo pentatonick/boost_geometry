@@ -1,4 +1,6 @@
 #!/bin/sh
-# Regenerate READMEs from rustdoc + examples; stage anything that changed.
+# Regenerate READMEs from rustdoc + examples, then the feature table from the
+# `// feature-group:` pub-use tags; stage anything that changed.
 python3 .github/scripts/crate_readme.py >/dev/null || exit 1
+python3 .github/scripts/feature_table.py >/dev/null || exit 1
 git add README.md crates/*/README.md

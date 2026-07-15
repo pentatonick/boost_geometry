@@ -43,18 +43,26 @@ pub mod traverse;
 pub mod turn;
 pub mod validity;
 
+// feature-group: Boolean operations
+// feature-desc: Overlay and offset of areal geometries
 pub use buffer::{
     JoinStrategy, PointStrategy, buffer, buffer_convex_polygon, buffer_point, buffer_with,
     buffer_with_strategy,
 };
+// feature-group: Boolean operations
 pub use line_intersection::{LineIntersection, line_intersection};
+// feature-group: Mutation & assembly
 pub use merge::{merge_elements, merge_multipolygon, merge_polygons, stitch_triangles};
+// feature-group: Boolean operations
 pub use operation::{OverlayError, difference, intersection, sym_difference, r#union, union_poly};
+// feature-group: Spatial predicates
 pub use relate::{
     De9im, Dimension, RelateError, contains_properly, crosses, overlaps, relate as relate_matrix,
     relate as relation, relate_mask as relate, touches,
 };
+// feature-group: Boolean operations
 pub use surface_point::point_on_surface;
+// feature-group: Inspection
 pub use validity::{
     ValidityFailure, ValidityOptions, is_valid, is_valid_polygon, is_valid_polygon_with,
     is_valid_ring, is_valid_ring_with, is_valid_with, validity_reason, validity_reason_with,
