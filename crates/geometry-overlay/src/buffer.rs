@@ -1384,9 +1384,7 @@ where
 
     let left_path = offset_path(&vertices, left, true, join);
     let right_path = offset_path(&vertices, right, false, join);
-    if left_path.is_empty() || right_path.is_empty() {
-        return Err(OverlayError::Unsupported);
-    }
+    debug_assert!(!left_path.is_empty() && !right_path.is_empty());
     let mut boundary = left_path;
     match end {
         BufferEndStrategy::Flat => {}
@@ -1416,9 +1414,8 @@ where
             true,
         );
     }
-    if let Some(first) = boundary.first().copied() {
-        boundary.push(first);
-    }
+    let first = boundary[0];
+    boundary.push(first);
     Ok(Polygon::new(Ring::from_vec(
         boundary
             .into_iter()

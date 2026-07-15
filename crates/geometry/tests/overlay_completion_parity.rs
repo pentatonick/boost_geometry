@@ -126,6 +126,37 @@ fn adjacent_duplicate_vertices_do_not_change_boolean_results() {
     assert_eq!(difference(&redundant, &canonical).unwrap().0.len(), 0);
 }
 
+/// `tests/xmltester/tests/general/TestNGOverlayA.xml`, "AA - repeated
+/// points" — GEOS removes a repeated run on one boundary and preserves the
+/// canonical union and difference areas.
+#[test]
+fn geos_repeated_boundary_points_preserve_areal_overlay() {
+    let repeated: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(100.0, 200.0),
+        P::new(200.0, 200.0),
+        P::new(200.0, 100.0),
+        P::new(100.0, 100.0),
+        P::new(100.0, 151.0),
+        P::new(100.0, 151.0),
+        P::new(100.0, 151.0),
+        P::new(100.0, 151.0),
+        P::new(100.0, 200.0),
+    ]));
+    let adjacent: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(300.0, 200.0),
+        P::new(300.0, 100.0),
+        P::new(200.0, 100.0),
+        P::new(200.0, 200.0),
+        P::new(200.0, 200.0),
+        P::new(300.0, 200.0),
+    ]));
+
+    assert_eq!(intersection(&repeated, &adjacent).unwrap().0.len(), 0);
+    assert!((total_area(&r#union(&repeated, &adjacent).unwrap()) - 20_000.0).abs() < 1e-9);
+    assert!((total_area(&difference(&repeated, &adjacent).unwrap()) - 10_000.0).abs() < 1e-9);
+    assert!((total_area(&sym_difference(&repeated, &adjacent).unwrap()) - 20_000.0).abs() < 1e-9);
+}
+
 /// `test/algorithms/overlay/overlay.cpp:380-402` — hole boundaries participate
 /// in clipping and assembly just like exterior boundaries.
 #[test]

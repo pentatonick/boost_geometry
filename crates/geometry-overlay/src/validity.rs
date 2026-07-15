@@ -616,10 +616,12 @@ where
     let inners: Vec<_> = polygon.interiors().collect();
     for inner in &inners {
         validate_ring(*inner, true, options)?;
-        if let Some(rep) = inner.points().next() {
-            if !WithinRing.covered_by(rep, polygon.exterior()) {
-                return Err(ValidityFailure::InteriorRingOutside);
-            }
+        let rep = inner
+            .points()
+            .next()
+            .expect("a validated ring contains at least four points");
+        if !WithinRing.covered_by(rep, polygon.exterior()) {
+            return Err(ValidityFailure::InteriorRingOutside);
         }
         let interaction = ring_pair_interaction(polygon.exterior(), *inner);
         if interaction.proper_crossing {

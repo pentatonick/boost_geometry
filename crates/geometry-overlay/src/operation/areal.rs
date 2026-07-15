@@ -197,9 +197,7 @@ where
         let end = nodes[candidate.end].coordinate;
         let delta = (end.x - start.x, end.y - start.y);
         let length = hypot(delta.0, delta.1);
-        if length <= snap_tolerance {
-            continue;
-        }
+        debug_assert!(length > snap_tolerance);
         let midpoint = Coordinate {
             x: (start.x + end.x) * 0.5,
             y: (start.y + end.y) * 0.5,
@@ -304,9 +302,7 @@ fn append_atomic_edges<P>(
             .splits
             .sort_by(|left, right| left.0.total_cmp(&right.0));
         for pair in segment.splits.windows(2) {
-            if (pair[1].0 - pair[0].0).abs() <= 1e-12 {
-                continue;
-            }
+            debug_assert!((pair[1].0 - pair[0].0).abs() > 1e-12);
             let start = canonical_node(nodes, pair[0].1, tolerance);
             let end = canonical_node(nodes, pair[1].1, tolerance);
             if start != end {

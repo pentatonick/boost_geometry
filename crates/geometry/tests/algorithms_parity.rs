@@ -31,9 +31,9 @@ use boost_geometry::prelude::{
 };
 use boost_geometry::strategy::{
     CartesianAzimuth, CartesianBoxCentroid, CartesianPerimeter, ChamberlainDuquetteArea,
-    CrossTrack, EnvelopePoint, GeographicAzimuth, Haversine, HaversineClosestPoints,
-    PointToSegment, Pythagoras, Rhumb, Rotate, Scale, Skew, SphericalArea, SphericalPerimeter,
-    Translate, Vincenty, VisvalingamWhyatt, VisvalingamWhyattPreserve,
+    CrossTrack, EnvelopePoint, GeographicAzimuth, GeographicPerimeter, Haversine,
+    HaversineClosestPoints, PointToSegment, Pythagoras, Rhumb, Rotate, Scale, Skew, SphericalArea,
+    SphericalPerimeter, Translate, Vincenty, VisvalingamWhyatt, VisvalingamWhyattPreserve,
 };
 use boost_geometry::trait_::{
     IndexedAccess as _, Point as _, PointMut as _, Polygon as _, Ring as _, fold_dims, segment_end,
@@ -1007,6 +1007,27 @@ fn spherical_perimeter_uses_the_spherical_default() {
     let explicit = perimeter_with(&polygon, SphericalPerimeter::default());
     assert!((default - explicit).abs() < 1e-9);
     assert!(default > 400_000.0);
+}
+
+/// `test/algorithms/length/length_sph.cpp:53-58` and
+/// `length_geo.cpp:95-100` define empty angular inputs as zero length. An
+/// explicitly open empty ring exercises the same public perimeter strategy
+/// contract without requiring a private strategy call.
+#[test]
+fn empty_open_angular_rings_have_zero_perimeter() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    type GeographicPoint = Point2D<f64, Geographic<Degree>>;
+
+    let spherical = Ring::<SphericalPoint, true, false>::new();
+    let geographic = Ring::<GeographicPoint, true, false>::new();
+    assert_eq!(
+        ring_perimeter_with(&spherical, SphericalPerimeter::default()),
+        0.0
+    );
+    assert_eq!(
+        ring_perimeter_with(&geographic, GeographicPerimeter::default()),
+        0.0
+    );
 }
 
 fn square_ring(x: f64, y: f64, size: f64) -> Ring<P2> {

@@ -160,9 +160,10 @@ where
     if distance <= 0.0 {
         return points[0];
     }
-    let Some(total) = cumulative.last().copied() else {
-        return points[0];
-    };
+    let total = cumulative
+        .last()
+        .copied()
+        .expect("segmentization builds one cumulative distance per input point");
     if distance >= total {
         return *points.last().unwrap_or(&points[0]);
     }

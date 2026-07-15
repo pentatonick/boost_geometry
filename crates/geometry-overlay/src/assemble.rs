@@ -104,14 +104,13 @@ where
     // Odd-depth rings attach to their immediate even-depth parent.
     for i in 0..n {
         if depths[i] % 2 == 1 {
-            let Some(parent_ring) = container_of[i] else {
-                continue;
-            };
-            if let Some(slot) = outer_slot[parent_ring] {
-                let mut hole = slots[i].take().unwrap();
-                orient_ring(&mut hole, false);
-                polygons[slot].inners.push(hole);
-            }
+            let parent_ring = container_of[i]
+                .expect("an odd containment depth necessarily has an immediate parent");
+            let slot = outer_slot[parent_ring]
+                .expect("the immediate parent of an odd-depth ring has even depth");
+            let mut hole = slots[i].take().unwrap();
+            orient_ring(&mut hole, false);
+            polygons[slot].inners.push(hole);
         }
     }
 

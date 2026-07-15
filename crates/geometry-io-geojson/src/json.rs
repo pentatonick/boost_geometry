@@ -392,8 +392,9 @@ impl JsonParser<'_> {
                     let rest = &self.bytes[self.pos..];
                     let ch_len = utf8_char_len(rest[0]);
                     let slice = rest.get(..ch_len).ok_or(GeoJsonError::UnexpectedEof)?;
-                    let s = core::str::from_utf8(slice)
-                        .map_err(|_| GeoJsonError::Json("invalid UTF-8 in string".to_string()))?;
+                    let s = core::str::from_utf8(slice).expect(
+                        "GeoJSON input is valid UTF-8 and the cursor advances by characters",
+                    );
                     out.push_str(s);
                     self.pos += ch_len;
                 }
@@ -418,9 +419,13 @@ impl JsonParser<'_> {
         }
         let slice = &self.bytes[start..self.pos];
         let text = core::str::from_utf8(slice)
-            .map_err(|_| GeoJsonError::Json("invalid number".to_string()))?;
-        text.parse::<f64>()
-            .map_err(|_| GeoJsonError::Json(alloc::format!("invalid number {text:?}")))
+            .expect("number tokens contain only ASCII bytes copied from valid UTF-8 input");
+        match text.parse::<f64>() {
+            Ok(number) => Ok(number),
+            Err(_) => Err(GeoJsonError::Json(alloc::format!(
+                "invalid number {text:?}"
+            ))),
+        }
     }
 }
 

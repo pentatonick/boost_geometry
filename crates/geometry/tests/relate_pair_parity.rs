@@ -211,6 +211,38 @@ fn linear_relations_cover_disjoint_touch_and_overlap_kernels() {
     assert!(crosses(&horizontal, &diagonal).unwrap());
 }
 
+/// `test/algorithms/relate/relate_linear_linear.cpp:155-164` — consecutive
+/// duplicate vertices contribute no segment, while a closed linestring has no
+/// mod-2 boundary. These are exact Boost DE-9IM fixtures exercised through the
+/// public relation facade.
+#[test]
+fn duplicated_and_closed_linestrings_match_boost_matrices() {
+    let reference =
+        Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(2.0, 2.0), P::new(4.0, 2.0)]);
+    for duplicated in [
+        Linestring::from_vec(vec![P::new(1.0, 1.0), P::new(2.0, 2.0), P::new(2.0, 2.0)]),
+        Linestring::from_vec(vec![P::new(1.0, 1.0), P::new(1.0, 1.0), P::new(2.0, 2.0)]),
+    ] {
+        assert!(
+            relation(&duplicated, &reference)
+                .unwrap()
+                .matches("1FF0FF102")
+                .unwrap()
+        );
+    }
+
+    let open = Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(10.0, 0.0)]);
+    let closed = Linestring::from_vec(vec![
+        P::new(5.0, 0.0),
+        P::new(9.0, 0.0),
+        P::new(5.0, 5.0),
+        P::new(1.0, 0.0),
+        P::new(5.0, 0.0),
+    ]);
+    let observed = relation(&open, &closed).unwrap();
+    assert!(observed.matches("1F1FF01F2").unwrap());
+}
+
 /// `test/algorithms/relate/relate_linear_areal.cpp:44-87` — a line on an
 /// areal boundary and the reversed ordered pair exercise the boundary mask.
 #[test]
