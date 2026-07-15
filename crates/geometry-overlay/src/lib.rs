@@ -48,7 +48,7 @@ pub use buffer::{
     buffer_with_strategy,
 };
 pub use line_intersection::{LineIntersection, line_intersection};
-pub use merge::{merge_elements, merge_multipolygon, merge_polygons};
+pub use merge::{merge_elements, merge_multipolygon, merge_polygons, stitch_triangles};
 pub use operation::{OverlayError, difference, intersection, sym_difference, r#union, union_poly};
 pub use relate::{
     De9im, Dimension, RelateError, contains_properly, crosses, overlaps, relate as relate_matrix,

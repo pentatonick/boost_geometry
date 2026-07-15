@@ -42,6 +42,20 @@ where
     CartesianClosestPoints.closest_points(a, b)
 }
 
+/// Return the nearest-point pair using an explicitly supplied strategy.
+#[inline]
+#[must_use]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "closest-point strategies are zero-sized or small Copy values, matching other _with entries"
+)]
+pub fn closest_points_with<A, B, S>(a: &A, b: &B, strategy: S) -> (S::Out, S::Out)
+where
+    S: ClosestPointsStrategy<A, B>,
+{
+    strategy.closest_points(a, b)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,

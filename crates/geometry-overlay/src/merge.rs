@@ -121,6 +121,49 @@ where
     merge_polygons(mp.0)
 }
 
+/// Stitch a triangle soup into polygons by removing shared interior edges.
+///
+/// Each successful pairwise union that produces one polygon shrinks the work
+/// list. Vertex-only contacts and disjoint triangles remain separate output
+/// members. This reuses the native areal union engine rather than introducing a
+/// triangulation-specific topology kernel.
+///
+/// # Errors
+///
+/// Propagates [`OverlayError`] when the native union engine refuses a candidate
+/// pair.
+#[must_use = "stitching can fail and the assembled polygons should be used"]
+pub fn stitch_triangles<P, I>(triangles: I) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+    I: IntoIterator<Item = Polygon<P>>,
+{
+    let mut work: Vec<Polygon<P>> = triangles.into_iter().collect();
+    loop {
+        let mut stitched = None;
+        'pairs: for first in 0..work.len() {
+            for second in (first + 1)..work.len() {
+                let unioned = union_poly(&work[first], &work[second])?;
+                if unioned.0.len() == 1 {
+                    if let Some(polygon) = unioned.0.into_iter().next() {
+                        stitched = Some((first, second, polygon));
+                        break 'pairs;
+                    }
+                }
+            }
+        }
+        let Some((first, second, polygon)) = stitched else {
+            break;
+        };
+        work.remove(second);
+        work.remove(first);
+        work.push(polygon);
+    }
+    Ok(MultiPolygon(work))
+}
+
 /// The first `(i, j)` with `i < j` whose polygons *overlap in area*, or
 /// `None`.
 ///
@@ -152,7 +195,7 @@ mod tests {
     //! OVL8 done-when: merged element counts + areas. Mirrors
     //! `test/algorithms/merge_elements.cpp`.
 
-    use super::merge_polygons;
+    use super::{merge_polygons, stitch_triangles};
     use geometry_algorithm::ring_area;
     use geometry_cs::Cartesian;
     use geometry_model::{MultiPolygon, Point2D, Polygon, polygon};
@@ -216,6 +259,15 @@ mod tests {
         let merged = merge_polygons(vec![a]).unwrap();
         assert_eq!(merged.polygons().count(), 1);
         assert!(close(total_area(&merged), 4.0));
+    }
+
+    #[test]
+    fn shared_edge_triangles_stitch_to_one_polygon() {
+        let first: Polygon<P> = polygon![[(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.0, 0.0)]];
+        let second: Polygon<P> = polygon![[(0.0, 0.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)]];
+        let stitched = stitch_triangles([first, second]).unwrap();
+        assert_eq!(stitched.polygons().count(), 1);
+        assert!(close(total_area(&stitched), 1.0));
     }
 
     /// Two squares sharing only one vertex must not fuse.

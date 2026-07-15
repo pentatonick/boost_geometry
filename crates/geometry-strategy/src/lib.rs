@@ -110,6 +110,7 @@ pub mod closest_points;
 pub mod compare;
 pub mod convex_hull;
 pub mod densify;
+pub mod destination;
 pub mod disjoint;
 pub mod distance;
 pub mod envelope;
@@ -120,6 +121,7 @@ pub mod length;
 pub mod line_interpolate;
 pub(crate) mod normalise;
 mod reversal;
+pub mod segmentize;
 pub mod simplify;
 pub mod spherical;
 pub mod transform;
@@ -145,6 +147,7 @@ pub use closest_points::{CartesianClosestPoints, ClosestPointsStrategy};
 pub use compare::{ALL_DIMENSIONS, EqualTo, Greater, Less, LessExact};
 pub use convex_hull::{ConvexHullStrategy, MonotoneChain};
 pub use densify::{CartesianDensify, DensifyStrategy};
+pub use destination::{DefaultDestination, DefaultDestinationStrategy, DestinationStrategy};
 pub use disjoint::{CartesianDisjoint, DisjointStrategy};
 pub use distance::{DefaultDistance, DefaultDistanceStrategy, DistanceStrategy};
 pub use envelope::{
@@ -167,12 +170,13 @@ pub use length::{
 };
 pub use line_interpolate::{CartesianLineInterpolate, LineInterpolateStrategy};
 pub use reversal::Reversed;
+pub use segmentize::{CartesianSegmentize, SegmentizeStrategy};
 pub use simplify::{
     DouglasPeucker, SimplifyStrategy, VisvalingamWhyatt, VisvalingamWhyattPreserve,
 };
 pub use spherical::{
-    ComparableHaversine, Haversine, SphericalArea, SphericalAzimuth, SphericalLength,
-    SphericalPerimeter, SphericalPolygonArea,
+    ComparableHaversine, CrossTrack, Haversine, HaversineClosestPoints, SphericalArea,
+    SphericalAzimuth, SphericalLength, SphericalPerimeter, SphericalPolygonArea,
 };
-pub use transform::{Affine2, Affine3, TransformStrategy};
+pub use transform::{Affine2, Affine3, Rotate, Scale, Skew, TransformStrategy, Translate};
 pub use within::{WithinBox, WithinPoly, WithinRing, WithinStrategy, WithinStrategyForKind};

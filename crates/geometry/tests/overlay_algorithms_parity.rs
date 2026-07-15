@@ -5,7 +5,7 @@ use boost_geometry::overlay::{OverlayError, traverse::TraversalError};
 use boost_geometry::prelude::{
     Cartesian, Dimension, JoinStrategy, LineIntersection, PointStrategy, RelateError,
     ValidityFailure, buffer, contains_properly, is_valid, line_intersection, merge_elements,
-    relate, relation, r#union,
+    relate, relation, ring_area, stitch_triangles, r#union,
 };
 use boost_geometry::trait_::{MultiPolygon as _, Polygon as _};
 
@@ -95,6 +95,28 @@ fn line_intersection_reports_proper_touch_collinear_and_range_cases() {
         line_intersection(&proper_a, &too_large),
         Err(OverlayError::Unsupported)
     );
+}
+
+/// Stitching consumes the native merge/union engine and removes the shared
+/// diagonal between two triangles.
+#[test]
+fn stitch_triangles_reassembles_a_square() {
+    let first = Polygon::new(Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(0.0, 1.0),
+        P::new(1.0, 1.0),
+        P::new(0.0, 0.0),
+    ]));
+    let second = Polygon::new(Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(1.0, 1.0),
+        P::new(1.0, 0.0),
+        P::new(0.0, 0.0),
+    ]));
+
+    let stitched = stitch_triangles([first, second]).unwrap();
+    assert_eq!(stitched.polygons().count(), 1);
+    assert!((ring_area(stitched.polygons().next().unwrap().exterior()).abs() - 1.0).abs() < 1e-12);
 }
 
 /// `test/algorithms/is_valid.cpp:1626-1634` — the generic entry dispatches to

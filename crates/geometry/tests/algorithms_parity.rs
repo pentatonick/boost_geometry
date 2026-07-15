@@ -17,15 +17,18 @@ use boost_geometry::model::{
 };
 use boost_geometry::overlay::{Dimension, relation};
 use boost_geometry::prelude::{
-    Cartesian, CoordinatePosition, Degree, Spherical, area, assign_values, azimuth_with, centroid,
-    centroid_with, closest_points, comparable_distance_with, coordinate_position, correct,
-    correct_closure, densify, distance_with, equals, expand, expand_with, for_each_segment,
-    intersects, intersects_reversed, is_simple, line_interpolate, perimeter, perimeter_with,
-    remove_spikes, ring_area, ring_perimeter_with, simplify_with, unique, within,
+    Cartesian, CoordinatePosition, Degree, Geographic, Spherical, area, assign_values,
+    azimuth_with, centroid, centroid_with, chaikin_smoothing, closest_points, closest_points_with,
+    comparable_distance_with, coordinate_position, correct, correct_closure, densify, destination,
+    distance_with, equals, expand, expand_with, for_each_segment, intersects, intersects_reversed,
+    is_simple, line_interpolate, line_locate_point, linestring_segmentize,
+    linestring_segmentize_with, map_coords, map_coords_in_place, perimeter, perimeter_with,
+    remove_spikes, ring_area, ring_perimeter_with, simplify_with, transform, unique, within,
 };
 use boost_geometry::strategy::{
-    CartesianAzimuth, CartesianBoxCentroid, CartesianPerimeter, EnvelopePoint, PointToSegment,
-    Pythagoras, SphericalPerimeter, VisvalingamWhyatt, VisvalingamWhyattPreserve,
+    CartesianAzimuth, CartesianBoxCentroid, CartesianPerimeter, CrossTrack, EnvelopePoint,
+    Haversine, HaversineClosestPoints, PointToSegment, Pythagoras, Rotate, Scale, Skew,
+    SphericalPerimeter, Translate, VisvalingamWhyatt, VisvalingamWhyattPreserve,
 };
 use boost_geometry::trait_::{
     IndexedAccess as _, Point as _, PointMut as _, Polygon as _, Ring as _,
@@ -633,6 +636,134 @@ fn coordinate_position_is_public_and_hole_aware() {
         coordinate_position(&P2::new(11.0, 5.0), &polygon),
         CoordinatePosition::Outside
     );
+}
+
+/// Chaikin's 1974 corner-cutting rule is reachable through the public facade
+/// and retains the endpoints of an open linestring.
+#[test]
+fn chaikin_smoothing_subdivides_an_open_linestring() {
+    let line = Linestring::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(1.0, 0.0),
+        P2::new(1.0, 1.0),
+    ]);
+
+    assert_eq!(
+        chaikin_smoothing(&line, 1).0,
+        vec![
+            P2::new(0.0, 0.0),
+            P2::new(0.25, 0.0),
+            P2::new(0.75, 0.0),
+            P2::new(1.0, 0.25),
+            P2::new(1.0, 0.75),
+            P2::new(1.0, 1.0),
+        ]
+    );
+}
+
+/// Named strategies construct the existing affine matrix engine rather than
+/// introducing separate transform implementations.
+#[test]
+fn named_affine_strategies_feed_the_public_transform_entry() {
+    let point = P2::new(1.0, 2.0);
+    assert_eq!(
+        transform(&point, &Translate::by(3.0, 4.0)),
+        P2::new(4.0, 6.0)
+    );
+    assert_eq!(transform(&point, &Scale::uniform(2.0)), P2::new(2.0, 4.0));
+    assert_eq!(transform(&point, &Skew::by(2.0, 0.0)), P2::new(5.0, 2.0));
+
+    let rotated = transform(&P2::new(1.0, 0.0), &Rotate::degrees(90.0));
+    assert!(rotated.get::<0>().abs() < 1e-12);
+    assert!((rotated.get::<1>() - 1.0).abs() < 1e-12);
+}
+
+/// The default geographic destination entry routes through the ported direct
+/// formula and returns the endpoint in the origin point's angular units.
+#[test]
+fn destination_is_available_through_the_public_facade() {
+    type GeographicPoint = Point2D<f64, Geographic<Degree>>;
+
+    let endpoint = destination(
+        &GeographicPoint::new(0.0, 0.0),
+        core::f64::consts::FRAC_PI_2,
+        100_000.0,
+    );
+    assert!((endpoint.get::<0>() - 0.898_315_284_1).abs() < 1e-6);
+    assert!(endpoint.get::<1>().abs() < 1e-8);
+}
+
+/// Locating and segmentizing are inverse-style public operations over the same
+/// accumulated Cartesian arc length.
+#[test]
+fn locate_and_segmentize_preserve_a_bent_linestring() {
+    let line = Linestring::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(2.0, 0.0),
+        P2::new(2.0, 2.0),
+    ]);
+
+    assert_eq!(line_locate_point(&line, &P2::new(2.5, 1.0)), Some(0.75));
+    let pieces = linestring_segmentize(&line, 2);
+    assert_eq!(pieces.0.len(), 2);
+    assert_eq!(pieces.0[0].0, vec![P2::new(0.0, 0.0), P2::new(2.0, 0.0)]);
+    assert_eq!(pieces.0[1].0, vec![P2::new(2.0, 0.0), P2::new(2.0, 2.0)]);
+}
+
+/// Explicit segmentization follows great-circle interpolation when supplied a
+/// spherical distance strategy.
+#[test]
+fn segmentize_with_haversine_uses_spherical_interpolation() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let line = Linestring::from_vec(vec![
+        SphericalPoint::new(0.0, 0.0),
+        SphericalPoint::new(2.0, 0.0),
+    ]);
+
+    let pieces = linestring_segmentize_with(&line, 2, Haversine::EARTH);
+    assert_eq!(pieces.0.len(), 2);
+    assert!((pieces.0[0].0[1].get::<0>() - 1.0).abs() < 1e-12);
+    assert!((pieces.0[1].0[0].get::<0>() - 1.0).abs() < 1e-12);
+}
+
+/// The ported spherical cross-track and closest-point strategies share the
+/// same projection and are both reachable through explicit public entries.
+#[test]
+fn spherical_cross_track_and_closest_point_are_public() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let point = SphericalPoint::new(1.0, 1.0);
+    let segment = Segment::new(SphericalPoint::new(0.0, 0.0), SphericalPoint::new(2.0, 0.0));
+
+    let distance = distance_with(&point, &segment, CrossTrack::EARTH);
+    assert!((distance - 111_226.255).abs() < 100.0);
+
+    let (source, projected) = closest_points_with(&point, &segment, HaversineClosestPoints::EARTH);
+    assert!((source.get::<0>() - point.get::<0>()).abs() < 1e-12);
+    assert!((source.get::<1>() - point.get::<1>()).abs() < 1e-12);
+    assert!((projected.get::<0>() - 1.0).abs() < 1e-9);
+    assert!(projected.get::<1>().abs() < 1e-9);
+}
+
+/// Value mapping can change scalar type, while the in-place face mutates every
+/// stored point through the public geometry model.
+#[test]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the test deliberately verifies scalar-type rebinding from f64 to f32"
+)]
+fn map_coords_supports_rebind_and_in_place_faces() {
+    let line = Linestring::from_vec(vec![P2::new(1.0, 2.0), P2::new(3.0, 4.0)]);
+    let mapped: Linestring<Point2D<f32, Cartesian>> = map_coords(&line, |point| {
+        Point2D::new(point.get::<0>() as f32 * 2.0, point.get::<1>() as f32)
+    });
+    assert_eq!(mapped.0[0], Point2D::new(2.0_f32, 2.0));
+
+    let mut shifted = line;
+    map_coords_in_place(&mut shifted, |point| {
+        point.set::<0>(point.get::<0>() + 10.0);
+    });
+    assert_eq!(shifted.0[0], P2::new(11.0, 2.0));
+    assert_eq!(shifted.0[1], P2::new(13.0, 4.0));
 }
 
 /// `test/algorithms/intersects/intersects.cpp:23-30` — polygons wholly inside

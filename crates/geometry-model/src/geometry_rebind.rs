@@ -6,7 +6,9 @@
 use geometry_coords::CoordinateScalar;
 use geometry_cs::CoordinateSystem;
 
-use crate::{Box, Linestring, Point, Ring};
+use crate::{
+    Box, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point, Polygon, Ring, Segment,
+};
 
 /// Select the stock model matching `Self` while replacing coordinate
 /// scalar and coordinate-system types.
@@ -67,4 +69,57 @@ where
     Cs: CoordinateSystem,
 {
     type Output = Ring<Point<T, D, Cs>, CW, CL>;
+}
+
+impl<A, const D: usize, OldCs, T, Cs> RebindGeometry<T, Cs> for Segment<Point<A, D, OldCs>>
+where
+    A: CoordinateScalar,
+    OldCs: CoordinateSystem,
+    T: CoordinateScalar,
+    Cs: CoordinateSystem,
+{
+    type Output = Segment<Point<T, D, Cs>>;
+}
+
+impl<A, const D: usize, OldCs, T, Cs> RebindGeometry<T, Cs> for MultiPoint<Point<A, D, OldCs>>
+where
+    A: CoordinateScalar,
+    OldCs: CoordinateSystem,
+    T: CoordinateScalar,
+    Cs: CoordinateSystem,
+{
+    type Output = MultiPoint<Point<T, D, Cs>>;
+}
+
+impl<A, const D: usize, OldCs, T, Cs, const CW: bool, const CL: bool> RebindGeometry<T, Cs>
+    for Polygon<Point<A, D, OldCs>, CW, CL>
+where
+    A: CoordinateScalar,
+    OldCs: CoordinateSystem,
+    T: CoordinateScalar,
+    Cs: CoordinateSystem,
+{
+    type Output = Polygon<Point<T, D, Cs>, CW, CL>;
+}
+
+impl<A, const D: usize, OldCs, T, Cs> RebindGeometry<T, Cs>
+    for MultiLinestring<Linestring<Point<A, D, OldCs>>>
+where
+    A: CoordinateScalar,
+    OldCs: CoordinateSystem,
+    T: CoordinateScalar,
+    Cs: CoordinateSystem,
+{
+    type Output = MultiLinestring<Linestring<Point<T, D, Cs>>>;
+}
+
+impl<A, const D: usize, OldCs, T, Cs, const CW: bool, const CL: bool> RebindGeometry<T, Cs>
+    for MultiPolygon<Polygon<Point<A, D, OldCs>, CW, CL>>
+where
+    A: CoordinateScalar,
+    OldCs: CoordinateSystem,
+    T: CoordinateScalar,
+    Cs: CoordinateSystem,
+{
+    type Output = MultiPolygon<Polygon<Point<T, D, Cs>, CW, CL>>;
 }
