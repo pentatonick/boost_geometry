@@ -53,4 +53,7 @@ pub use relate::{
     relate_mask as relate, touches,
 };
 pub use surface_point::point_on_surface;
-pub use validity::{ValidityFailure, is_valid, is_valid_polygon, is_valid_ring};
+pub use validity::{
+    ValidityFailure, ValidityOptions, is_valid, is_valid_polygon, is_valid_polygon_with,
+    is_valid_ring, is_valid_ring_with, is_valid_with, validity_reason, validity_reason_with,
+};

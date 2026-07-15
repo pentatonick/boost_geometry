@@ -15,10 +15,10 @@
 //! Coordinate validity (NaN / infinity) is checked because the robustness
 //! gate depends on finite input.
 //!
-//! Unlike Boost's default validity policy, which permits consecutive repeated
-//! points, this Rust entry selects Boost's strict-policy behavior and returns
-//! [`ValidityFailure::DuplicatePoints`]. Boost exercises that policy in
-//! `test/algorithms/is_valid.cpp:1626-1634`.
+//! [`is_valid`] preserves this crate's strict behavior for compatibility.
+//! [`is_valid_with`] accepts [`ValidityOptions`], including
+//! [`ValidityOptions::BOOST_DEFAULT`] which permits consecutive repeated
+//! points like `policies/is_valid/default_policy.hpp:26-61`.
 
 use alloc::vec::Vec;
 
@@ -37,10 +37,10 @@ use crate::predicate::segment_intersection::{SegmentIntersection, segment_inters
 
 /// Why a geometry failed [`is_valid_ring`] / [`is_valid_polygon`].
 ///
-/// Mirrors the subset of Boost's `validity_failure_type`
-/// (`algorithms/validity_failure_type.hpp:33-106`) that the areal validator
-/// can produce. The numeric groupings (few-points, not-closed,
-/// self-intersections, …) match Boost's categories.
+/// Mirrors Boost's complete `validity_failure_type` taxonomy
+/// (`algorithms/validity_failure_type.hpp:33-113`). The current areal
+/// validator produces the relevant ring/polygon variants; retaining the
+/// remaining categories keeps reporting stable as kind dispatch expands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidityFailure {
     /// Fewer than the 4 points a closed ring needs (3 distinct + the
@@ -88,6 +88,126 @@ pub enum ValidityFailure {
     /// Distinct multi-polygon members overlap in area or share a boundary
     /// curve. Boost's `failure_intersecting_interiors`.
     IntersectingInteriors,
+    /// The geometry collapses below its declared topological dimension.
+    /// Boost's `failure_wrong_topological_dimension`.
+    WrongTopologicalDimension,
+    /// A box's maximum corner is lexicographically before its minimum corner.
+    /// Boost's `failure_wrong_corner_order`.
+    WrongCornerOrder,
+    /// Collinear vertices occur on one polyhedral-surface face. Boost's
+    /// `failure_collinear_points_on_face`.
+    CollinearPointsOnFace,
+    /// Vertices of one polyhedral-surface face are not coplanar. Boost's
+    /// `failure_non_coplanar_points_on_face`.
+    NonCoplanarPointsOnFace,
+    /// A polyhedral-surface face contains too few vertices. Boost's
+    /// `failure_few_points_on_face`.
+    FewPointsOnFace,
+    /// A polyhedral-surface edge has inconsistent face orientation. Boost's
+    /// `failure_inconsistent_orientation`.
+    InconsistentOrientation,
+    /// Polyhedral-surface faces intersect away from a shared edge. Boost's
+    /// `failure_invalid_intersection`.
+    InvalidIntersection,
+    /// Polyhedral-surface faces do not form a connected surface. Boost's
+    /// `failure_disconnected_surface`.
+    DisconnectedSurface,
+}
+
+impl ValidityFailure {
+    /// Return the stable reason prefix for this failure.
+    ///
+    /// The areal, linear, box, and coordinate strings are byte-for-byte the
+    /// messages returned by `validity_failure_type_message` in
+    /// `policies/is_valid/failing_reason_policy.hpp:32-63`. Surface messages
+    /// extend that table for the surface failure values added later in
+    /// `algorithms/validity_failure_type.hpp:91-113`.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::FewPoints => "Geometry has too few points",
+            Self::WrongTopologicalDimension => "Geometry has wrong topological dimension",
+            Self::Spikes => "Geometry has spikes",
+            Self::DuplicatePoints => "Geometry has duplicate (consecutive) points",
+            Self::NotClosed => "Geometry is defined as closed but is open",
+            Self::SelfIntersection => "Geometry has invalid self-intersections",
+            Self::WrongOrientation => "Geometry has wrong orientation",
+            Self::InteriorRingOutside => {
+                "Geometry has interior rings defined outside the outer boundary"
+            }
+            Self::NestedInteriorRings => "Geometry has nested interior rings",
+            Self::DisconnectedInterior => "Geometry has disconnected interior",
+            Self::IntersectingInteriors => "Multi-polygon has intersecting interiors",
+            Self::WrongCornerOrder => "Box has corners in wrong order",
+            Self::InvalidCoordinate => "Geometry has point(s) with invalid coordinate(s)",
+            Self::CoordinateOutOfRange => {
+                "Geometry has coordinate(s) outside the supported arithmetic range"
+            }
+            Self::CollinearPointsOnFace => "Geometry has collinear points on a face",
+            Self::NonCoplanarPointsOnFace => "Geometry has non-coplanar points on a face",
+            Self::FewPointsOnFace => "Geometry has too few points on a face",
+            Self::InconsistentOrientation => "Geometry has inconsistent surface orientation",
+            Self::InvalidIntersection => "Geometry has invalid face intersections",
+            Self::DisconnectedSurface => "Geometry has a disconnected surface",
+        }
+    }
+}
+
+impl core::fmt::Display for ValidityFailure {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.message())
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ValidityFailure {}
+
+/// Behavior switches applied by [`is_valid_with`].
+///
+/// Mirrors the `AllowDuplicates` and `AllowSpikes` template parameters of
+/// `policies/is_valid/default_policy.hpp:26-61`. The current validator covers
+/// areal geometries, so `allow_spikes_for_linear` is recorded for API parity
+/// but only becomes observable when linear validity dispatch is added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValidityOptions {
+    allow_duplicates: bool,
+    allow_spikes_for_linear: bool,
+}
+
+impl ValidityOptions {
+    /// Existing Rust behavior: report duplicates and spikes.
+    pub const STRICT: Self = Self::new(false, false);
+
+    /// Boost's default validity behavior: permit duplicate points and spikes
+    /// in linear geometries.
+    pub const BOOST_DEFAULT: Self = Self::new(true, true);
+
+    /// Construct validity behavior from Boost's two policy switches.
+    #[must_use]
+    pub const fn new(allow_duplicates: bool, allow_spikes_for_linear: bool) -> Self {
+        Self {
+            allow_duplicates,
+            allow_spikes_for_linear,
+        }
+    }
+
+    /// Whether consecutive duplicate points are accepted.
+    #[must_use]
+    pub const fn allows_duplicates(self) -> bool {
+        self.allow_duplicates
+    }
+
+    /// Whether spikes are accepted when linear validity dispatch is used.
+    #[must_use]
+    pub const fn allows_spikes_for_linear(self) -> bool {
+        self.allow_spikes_for_linear
+    }
+}
+
+impl Default for ValidityOptions {
+    fn default() -> Self {
+        Self::STRICT
+    }
 }
 
 /// Per-kind validity implementation selected by [`is_valid`].
@@ -96,7 +216,7 @@ pub enum ValidityFailure {
 /// `algorithms/detail/is_valid/interface.hpp:153-203`.
 #[doc(hidden)]
 pub trait ValidityStrategy<G> {
-    fn apply(&self, geometry: &G) -> Result<(), ValidityFailure>;
+    fn apply(&self, geometry: &G, options: ValidityOptions) -> Result<(), ValidityFailure>;
 }
 
 /// Tag-to-validity implementation picker.
@@ -170,7 +290,59 @@ where
     G::Kind: ValidityStrategyForKind,
     <G::Kind as ValidityStrategyForKind>::S: ValidityStrategy<G>,
 {
-    <<G::Kind as ValidityStrategyForKind>::S as Default>::default().apply(geometry)
+    is_valid_with(geometry, ValidityOptions::STRICT)
+}
+
+/// Validate an areal geometry with explicit validity behavior.
+///
+/// Mirrors the policy-taking overload behind
+/// `algorithms/detail/is_valid/interface.hpp:155-202`. Use
+/// [`ValidityOptions::BOOST_DEFAULT`] to select Boost's default handling of
+/// consecutive duplicates, or [`ValidityOptions::STRICT`] for the behavior of
+/// [`is_valid`].
+///
+/// # Errors
+///
+/// Returns the first [`ValidityFailure`] not accepted by `options`.
+#[inline]
+#[must_use = "validity failures must be handled"]
+pub fn is_valid_with<G>(geometry: &G, options: ValidityOptions) -> Result<(), ValidityFailure>
+where
+    G: Geometry,
+    G::Kind: ValidityStrategyForKind,
+    <G::Kind as ValidityStrategyForKind>::S: ValidityStrategy<G>,
+{
+    <<G::Kind as ValidityStrategyForKind>::S as Default>::default().apply(geometry, options)
+}
+
+/// Return Boost's human-readable reason for strict validation.
+///
+/// This is the allocation-free Rust counterpart to the string-output overload
+/// driven by `policies/is_valid/failing_reason_policy.hpp`.
+#[inline]
+#[must_use]
+pub fn validity_reason<G>(geometry: &G) -> &'static str
+where
+    G: Geometry,
+    G::Kind: ValidityStrategyForKind,
+    <G::Kind as ValidityStrategyForKind>::S: ValidityStrategy<G>,
+{
+    validity_reason_with(geometry, ValidityOptions::STRICT)
+}
+
+/// Return Boost's human-readable reason using explicit validity behavior.
+#[inline]
+#[must_use]
+pub fn validity_reason_with<G>(geometry: &G, options: ValidityOptions) -> &'static str
+where
+    G: Geometry,
+    G::Kind: ValidityStrategyForKind,
+    <G::Kind as ValidityStrategyForKind>::S: ValidityStrategy<G>,
+{
+    match is_valid_with(geometry, options) {
+        Ok(()) => "Geometry is valid",
+        Err(failure) => failure.message(),
+    }
 }
 
 /// Implements the ring validity arm selected by
@@ -182,8 +354,8 @@ where
     P::Scalar: CoordinateScalar + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    fn apply(&self, ring: &G) -> Result<(), ValidityFailure> {
-        is_valid_ring(ring)
+    fn apply(&self, ring: &G, options: ValidityOptions) -> Result<(), ValidityFailure> {
+        is_valid_ring_with(ring, options)
     }
 }
 
@@ -196,8 +368,8 @@ where
     P::Scalar: CoordinateScalar + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    fn apply(&self, polygon: &G) -> Result<(), ValidityFailure> {
-        is_valid_polygon(polygon)
+    fn apply(&self, polygon: &G, options: ValidityOptions) -> Result<(), ValidityFailure> {
+        is_valid_polygon_with(polygon, options)
     }
 }
 
@@ -210,10 +382,10 @@ where
     P::Scalar: CoordinateScalar + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    fn apply(&self, multi_polygon: &G) -> Result<(), ValidityFailure> {
+    fn apply(&self, multi_polygon: &G, options: ValidityOptions) -> Result<(), ValidityFailure> {
         let polygons: Vec<_> = multi_polygon.polygons().collect();
         for polygon in &polygons {
-            is_valid_polygon(*polygon)?;
+            is_valid_polygon_with(*polygon, options)?;
         }
         for first in 0..polygons.len() {
             for second in (first + 1)..polygons.len() {
@@ -268,7 +440,24 @@ where
     P::Scalar: CoordinateScalar + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    validate_ring(ring, false)
+    is_valid_ring_with(ring, ValidityOptions::STRICT)
+}
+
+/// Validate one ring with explicit validity behavior.
+///
+/// # Errors
+///
+/// Returns the first [`ValidityFailure`] not accepted by `options`.
+#[inline]
+#[must_use = "validity failures must be handled"]
+pub fn is_valid_ring_with<R, P>(ring: &R, options: ValidityOptions) -> Result<(), ValidityFailure>
+where
+    R: RingTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    validate_ring(ring, false, options)
 }
 
 /// Shared ring validation. `is_interior` flips the orientation
@@ -276,14 +465,18 @@ where
 /// (strategy-level `ShoelaceArea` positive); an interior ring winds
 /// opposite (negative) — mirroring Boost's
 /// `is_properly_oriented<Ring, IsInteriorRing>`.
-fn validate_ring<R, P>(ring: &R, is_interior: bool) -> Result<(), ValidityFailure>
+fn validate_ring<R, P>(
+    ring: &R,
+    is_interior: bool,
+    options: ValidityOptions,
+) -> Result<(), ValidityFailure>
 where
     R: RingTrait<Point = P>,
     P: PointMut + Default + Copy,
     P::Scalar: CoordinateScalar + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    let pts: Vec<P> = ring.points().copied().collect();
+    let mut pts: Vec<P> = ring.points().copied().collect();
 
     // Coordinate finiteness.
     for p in &pts {
@@ -292,6 +485,22 @@ where
         if !x.is_finite() || !y.is_finite() {
             return Err(ValidityFailure::InvalidCoordinate);
         }
+    }
+
+    // Boost's default policy accepts consecutive duplicates. Remove them
+    // before count, spike, intersection, and orientation checks so a
+    // zero-length edge cannot create a secondary failure.
+    if options.allows_duplicates() {
+        let mut deduplicated = Vec::with_capacity(pts.len());
+        for point in pts {
+            if !deduplicated
+                .last()
+                .is_some_and(|previous| same_point(previous, &point))
+            {
+                deduplicated.push(point);
+            }
+        }
+        pts = deduplicated;
     }
 
     // Out-of-range coordinates: the self-intersection test below routes
@@ -315,7 +524,7 @@ where
         return Err(ValidityFailure::NotClosed);
     }
 
-    if pts.windows(2).any(|pair| same_point(&pair[0], &pair[1])) {
+    if !options.allows_duplicates() && pts.windows(2).any(|pair| same_point(&pair[0], &pair[1])) {
         return Err(ValidityFailure::DuplicatePoints);
     }
 
@@ -383,10 +592,30 @@ where
     P::Scalar: CoordinateScalar + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    validate_ring(polygon.exterior(), false)?;
+    is_valid_polygon_with(polygon, ValidityOptions::STRICT)
+}
+
+/// Validate one polygon with explicit validity behavior.
+///
+/// # Errors
+///
+/// Returns the first [`ValidityFailure`] not accepted by `options`.
+#[inline]
+#[must_use = "validity failures must be handled"]
+pub fn is_valid_polygon_with<G, P>(
+    polygon: &G,
+    options: ValidityOptions,
+) -> Result<(), ValidityFailure>
+where
+    G: PolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    validate_ring(polygon.exterior(), false, options)?;
     let inners: Vec<_> = polygon.interiors().collect();
     for inner in &inners {
-        validate_ring(*inner, true)?;
+        validate_ring(*inner, true, options)?;
         if let Some(rep) = inner.points().next() {
             if !WithinRing.covered_by(rep, polygon.exterior()) {
                 return Err(ValidityFailure::InteriorRingOutside);

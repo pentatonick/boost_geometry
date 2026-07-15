@@ -47,12 +47,20 @@ kind and coordinate-system family — combine).
 | `line_interpolate` | `LineInterpolateStrategy` | `CartesianLineInterpolate` |
 | `transform` | `TransformStrategy` | `Affine2`, `Affine3` |
 | `closest_points` | `ClosestPointsStrategy` | `CartesianClosestPoints` |
+| `compare` | point comparison policy dispatch by coordinate-system family | `Less`, `LessExact`, `Greater`, `EqualTo` (all shared dimensions or one const-selected dimension; Cartesian/spherical/geographic) |
 
 `cartesian`, `spherical`, `geographic` are the per-family submodules that
 hold the concrete impls above. The geographic module also exposes Thomas,
 Vincenty, and Karney direct/inverse formulas, differential quantities,
 meridian/vertex formulas, and Gnomonic/Sjöberg intersection. `normalise` is
 `pub(crate)` (angular normalization machinery, not part of the public surface).
+
+The `compare` policies mirror `boost/geometry/policies/compare.hpp`. Cartesian
+points use lexicographic coordinate order. Spherical and geographic points
+add Boost's antimeridian/pole ordering and normalize differing angular units
+before comparison. These policies are distinct from
+`geometry_coords::Comparable`, which is the squared-distance wrapper described
+above.
 
 ## Reverse dispatch
 
