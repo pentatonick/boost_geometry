@@ -206,8 +206,6 @@ mod tests {
             assert_eq!(items.len(), 2);
             assert_eq!(items[0].kind(), DynKind::Point);
             assert_eq!(items[1].kind(), DynKind::GeometryCollection);
-        } else {
-            unreachable!();
         }
     }
 }

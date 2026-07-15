@@ -405,11 +405,10 @@ mod tests {
         b.extend_from_slice(&F2);
         let g = from_wkb(&b).unwrap();
         assert_eq!(g.kind(), DynKind::Point);
-        let DynGeometry::Point(p) = g else {
-            unreachable!()
-        };
-        assert_eq!(p.get::<0>(), 1.0);
-        assert_eq!(p.get::<1>(), 2.0);
+        if let DynGeometry::Point(p) = g {
+            assert_eq!(p.get::<0>(), 1.0);
+            assert_eq!(p.get::<1>(), 2.0);
+        }
     }
 
     #[test]
@@ -422,13 +421,12 @@ mod tests {
         b.extend_from_slice(&F1);
         let g = from_wkb(&b).unwrap();
         assert_eq!(g.kind(), DynKind::LineString);
-        let DynGeometry::LineString(ls) = g else {
-            unreachable!()
-        };
-        assert_eq!(ls.points().len(), 2);
-        let last = ls.points().last().unwrap();
-        assert_eq!(last.get::<0>(), 3.0);
-        assert_eq!(last.get::<1>(), 1.0);
+        if let DynGeometry::LineString(ls) = g {
+            assert_eq!(ls.points().len(), 2);
+            let last = ls.points().last().unwrap();
+            assert_eq!(last.get::<0>(), 3.0);
+            assert_eq!(last.get::<1>(), 1.0);
+        }
     }
 
     #[test]
@@ -447,11 +445,10 @@ mod tests {
         b.extend_from_slice(&F2);
         let g = from_wkb(&b).unwrap();
         assert_eq!(g.kind(), DynKind::Polygon);
-        let DynGeometry::Polygon(pg) = g else {
-            unreachable!()
-        };
-        assert_eq!(pg.exterior().points().len(), 3);
-        assert_eq!(pg.interiors().count(), 0);
+        if let DynGeometry::Polygon(pg) = g {
+            assert_eq!(pg.exterior().points().len(), 3);
+            assert_eq!(pg.interiors().count(), 0);
+        }
     }
 
     #[test]
@@ -564,11 +561,10 @@ mod tests {
         b.extend_from_slice(&le_point_record());
         let g = from_wkb(&b).unwrap();
         assert_eq!(g.kind(), DynKind::MultiPoint);
-        let DynGeometry::MultiPoint(mp) = g else {
-            unreachable!()
-        };
-        assert_eq!(mp.0.len(), 2);
-        assert_eq!(mp.0[0].get::<0>(), 1.0);
+        if let DynGeometry::MultiPoint(mp) = g {
+            assert_eq!(mp.0.len(), 2);
+            assert_eq!(mp.0[0].get::<0>(), 1.0);
+        }
     }
 
     /// A valid `MultiLineString` of one empty member parses (the happy
@@ -579,10 +575,9 @@ mod tests {
         b.extend_from_slice(&le_empty_linestring_record());
         let g = from_wkb(&b).unwrap();
         assert_eq!(g.kind(), DynKind::MultiLineString);
-        let DynGeometry::MultiLineString(mls) = g else {
-            unreachable!()
-        };
-        assert_eq!(mls.0.len(), 1);
+        if let DynGeometry::MultiLineString(mls) = g {
+            assert_eq!(mls.0.len(), 1);
+        }
     }
 
     /// A valid `MultiPolygon` of one empty member parses (the happy
@@ -593,10 +588,9 @@ mod tests {
         b.extend_from_slice(&le_empty_polygon_record());
         let g = from_wkb(&b).unwrap();
         assert_eq!(g.kind(), DynKind::MultiPolygon);
-        let DynGeometry::MultiPolygon(mpg) = g else {
-            unreachable!()
-        };
-        assert_eq!(mpg.0.len(), 1);
+        if let DynGeometry::MultiPolygon(mpg) = g {
+            assert_eq!(mpg.0.len(), 1);
+        }
     }
 
     /// A `GeometryCollection` mixing a point and a line string parses,
@@ -608,12 +602,11 @@ mod tests {
         b.extend_from_slice(&le_empty_linestring_record());
         let g = from_wkb(&b).unwrap();
         assert_eq!(g.kind(), DynKind::GeometryCollection);
-        let DynGeometry::GeometryCollection(items) = g else {
-            unreachable!()
-        };
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].kind(), DynKind::Point);
-        assert_eq!(items[1].kind(), DynKind::LineString);
+        if let DynGeometry::GeometryCollection(items) = g {
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0].kind(), DynKind::Point);
+            assert_eq!(items[1].kind(), DynKind::LineString);
+        }
     }
 
     /// A `MultiLineString` whose member is a `Point` reports the mismatch

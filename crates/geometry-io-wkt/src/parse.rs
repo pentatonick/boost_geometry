@@ -614,8 +614,6 @@ mod tests {
         if let DynGeometry::Point(p) = g {
             assert_eq!(p.get::<0>(), 10.0);
             assert_eq!(p.get::<1>(), 10.0);
-        } else {
-            unreachable!();
         }
     }
 
@@ -628,8 +626,6 @@ mod tests {
             let last = ls.points().last().unwrap();
             assert_eq!(last.get::<0>(), 30.0);
             assert_eq!(last.get::<1>(), 40.0);
-        } else {
-            unreachable!();
         }
     }
 
@@ -640,8 +636,6 @@ mod tests {
         if let DynGeometry::Polygon(p) = g {
             assert_eq!(p.exterior().points().len(), 5);
             assert_eq!(p.interiors().count(), 0);
-        } else {
-            unreachable!();
         }
     }
 
@@ -649,10 +643,9 @@ mod tests {
     fn polygon_with_hole() {
         let g =
             from_wkt("POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (2 2, 2 4, 4 4, 4 2, 2 2))").unwrap();
+        assert_eq!(g.kind(), DynKind::Polygon);
         if let DynGeometry::Polygon(p) = g {
             assert_eq!(p.interiors().count(), 1);
-        } else {
-            unreachable!();
         }
     }
 
@@ -662,20 +655,17 @@ mod tests {
         assert_eq!(g.kind(), DynKind::MultiPoint);
         if let DynGeometry::MultiPoint(mp) = g {
             assert_eq!(mp.points().len(), 2);
-        } else {
-            unreachable!();
         }
     }
 
     #[test]
     fn multipoint_bare_form() {
         let g = from_wkt("MULTIPOINT (10 10, 20 20)").unwrap();
+        assert_eq!(g.kind(), DynKind::MultiPoint);
         if let DynGeometry::MultiPoint(mp) = g {
             assert_eq!(mp.points().len(), 2);
             let second = mp.points().nth(1).unwrap();
             assert_eq!(second.get::<0>(), 20.0);
-        } else {
-            unreachable!();
         }
     }
 
@@ -685,8 +675,6 @@ mod tests {
         assert_eq!(g.kind(), DynKind::MultiLineString);
         if let DynGeometry::MultiLineString(mls) = g {
             assert_eq!(mls.linestrings().len(), 2);
-        } else {
-            unreachable!();
         }
     }
 
@@ -696,8 +684,6 @@ mod tests {
         assert_eq!(g.kind(), DynKind::MultiPolygon);
         if let DynGeometry::MultiPolygon(mpg) = g {
             assert_eq!(mpg.polygons().len(), 1);
-        } else {
-            unreachable!();
         }
     }
 
@@ -709,28 +695,24 @@ mod tests {
             assert_eq!(items.len(), 2);
             assert_eq!(items[0].kind(), DynKind::Point);
             assert_eq!(items[1].kind(), DynKind::LineString);
-        } else {
-            unreachable!();
         }
     }
 
     #[test]
     fn linestring_empty() {
         let g = from_wkt("LINESTRING EMPTY").unwrap();
+        assert_eq!(g.kind(), DynKind::LineString);
         if let DynGeometry::LineString(ls) = g {
             assert_eq!(ls.points().len(), 0);
-        } else {
-            unreachable!();
         }
     }
 
     #[test]
     fn geometrycollection_empty() {
         let g = from_wkt("GEOMETRYCOLLECTION EMPTY").unwrap();
+        assert_eq!(g.kind(), DynKind::GeometryCollection);
         if let DynGeometry::GeometryCollection(items) = g {
             assert_eq!(items.len(), 0);
-        } else {
-            unreachable!();
         }
     }
 
@@ -762,11 +744,10 @@ mod tests {
     fn dimension_suffix_is_skipped() {
         // The Z ordinate is dropped; the 2D coordinates survive.
         let g = from_wkt("POINT Z (10 10 5)").unwrap();
+        assert_eq!(g.kind(), DynKind::Point);
         if let DynGeometry::Point(p) = g {
             assert_eq!(p.get::<0>(), 10.0);
             assert_eq!(p.get::<1>(), 10.0);
-        } else {
-            unreachable!();
         }
     }
 
@@ -785,11 +766,10 @@ mod tests {
     #[test]
     fn polygon_empty() {
         let g = from_wkt("POLYGON EMPTY").unwrap();
+        assert_eq!(g.kind(), DynKind::Polygon);
         if let DynGeometry::Polygon(p) = g {
             assert_eq!(p.exterior().points().len(), 0);
             assert_eq!(p.interiors().count(), 0);
-        } else {
-            unreachable!();
         }
     }
 
@@ -797,17 +777,22 @@ mod tests {
     /// EMPTY` each yield an empty container of the matching kind.
     #[test]
     fn multi_kinds_empty() {
-        match from_wkt("MULTIPOINT EMPTY").unwrap() {
-            DynGeometry::MultiPoint(mp) => assert_eq!(mp.points().len(), 0),
-            _ => unreachable!(),
+        let multipoint = from_wkt("MULTIPOINT EMPTY").unwrap();
+        assert_eq!(multipoint.kind(), DynKind::MultiPoint);
+        if let DynGeometry::MultiPoint(mp) = multipoint {
+            assert_eq!(mp.points().len(), 0);
         }
-        match from_wkt("MULTILINESTRING EMPTY").unwrap() {
-            DynGeometry::MultiLineString(mls) => assert_eq!(mls.linestrings().len(), 0),
-            _ => unreachable!(),
+
+        let multilinestring = from_wkt("MULTILINESTRING EMPTY").unwrap();
+        assert_eq!(multilinestring.kind(), DynKind::MultiLineString);
+        if let DynGeometry::MultiLineString(mls) = multilinestring {
+            assert_eq!(mls.linestrings().len(), 0);
         }
-        match from_wkt("MULTIPOLYGON EMPTY").unwrap() {
-            DynGeometry::MultiPolygon(mpg) => assert_eq!(mpg.polygons().len(), 0),
-            _ => unreachable!(),
+
+        let multipolygon = from_wkt("MULTIPOLYGON EMPTY").unwrap();
+        assert_eq!(multipolygon.kind(), DynKind::MultiPolygon);
+        if let DynGeometry::MultiPolygon(mpg) = multipolygon {
+            assert_eq!(mpg.polygons().len(), 0);
         }
     }
 
@@ -972,13 +957,13 @@ mod tests {
             ),
         ];
         for (err, want_expected, want_found) in cases {
-            match err {
-                WktError::TypeMismatch { expected, found } => {
-                    assert_eq!(expected, want_expected);
-                    assert_eq!(found, want_found);
+            assert_eq!(
+                err,
+                &WktError::TypeMismatch {
+                    expected: *want_expected,
+                    found: *want_found,
                 }
-                other => panic!("expected TypeMismatch, got {other:?}"),
-            }
+            );
         }
     }
 }

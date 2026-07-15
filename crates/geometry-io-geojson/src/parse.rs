@@ -229,19 +229,16 @@ mod tests {
         if let DynGeometry::Point(p) = g {
             assert_eq!(p.get::<0>(), 100.0);
             assert_eq!(p.get::<1>(), 0.0);
-        } else {
-            unreachable!();
         }
     }
 
     #[test]
     fn point_altitude_ordinate_is_ignored() {
         let g = from_geojson(r#"{"type":"Point","coordinates":[100.0,0.0,500.0]}"#).unwrap();
+        assert_eq!(g.kind(), DynKind::Point);
         if let DynGeometry::Point(p) = g {
             assert_eq!(p.get::<0>(), 100.0);
             assert_eq!(p.get::<1>(), 0.0);
-        } else {
-            unreachable!();
         }
     }
 
@@ -255,8 +252,6 @@ mod tests {
             let last = ls.points().last().unwrap();
             assert_eq!(last.get::<0>(), 101.0);
             assert_eq!(last.get::<1>(), 1.0);
-        } else {
-            unreachable!();
         }
     }
 
@@ -274,8 +269,6 @@ mod tests {
         if let DynGeometry::Polygon(p) = g {
             assert_eq!(p.exterior().points().len(), 5);
             assert_eq!(p.interiors().count(), 1);
-        } else {
-            unreachable!();
         }
     }
 
@@ -299,8 +292,6 @@ mod tests {
         assert_eq!(g.kind(), DynKind::MultiPolygon);
         if let DynGeometry::MultiPolygon(mpg) = g {
             assert_eq!(mpg.polygons().count(), 2);
-        } else {
-            unreachable!();
         }
     }
 
@@ -319,8 +310,6 @@ mod tests {
             assert_eq!(items.len(), 2);
             assert_eq!(items[0].kind(), DynKind::Point);
             assert_eq!(items[1].kind(), DynKind::LineString);
-        } else {
-            unreachable!();
         }
     }
 

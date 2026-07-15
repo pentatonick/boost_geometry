@@ -692,9 +692,9 @@ mod tests {
     //! `geometry/test/algorithms/intersects/intersects.cpp:38-79`.
     //! Each test cites the C++ line it mirrors.
 
-    use super::{CartesianIntersects, IntersectsStrategy, Reversed};
+    use super::{CartesianIntersects, IntersectsStrategy, Reversed, linestring_crosses_ring};
     use geometry_cs::Cartesian;
-    use geometry_model::{Point2D, Polygon, Segment, linestring, polygon};
+    use geometry_model::{Point2D, Polygon, Ring, Segment, linestring, polygon};
 
     type P = Point2D<f64, Cartesian>;
 
@@ -771,6 +771,23 @@ mod tests {
             (0.0, 0.0)
         ]];
         assert!(!CartesianIntersects.intersects(&ls, &p));
+    }
+
+    /// The public dispatcher rejects empty inputs before reaching the
+    /// linestring/ring edge helper, so guard its private empty-iterator
+    /// contract directly.
+    #[test]
+    fn empty_linestring_has_no_ring_crossing() {
+        let ls = Linestring::<P>::new();
+        let ring: Ring<P> = Ring::from_vec(vec![
+            pt(0.0, 0.0),
+            pt(0.0, 1.0),
+            pt(1.0, 1.0),
+            pt(1.0, 0.0),
+            pt(0.0, 0.0),
+        ]);
+
+        assert!(!linestring_crosses_ring(&ls, &ring));
     }
 
     /// `Reversed<S>` swaps the arguments transparently.

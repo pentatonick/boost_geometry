@@ -46,11 +46,8 @@ impl Predicate {
     #[must_use]
     #[inline]
     pub fn matches(&self, value: &Bounds) -> bool {
-        if let Predicate::Intersects(query) = self {
-            return query.intersects(value);
-        }
         match self {
-            Predicate::Intersects(_) => unreachable!("intersects returned above"),
+            Predicate::Intersects(q) => q.intersects(value),
             Predicate::Within(q) => value.within(q),
             Predicate::Contains(q) => q.within(value),
             Predicate::CoveredBy(q) => value.covered_by(q),
@@ -66,11 +63,8 @@ impl Predicate {
     #[must_use]
     #[inline]
     pub fn could_match(&self, node: &Bounds) -> bool {
-        if let Predicate::Intersects(query) = self {
-            return query.intersects(node);
-        }
         match self {
-            Predicate::Intersects(_) => unreachable!("intersects returned above"),
+            Predicate::Intersects(q) => q.intersects(node),
             Predicate::Within(q) | Predicate::CoveredBy(q) | Predicate::Overlaps(q) => {
                 q.intersects(node)
             }
@@ -93,11 +87,8 @@ impl Predicate {
     #[must_use]
     #[inline]
     pub fn covers_all(&self, node: &Bounds) -> bool {
-        if let Predicate::Intersects(query) = self {
-            return query.contains(node);
-        }
         match self {
-            Predicate::Intersects(_) => unreachable!("intersects returned above"),
+            Predicate::Intersects(q) => q.contains(node),
             Predicate::CoveredBy(q) => q.contains(node),
             Predicate::Disjoint(q) => q.disjoint(node),
             Predicate::Within(_)
