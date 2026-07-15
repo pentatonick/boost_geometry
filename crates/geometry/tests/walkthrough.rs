@@ -57,6 +57,7 @@ fn geographic_amsterdam_paris_andoyer_vs_vincenty() {
 fn derive_point_macro() {
     #[derive(Default, DerivePoint)]
     #[geometry(cs = "Cartesian", scalar = "f64")]
+    #[repr(C)]
     struct MyXy {
         x: f64,
         y: f64,

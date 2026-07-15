@@ -123,6 +123,82 @@ fn spherical_and_geographic_vertices_match_boost() {
     assert!((geographic_lon * R2D - 66.255_942_73).abs() < 2e-7);
 }
 
+/// Mirrored and wrapped rows from
+/// `test/formulas/vertex_longitude_cases.hpp:39-47,173-179` exercise the
+/// southern reduced-latitude and antimeridian correction paths. An
+/// equator-crossing segment covers Boost's opposite-hemisphere adjustment.
+#[test]
+fn geographic_vertex_longitude_covers_southern_wrapped_and_crossing_cases() {
+    let spheroid = Spheroid::WGS84;
+
+    let southern_start = (1.0 * D2R, -1.0 * D2R);
+    let southern_end = (100.0 * D2R, -2.0 * D2R);
+    let southern_inverse = KarneyInverse::WGS84.apply(
+        southern_start.0,
+        southern_start.1,
+        southern_end.0,
+        southern_end.1,
+    );
+    let southern_latitude =
+        -geographic_vertex_latitude(southern_start.1, southern_inverse.azimuth, spheroid);
+    let southern_longitude = geographic_vertex_longitude(
+        southern_start.0,
+        southern_start.1,
+        southern_end.0,
+        southern_end.1,
+        southern_latitude,
+        southern_inverse.azimuth,
+        spheroid,
+    );
+    let southern_degrees = southern_longitude * R2D;
+    assert!(
+        (southern_degrees - 66.255_942_73).abs() < 3e-7,
+        "expected 66.25594273 degrees; observed {southern_degrees}"
+    );
+
+    let wrapped_start = (0.0, 1.0 * D2R);
+    let wrapped_end = (270.0 * D2R, 1.0 * D2R);
+    let wrapped_inverse = KarneyInverse::WGS84.apply(
+        wrapped_start.0,
+        wrapped_start.1,
+        wrapped_end.0,
+        wrapped_end.1,
+    );
+    let wrapped_latitude =
+        geographic_vertex_latitude(wrapped_start.1, wrapped_inverse.azimuth, spheroid);
+    let wrapped_longitude = geographic_vertex_longitude(
+        wrapped_start.0,
+        wrapped_start.1,
+        wrapped_end.0,
+        wrapped_end.1,
+        wrapped_latitude,
+        wrapped_inverse.azimuth,
+        spheroid,
+    );
+    assert!((wrapped_longitude * R2D + 45.0).abs() < 2e-7);
+
+    let crossing_start = (0.0, -1.0 * D2R);
+    let crossing_end = (100.0 * D2R, 2.0 * D2R);
+    let crossing_inverse = KarneyInverse::WGS84.apply(
+        crossing_start.0,
+        crossing_start.1,
+        crossing_end.0,
+        crossing_end.1,
+    );
+    let crossing_latitude =
+        geographic_vertex_latitude(crossing_start.1, crossing_inverse.azimuth, spheroid);
+    let crossing_longitude = geographic_vertex_longitude(
+        crossing_start.0,
+        crossing_start.1,
+        crossing_end.0,
+        crossing_end.1,
+        crossing_latitude,
+        crossing_inverse.azimuth,
+        spheroid,
+    );
+    assert!(crossing_longitude.is_finite());
+}
+
 /// Endpoint, meridian, and polar shortcuts from
 /// `vertex_longitude_cases.hpp:207-243` are part of the public formula
 /// contract and avoid unstable longitude arithmetic at singularities.

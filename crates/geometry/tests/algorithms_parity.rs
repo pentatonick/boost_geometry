@@ -21,7 +21,7 @@ use boost_geometry::prelude::{
     Cartesian, CoordinatePosition, Degree, Geographic, Spherical, area, area_with, assign_values,
     azimuth_with, centroid, centroid_with, chaikin_smoothing, closest_points, closest_points_with,
     comparable_distance_with, concave_hull, concave_hull_with, coordinate_position, correct,
-    correct_closure, densify, destination, distance_with, equals, expand, expand_with,
+    correct_closure, densify, destination, distance_with, envelope, equals, expand, expand_with,
     for_each_segment, intersects, intersects_reversed, is_simple, k_nearest_concave_hull,
     line_interpolate, line_locate_point, linestring_segmentize, linestring_segmentize_with,
     map_coords, map_coords_in_place, minimum_rotated_rect, monotone_subdivision, perimeter,
@@ -32,11 +32,12 @@ use boost_geometry::prelude::{
 use boost_geometry::strategy::{
     CartesianAzimuth, CartesianBoxCentroid, CartesianPerimeter, ChamberlainDuquetteArea,
     CrossTrack, EnvelopePoint, Haversine, HaversineClosestPoints, PointToSegment, Pythagoras,
-    Rhumb, Rotate, Scale, Skew, SphericalPerimeter, Translate, VisvalingamWhyatt,
+    Rhumb, Rotate, Scale, Skew, SphericalArea, SphericalPerimeter, Translate, VisvalingamWhyatt,
     VisvalingamWhyattPreserve,
 };
 use boost_geometry::trait_::{
-    IndexedAccess as _, Point as _, PointMut as _, Polygon as _, Ring as _,
+    IndexedAccess as _, Point as _, PointMut as _, Polygon as _, Ring as _, fold_dims, segment_end,
+    segment_start,
 };
 
 type P2 = Point2D<f64, Cartesian>;
@@ -109,6 +110,32 @@ fn chamberlain_duquette_covers_topology_and_orientation() {
         SphericalPoint::new(1.0, 1.0),
     ]));
     assert_eq!(area_with(&degenerate, ChamberlainDuquetteArea::UNIT), 0.0);
+}
+
+/// The native Boost spherical-excess strategy honors the ring's declared
+/// orientation and treats an empty open ring as zero area.
+#[test]
+fn spherical_area_covers_counter_clockwise_and_empty_open_rings() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let clockwise: Ring<SphericalPoint> = Ring::from_vec(vec![
+        SphericalPoint::new(0.0, 0.0),
+        SphericalPoint::new(0.0, 1.0),
+        SphericalPoint::new(1.0, 1.0),
+        SphericalPoint::new(1.0, 0.0),
+        SphericalPoint::new(0.0, 0.0),
+    ]);
+    let mut reversed = clockwise.0.clone();
+    reversed.reverse();
+    let counter_clockwise: Ring<SphericalPoint, false, true> = Ring::from_vec(reversed);
+    assert!(
+        (area_with(&clockwise, SphericalArea::UNIT)
+            - area_with(&counter_clockwise, SphericalArea::UNIT))
+        .abs()
+            < 1e-12
+    );
+
+    let empty_open: Ring<SphericalPoint, true, false> = Ring::from_vec(Vec::new());
+    assert_eq!(area_with(&empty_open, SphericalArea::UNIT), 0.0);
 }
 
 /// Rhumb-line distance, bearing, destination, and linestring length are all
@@ -370,6 +397,25 @@ fn earcut_handles_degenerate_and_redundant_vertices() {
     assert!(triangles.iter().all(|triangle| area(triangle).abs() > 0.0));
     let triangle_area: f64 = triangles.iter().map(|triangle| area(triangle).abs()).sum();
     assert!((triangle_area - area(&polygon).abs()).abs() < 1e-12);
+}
+
+/// Boost has no supported triangulation entry. This self-intersecting
+/// exterior exercises the native earcut contract recorded in
+/// `specs/geos_parity/triangulation.md`: a clipping-stalled input is rejected
+/// atomically instead of returning a partial triangulation.
+#[test]
+fn earcut_rejects_a_clipping_stalled_exterior_atomically() {
+    let stalled: Polygon<P2> = Polygon::new(Ring::from_vec(vec![
+        P2::new(0.0, 3.0),
+        P2::new(3.0, 1.0),
+        P2::new(2.0, -2.0),
+        P2::new(-3.0, 1.0),
+        P2::new(-2.0, -2.0),
+        P2::new(0.0, -3.0),
+        P2::new(0.0, 3.0),
+    ]));
+
+    assert_eq!(triangulate_earcut(&stalled).len(), 0);
 }
 
 /// Multiple independently visible holes exercise the public bridge selection
@@ -753,6 +799,7 @@ fn projected_point_distance_supports_every_public_dimension() {
 /// exceeding the stable-Rust kernel ceiling must fail explicitly.
 #[test]
 fn coordinate_wise_algorithms_reach_the_fourth_ordinate() {
+    type P0 = ModelPoint<f64, 0, Cartesian>;
     type P1 = ModelPoint<f64, 1, Cartesian>;
     type P4 = ModelPoint<f64, 4, Cartesian>;
     type P5 = ModelPoint<f64, 5, Cartesian>;
@@ -760,6 +807,8 @@ fn coordinate_wise_algorithms_reach_the_fourth_ordinate() {
     let mut one = P1::default();
     assign_values(&mut one, &[7.0]);
     assert_eq!(one.get::<0>(), 7.0);
+    assert_eq!(fold_dims(0, &P0::default(), |count, _, _| count + 1), 0);
+    assert_eq!(fold_dims(0, &one, |count, _, _| count + 1), 1);
 
     let mut four = P4::default();
     assign_values(&mut four, &[1.0, 2.0, 3.0, 4.0]);
@@ -783,8 +832,28 @@ fn coordinate_wise_algorithms_reach_the_fourth_ordinate() {
     expand(&mut bounds, &four);
     assert_eq!(bounds.get_indexed::<1, 3>(), 4.0);
 
+    let line = Linestring::from_vec(vec![origin, four]);
+    let line_bounds = envelope(&line);
+    assert_eq!(line_bounds.get_indexed::<1, 3>(), 4.0);
+
+    let zero_segment = Segment::new(P0::default(), P0::default());
+    assert_eq!(
+        fold_dims(0, &segment_start(&zero_segment), |count, _, _| count + 1),
+        0
+    );
+    let one_segment = Segment::new(P1::default(), one);
+    assert_eq!(segment_end(&one_segment).get::<0>(), 7.0);
+    let four_segment = Segment::new(origin, four);
+    assert_eq!(segment_end(&four_segment).get::<3>(), 4.0);
+
     let unsupported = std::panic::catch_unwind(|| equals(&P5::default(), &P5::default()));
     assert!(unsupported.is_err());
+    let fold_unsupported =
+        std::panic::catch_unwind(|| fold_dims((), &P5::default(), |(), _, _| ()));
+    assert!(fold_unsupported.is_err());
+    let segment_unsupported =
+        std::panic::catch_unwind(|| segment_start(&Segment::new(P5::default(), P5::default())));
+    assert!(segment_unsupported.is_err());
 }
 
 /// Open rings carry an implicit closing edge in Boost's area and centroid
@@ -800,6 +869,10 @@ fn open_ring_area_and_centroid_include_the_implicit_edge() {
     ]);
     assert_eq!(ring_area(&open), 4.0);
     assert_point2_close(centroid(&open), P2::new(1.0, 1.0));
+
+    let empty_open: Ring<P2, true, false> = Ring::from_vec(Vec::new());
+    assert_eq!(ring_area(&empty_open), 0.0);
+    assert_eq!(centroid(&empty_open), P2::default());
 
     let empty = MultiPoint::<P2>::default();
     assert_eq!(centroid(&empty), P2::default());
@@ -1105,6 +1178,23 @@ fn locate_and_segmentize_preserve_a_bent_linestring() {
     assert_eq!(pieces.0[1].0, vec![P2::new(2.0, 0.0), P2::new(2.0, 2.0)]);
 }
 
+/// `geo/src/algorithm/line_locate_point.rs:223-235` supplies the repeated-point
+/// reference case. The public contract also defines the adjacent single-point
+/// boundary: both have fractional position zero regardless of the query.
+#[test]
+fn line_locate_point_handles_single_and_zero_length_linestrings() {
+    let query = P2::new(2.0, 2.0);
+    let single = Linestring::from_vec(vec![P2::new(1.0, 1.0)]);
+    assert_eq!(line_locate_point(&single, &query), Some(0.0));
+
+    let repeated = Linestring::from_vec(vec![
+        P2::new(1.0, 1.0),
+        P2::new(1.0, 1.0),
+        P2::new(1.0, 1.0),
+    ]);
+    assert_eq!(line_locate_point(&repeated, &query), Some(0.0));
+}
+
 /// Explicit segmentization follows great-circle interpolation when supplied a
 /// spherical distance strategy.
 #[test]
@@ -1138,6 +1228,17 @@ fn segmentize_handles_dimensions_and_degenerate_metrics() {
     let repeated = Linestring::from_vec(vec![P2::new(1.0, 1.0), P2::new(1.0, 1.0)]);
     let degenerate = linestring_segmentize(&repeated, 3);
     assert_eq!(degenerate.0, vec![repeated]);
+
+    let with_interior_vertex = Linestring::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(1.0, 0.0),
+        P2::new(6.0, 0.0),
+    ]);
+    let split = linestring_segmentize(&with_interior_vertex, 2);
+    assert_eq!(
+        split.0[0].0,
+        vec![P2::new(0.0, 0.0), P2::new(1.0, 0.0), P2::new(3.0, 0.0)]
+    );
 
     type SphericalPoint = Point2D<f64, Spherical<Degree>>;
     let antipodal = Linestring::from_vec(vec![
@@ -1196,12 +1297,25 @@ fn spherical_cross_track_public_edge_cases_choose_endpoints() {
         comparable_distance_with(&beyond, &segment, CrossTrack::default()),
         forward
     );
+    assert_eq!(
+        comparable_distance_with(&segment, &beyond, CrossTrack::default()),
+        reverse
+    );
     let (projected, source) =
         closest_points_with(&segment, &beyond, HaversineClosestPoints::default());
     assert_eq!(source.get::<0>(), beyond.get::<0>());
     assert_eq!(source.get::<1>(), beyond.get::<1>());
     assert_eq!(projected.get::<0>(), segment.start().get::<0>());
     assert_eq!(projected.get::<1>(), segment.start().get::<1>());
+
+    let beyond_end = SphericalPoint::new(35.0, 10.0);
+    let end_distance = distance_with(&beyond_end, &segment, CrossTrack::default());
+    let expected_end_distance = distance_with(&beyond_end, segment.end(), Haversine::EARTH);
+    assert!((end_distance - expected_end_distance).abs() < 1e-9);
+    let projected_end =
+        closest_points_with(&beyond_end, &segment, HaversineClosestPoints::default()).1;
+    assert_eq!(projected_end.get::<0>(), segment.end().get::<0>());
+    assert_eq!(projected_end.get::<1>(), segment.end().get::<1>());
 
     let equator = Segment::new(
         SphericalPoint::new(-10.0, 0.0),
@@ -1522,6 +1636,23 @@ fn intersects_handles_empty_short_and_explicitly_reversed_inputs() {
     assert!(!intersects(&empty_line, &empty_polygon));
     let crossing_line = Linestring::from_vec(vec![P2::new(-1.0, 1.0), P2::new(3.0, 1.0)]);
     assert!(intersects_reversed(&square, &crossing_line));
+
+    let disjoint_line = Linestring::from_vec(vec![P2::new(3.0, 3.0), P2::new(4.0, 4.0)]);
+    assert!(!intersects(&disjoint_line, &empty_polygon));
+    assert!(!intersects(&disjoint_line, &square));
+
+    let open_triangle: Polygon<P2, true, false> = Polygon::new(Ring::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(2.0, 0.0),
+        P2::new(2.0, 2.0),
+    ]));
+    let crosses_implicit_edge = Linestring::from_vec(vec![P2::new(0.5, 1.6), P2::new(1.8, 1.6)]);
+    assert!(intersects(&crosses_implicit_edge, &open_triangle));
+
+    let mut hole = square_ring(10.0, 10.0, 1.0);
+    hole.0.reverse();
+    let disjoint_with_hole = Polygon::with_inners(square_ring(9.0, 9.0, 3.0), vec![hole]);
+    assert!(!intersects(&square, &disjoint_with_hole));
 }
 
 /// Segment endpoint order must not affect intersection, and point equality

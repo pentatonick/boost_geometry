@@ -26,6 +26,7 @@ fn buffered_area(result: &MultiPolygon<Polygon<P>>) -> f64 {
 #[test]
 fn default_buffer_settings_match_the_public_round_constructor() {
     assert_eq!(BufferSettings::default(), BufferSettings::round(1.0, 36));
+    assert_eq!(SphericalBuffer::default(), SphericalBuffer::UNIT);
 }
 
 /// `test/algorithms/buffer/buffer_point.cpp:25-29` and
