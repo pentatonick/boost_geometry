@@ -160,9 +160,8 @@ where
         // clockwise output ring, then repeat the first point to close.
         let mut hull = monotone_chain(pts);
         hull.reverse();
-        if let Some(&first) = hull.first() {
-            hull.push(first);
-        }
+        let first = hull[0];
+        hull.push(first);
         Ring::from_vec(hull)
     }
 }

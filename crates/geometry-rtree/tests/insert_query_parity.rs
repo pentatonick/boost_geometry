@@ -9,7 +9,7 @@
 
 use geometry_cs::Cartesian;
 use geometry_model::Point2D;
-use geometry_rtree::{Bounds, Linear, Predicate, Quadratic, Rtree};
+use geometry_rtree::{Bounds, Linear, Predicate, Quadratic, QueryPredicate, Rtree, satisfies};
 use geometry_trait::Point as _;
 
 type P = Point2D<f64, Cartesian>;
@@ -118,6 +118,45 @@ fn query_result_sets_are_the_same_points() {
     brute.sort_by(|lhs, rhs| lhs.partial_cmp(rhs).unwrap());
 
     assert_eq!(hits, brute);
+}
+
+/// Logical `and`, `not`, and value-level `satisfies` predicates retain their
+/// public leaf semantics and conservative subtree contracts.
+#[test]
+fn logical_query_predicates_compose_through_the_public_api() {
+    let tree: Rtree<P> = [
+        P::new(0.0, 0.0),
+        P::new(1.0, 1.0),
+        P::new(2.0, 2.0),
+        P::new(5.0, 5.0),
+    ]
+    .into_iter()
+    .collect();
+    let window = Bounds::new([0.0, 0.0], [3.0, 3.0]);
+    let selected = tree.query_with(
+        Predicate::Intersects(window).and(satisfies(|point: &P| point.get::<0>() >= 1.0)),
+    );
+    assert_eq!(selected.len(), 2);
+
+    let outside = tree.query_with(!Predicate::Intersects(window));
+    assert_eq!(outside.len(), 1);
+    assert!((outside[0].get::<0>() - 5.0).abs() < f64::EPSILON);
+
+    let condition = satisfies(|point: &P| point.get::<1>() >= 0.0);
+    assert!(<_ as QueryPredicate<P>>::matches(
+        &condition,
+        &P::new(1.0, 1.0)
+    ));
+    assert!(<_ as QueryPredicate<P>>::could_match(&condition, &window));
+    assert!(!<_ as QueryPredicate<P>>::covers_all(&condition, &window));
+
+    let conjunction = Predicate::Intersects(window).and(Predicate::CoveredBy(window));
+    assert!(<_ as QueryPredicate<P>>::could_match(&conjunction, &window));
+    assert!(<_ as QueryPredicate<P>>::covers_all(&conjunction, &window));
+
+    let negated = !Predicate::Intersects(window);
+    assert!(!<_ as QueryPredicate<P>>::could_match(&negated, &window));
+    assert!(!<_ as QueryPredicate<P>>::covers_all(&negated, &window));
 }
 
 #[test]

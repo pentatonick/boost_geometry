@@ -281,11 +281,7 @@ mod tests {
     fn polar_north_1deg_lon_10deg_lat() {
         let d = Thomas::WGS84.distance(&deg(0.0, 90.0), &deg(1.0, 80.0));
         // Boost's BOOST_CHECK_CLOSE(_, 0.001) ≈ 0.001 % → ~11 m here.
-        assert!(
-            (d / 1000.0 - 1_116.825_795).abs() < 0.012,
-            "{} km expected ~ 1116.825795 km",
-            d / 1000.0
-        );
+        assert!((d / 1000.0 - 1_116.825_795).abs() < 0.012);
     }
 
     /// `test/strategies/thomas.cpp:110` — southern polar mirror
@@ -293,11 +289,7 @@ mod tests {
     #[test]
     fn polar_south_1deg_lon_10deg_lat() {
         let d = Thomas::WGS84.distance(&deg(0.0, -90.0), &deg(1.0, -80.0));
-        assert!(
-            (d / 1000.0 - 1_116.825_795).abs() < 0.012,
-            "{} km expected ~ 1116.825795 km",
-            d / 1000.0
-        );
+        assert!((d / 1000.0 - 1_116.825_795).abs() < 0.012);
     }
 
     /// `test/strategies/thomas.cpp:111` — zero distance on equal
@@ -317,11 +309,7 @@ mod tests {
     fn lon_4_lat_52_to_lon_3_lat_40() {
         let d = Thomas::WGS84.distance(&deg(4.0, 52.0), &deg(3.0, 40.0));
         // Boost's BOOST_CHECK_CLOSE(_, 0.001) ≈ 0.001 % → ~13 m here.
-        assert!(
-            (d / 1000.0 - 1_336.025_365).abs() < 0.014,
-            "{} km expected ~ 1336.025365 km",
-            d / 1000.0
-        );
+        assert!((d / 1000.0 - 1_336.025_365).abs() < 0.014);
     }
 
     /// Cross-check: Thomas (second-order) and Andoyer (first-order)
@@ -335,11 +323,7 @@ mod tests {
         let b = deg(3.0, 40.0);
         let t = Thomas::WGS84.distance(&a, &b);
         let an = Andoyer::WGS84.distance(&a, &b);
-        assert!(
-            (t - an).abs() < 50.0,
-            "Thomas {t} m vs Andoyer {an} m differs by {} m",
-            (t - an).abs()
-        );
+        assert!((t - an).abs() < 50.0);
     }
 
     /// Thomas's default constructor selects WGS84 — mirrors Boost's

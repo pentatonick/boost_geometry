@@ -646,10 +646,11 @@ impl AngularBufferProjection for SphericalBuffer {
         if !self.radius.is_finite() || self.radius <= 0.0 {
             return Err(OverlayError::Unsupported);
         }
-        let east_scale = self.radius * cos(latitude);
-        if east_scale.abs() <= f64::EPSILON {
+        let longitude_scale = cos(latitude);
+        if longitude_scale.abs() <= f64::EPSILON {
             return Err(OverlayError::Unsupported);
         }
+        let east_scale = self.radius * longitude_scale;
         Ok(LocalProjection {
             longitude,
             latitude,
@@ -676,10 +677,11 @@ impl AngularBufferProjection for GeographicBuffer {
         let prime_vertical = spheroid.equatorial_radius / denominator;
         let meridional = spheroid.equatorial_radius * (1.0 - eccentricity_squared)
             / (denominator * denominator * denominator);
-        let east_scale = prime_vertical * cos(latitude);
-        if east_scale.abs() <= f64::EPSILON {
+        let longitude_scale = cos(latitude);
+        if longitude_scale.abs() <= f64::EPSILON {
             return Err(OverlayError::Unsupported);
         }
+        let east_scale = prime_vertical * longitude_scale;
         Ok(LocalProjection {
             longitude,
             latitude,
@@ -1382,9 +1384,7 @@ where
 
     let left_path = offset_path(&vertices, left, true, join);
     let right_path = offset_path(&vertices, right, false, join);
-    if left_path.is_empty() || right_path.is_empty() {
-        return Err(OverlayError::Unsupported);
-    }
+    debug_assert!(!left_path.is_empty() && !right_path.is_empty());
     let mut boundary = left_path;
     match end {
         BufferEndStrategy::Flat => {}
@@ -1414,9 +1414,8 @@ where
             true,
         );
     }
-    if let Some(first) = boundary.first().copied() {
-        boundary.push(first);
-    }
+    let first = boundary[0];
+    boundary.push(first);
     Ok(Polygon::new(Ring::from_vec(
         boundary
             .into_iter()

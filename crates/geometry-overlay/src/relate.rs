@@ -138,28 +138,23 @@ impl De9im {
     /// nine valid ASCII mask characters.
     pub fn matches(&self, mask: &str) -> Result<bool, RelateError> {
         let bytes = mask.as_bytes();
-        if bytes.len() != 9
-            || !bytes
-                .iter()
-                .all(|byte| matches!(byte, b'*' | b'T' | b'F' | b'0' | b'1' | b'2'))
-        {
+        if bytes.len() != 9 {
             return Err(RelateError::InvalidMask);
         }
 
-        Ok(self
-            .m
-            .iter()
-            .flatten()
-            .zip(bytes)
-            .all(|(dimension, expected)| match expected {
+        let mut result = true;
+        for (dimension, expected) in self.m.iter().flatten().zip(bytes) {
+            result &= match expected {
                 b'*' => true,
                 b'T' => dimension.is_set(),
                 b'F' => *dimension == Dimension::Empty,
                 b'0' => *dimension == Dimension::Point,
                 b'1' => *dimension == Dimension::Curve,
                 b'2' => *dimension == Dimension::Area,
-                _ => false,
-            }))
+                _ => return Err(RelateError::InvalidMask),
+            };
+        }
+        Ok(result)
     }
 }
 
@@ -845,6 +840,14 @@ where
     P::Scalar: Into<f64>,
 {
     let mut matrix = empty_matrix();
+    let mut first_segments = Vec::new();
+    for_each_line_segment(first, |start, end| {
+        first_segments.push((xy(start), xy(end)));
+    });
+    let mut second_segments = Vec::new();
+    for_each_line_segment(second, |start, end| {
+        second_segments.push((xy(start), xy(end)));
+    });
     for point in line_boundary_points(first) {
         let location = point_location_linestring(point, second);
         matrix.m[feature::BOUNDARY][location.index()] = Dimension::Point;
@@ -854,9 +857,14 @@ where
         matrix.m[location.index()][feature::BOUNDARY] = Dimension::Point;
     }
 
-    for_each_line_segment(first, |first1, first2| {
-        for_each_line_segment(second, |second1, second2| {
-            match segment_relation(xy(first1), xy(first2), xy(second1), xy(second2)) {
+    for &first_segment in &first_segments {
+        for &second_segment in &second_segments {
+            match segment_relation(
+                first_segment.0,
+                first_segment.1,
+                second_segment.0,
+                second_segment.1,
+            ) {
                 SegmentRelation::Disjoint => {}
                 SegmentRelation::Point(point) => {
                     let first_location = xy_location_linestring(point, first);
@@ -867,22 +875,34 @@ where
                     matrix.m[feature::INTERIOR][feature::INTERIOR] = Dimension::Curve;
                 }
             }
-        });
-        for fraction in [0.25, 0.5, 0.75] {
-            let sample = interpolate(xy(first1), xy(first2), fraction);
-            if xy_location_linestring(sample, second) == Location::Exterior {
-                matrix.m[feature::INTERIOR][feature::EXTERIOR] = Dimension::Curve;
+        }
+        if !xy_equal(first_segment.0, first_segment.1) {
+            for interval in segment_parameters(first_segment, &second_segments, &[]).windows(2) {
+                debug_assert!(interval[1] - interval[0] > f64::EPSILON);
+                let sample = interpolate(
+                    first_segment.0,
+                    first_segment.1,
+                    (interval[0] + interval[1]) * 0.5,
+                );
+                let location = xy_location_linestring(sample, second);
+                matrix.m[feature::INTERIOR][location.index()] = Dimension::Curve;
             }
         }
-    });
-    for_each_line_segment(second, |second1, second2| {
-        for fraction in [0.25, 0.5, 0.75] {
-            let sample = interpolate(xy(second1), xy(second2), fraction);
-            if xy_location_linestring(sample, first) == Location::Exterior {
-                matrix.m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Curve;
+    }
+    for &second_segment in &second_segments {
+        if !xy_equal(second_segment.0, second_segment.1) {
+            for interval in segment_parameters(second_segment, &first_segments, &[]).windows(2) {
+                debug_assert!(interval[1] - interval[0] > f64::EPSILON);
+                let sample = interpolate(
+                    second_segment.0,
+                    second_segment.1,
+                    (interval[0] + interval[1]) * 0.5,
+                );
+                let location = xy_location_linestring(sample, first);
+                matrix.m[location.index()][feature::INTERIOR] = Dimension::Curve;
             }
         }
-    });
+    }
     matrix
 }
 
@@ -1297,9 +1317,8 @@ fn topology_segments(topology: &Topology) -> Vec<([f64; 2], [f64; 2])> {
     let mut segments = Vec::new();
     for line in &topology.lines {
         for points in line.windows(2) {
-            if !xy_equal(points[0], points[1]) {
-                segments.push((points[0], points[1]));
-            }
+            debug_assert!(!xy_equal(points[0], points[1]));
+            segments.push((points[0], points[1]));
         }
     }
     for polygon in &topology.polygons {
@@ -1329,11 +1348,15 @@ fn topology_location(topology: &Topology, point: [f64; 2]) -> Location {
                 on_line = true;
             }
         }
-        if let (Some(first), Some(last)) = (line.first(), line.last())
-            && !xy_equal(*first, *last)
-        {
-            endpoint_count += usize::from(xy_equal(point, *first));
-            endpoint_count += usize::from(xy_equal(point, *last));
+        let first = *line
+            .first()
+            .expect("topology lines have at least two points");
+        let last = *line
+            .last()
+            .expect("topology lines have at least two points");
+        if !xy_equal(first, last) {
+            endpoint_count += usize::from(xy_equal(point, first));
+            endpoint_count += usize::from(xy_equal(point, last));
         }
     }
     if on_line {
@@ -1376,18 +1399,19 @@ fn set_dimension(matrix: &mut De9im, row: Location, column: Location, dimension:
 fn segment_parameter(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> f64 {
     let dx = end[0] - start[0];
     let dy = end[1] - start[1];
-    if dx.abs() >= dy.abs() && dx != 0.0 {
+    if dx.abs() >= dy.abs() {
+        debug_assert_ne!(dx, 0.0);
         (point[0] - start[0]) / dx
-    } else if dy != 0.0 {
-        (point[1] - start[1]) / dy
     } else {
-        0.0
+        debug_assert_ne!(dy, 0.0);
+        (point[1] - start[1]) / dy
     }
 }
 
 fn segment_parameters(
     segment: ([f64; 2], [f64; 2]),
     all_segments: &[([f64; 2], [f64; 2])],
+    split_points: &[[f64; 2]],
 ) -> Vec<f64> {
     let mut parameters = alloc::vec![0.0, 1.0];
     for &(start, end) in all_segments {
@@ -1405,6 +1429,11 @@ fn segment_parameters(
             SegmentRelation::Disjoint => {}
         }
     }
+    for &point in split_points {
+        if point_on_segment(point, segment.0, segment.1) {
+            parameters.push(segment_parameter(point, segment.0, segment.1));
+        }
+    }
     parameters.retain(|parameter| (-f64::EPSILON..=1.0 + f64::EPSILON).contains(parameter));
     parameters.sort_by(f64::total_cmp);
     parameters.dedup_by(|first, second| (*first - *second).abs() <= f64::EPSILON);
@@ -1418,16 +1447,14 @@ fn record_segment_cells(
     segment: ([f64; 2], [f64; 2]),
     all_segments: &[([f64; 2], [f64; 2])],
 ) {
-    for interval in segment_parameters(segment, all_segments).windows(2) {
-        if interval[1] - interval[0] <= f64::EPSILON {
-            continue;
-        }
+    let parameters = segment_parameters(segment, all_segments, &second.points);
+    for interval in parameters.windows(2) {
+        debug_assert!(interval[1] - interval[0] > f64::EPSILON);
         let midpoint = interpolate(segment.0, segment.1, (interval[0] + interval[1]) * 0.5);
         let first_location = topology_location(first, midpoint);
         let second_location = topology_location(second, midpoint);
-        if first_location != Location::Exterior {
-            set_dimension(matrix, first_location, second_location, Dimension::Curve);
-        }
+        debug_assert_ne!(first_location, Location::Exterior);
+        set_dimension(matrix, first_location, second_location, Dimension::Curve);
     }
 }
 
@@ -1505,21 +1532,18 @@ fn relate_topologies(first: &Topology, second: &Topology) -> Result<De9im, Overl
         record_segment_cells(&mut matrix, first, second, segment, &all_segments);
     }
     for &segment in &second_segments {
-        for interval in segment_parameters(segment, &all_segments).windows(2) {
-            if interval[1] - interval[0] <= f64::EPSILON {
-                continue;
-            }
+        for interval in segment_parameters(segment, &all_segments, &first.points).windows(2) {
+            debug_assert!(interval[1] - interval[0] > f64::EPSILON);
             let midpoint = interpolate(segment.0, segment.1, (interval[0] + interval[1]) * 0.5);
             let first_location = topology_location(first, midpoint);
             let second_location = topology_location(second, midpoint);
-            if second_location != Location::Exterior {
-                set_dimension(
-                    &mut matrix,
-                    first_location,
-                    second_location,
-                    Dimension::Curve,
-                );
-            }
+            debug_assert_ne!(second_location, Location::Exterior);
+            set_dimension(
+                &mut matrix,
+                first_location,
+                second_location,
+                Dimension::Curve,
+            );
         }
     }
 
@@ -1552,14 +1576,15 @@ fn relate_topologies(first: &Topology, second: &Topology) -> Result<De9im, Overl
     for point in candidates {
         let first_location = topology_location(first, point);
         let second_location = topology_location(second, point);
-        if first_location != Location::Exterior || second_location != Location::Exterior {
-            set_dimension(
-                &mut matrix,
-                first_location,
-                second_location,
-                Dimension::Point,
-            );
-        }
+        debug_assert!(
+            first_location != Location::Exterior || second_location != Location::Exterior
+        );
+        set_dimension(
+            &mut matrix,
+            first_location,
+            second_location,
+            Dimension::Point,
+        );
     }
 
     Ok(matrix)
@@ -1717,6 +1742,32 @@ where
     relate(g1, g2)?.matches(mask)
 }
 
+/// `contains_properly`: the second geometry lies strictly inside the first.
+///
+/// Evaluates the OGC DE-9IM mask `T**FF*FF*`: the interiors intersect, and
+/// neither the interior nor boundary of the second geometry intersects the
+/// boundary or exterior of the first.
+///
+/// # Errors
+///
+/// Propagates [`OverlayError::Unsupported`] from [`relate`].
+#[inline]
+#[must_use = "contains_properly can fail and its predicate result should be used"]
+pub fn contains_properly<G1, G2>(g1: &G1, g2: &G2) -> Result<bool, OverlayError>
+where
+    G1: Geometry,
+    G2: Geometry,
+    G1::Kind: RelatePairStrategy<G2::Kind>,
+    PairStrategy<G1, G2>: RelateStrategy<G1, G2> + Default,
+{
+    let matrix = relate(g1, g2)?;
+    Ok(matrix.interior_interior().is_set()
+        && !matrix.m[feature::BOUNDARY][feature::INTERIOR].is_set()
+        && !matrix.m[feature::BOUNDARY][feature::BOUNDARY].is_set()
+        && !matrix.m[feature::EXTERIOR][feature::INTERIOR].is_set()
+        && !matrix.m[feature::EXTERIOR][feature::BOUNDARY].is_set())
+}
+
 /// `touches`: the boundaries meet but the interiors do not.
 ///
 /// Mirrors `boost::geometry::touches` (`algorithms/touches.hpp`) for the
@@ -1802,7 +1853,7 @@ mod tests {
     //! case families in `test/algorithms/relate/` and the
     //! `touches` / `overlaps` test files.
 
-    use super::{Dimension, crosses, overlaps, relate, touches};
+    use super::{Dimension, contains_properly, crosses, overlaps, relate, touches};
     use geometry_cs::Cartesian;
     use geometry_model::{Point2D, Polygon, polygon};
 
@@ -1820,6 +1871,13 @@ mod tests {
         assert!(overlaps(&a, &b).unwrap());
         assert!(!touches(&a, &b).unwrap());
         assert!(!crosses(&a, &b).unwrap());
+    }
+
+    #[test]
+    fn proper_containment_excludes_boundary_contact() {
+        let container = square(0.0, 0.0, 5.0);
+        assert!(contains_properly(&container, &square(1.0, 1.0, 1.0)).unwrap());
+        assert!(!contains_properly(&container, &square(0.0, 1.0, 1.0)).unwrap());
     }
 
     #[test]

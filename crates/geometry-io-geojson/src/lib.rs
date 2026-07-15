@@ -103,5 +103,8 @@ mod parse;
 mod write;
 
 pub use json::GeoJsonError;
+// feature-group: I/O — GeoJSON
+// feature-desc: Parse and write GeoJSON (RFC 7946)
 pub use parse::from_geojson;
+// feature-group: I/O — GeoJSON
 pub use write::{WriteGeoJson, to_geojson, to_geojson_polygon};

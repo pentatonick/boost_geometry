@@ -197,11 +197,10 @@ where
         acc(a, b);
     }
     if matches!(r.closure(), geometry_trait::Closure::Open) {
-        let mut first_it = r.points();
-        if let Some(first) = first_it.next() {
-            if let Some(last) = r.points().last() {
-                acc(last, first);
-            }
+        let mut points = r.points();
+        if let Some(first) = points.next() {
+            let last = points.last().unwrap_or(first);
+            acc(last, first);
         }
     }
 

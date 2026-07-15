@@ -148,15 +148,15 @@ mod tests {
     /// variants render through `Display`.
     #[test]
     fn error_variants_display() {
-        let Err(wkt_err) = Crs::from_wkt("NOT WKT AT ALL") else {
-            panic!("malformed WKT accepted");
-        };
+        let wkt_err = Crs::from_wkt("NOT WKT AT ALL")
+            .err()
+            .expect("malformed WKT is rejected");
         let msg = alloc::format!("{wkt_err}");
         assert!(msg.starts_with("invalid WKT:"), "got: {msg}");
 
-        let Err(proj_err) = Crs::from_proj_string("+proj=definitely_not_a_projection") else {
-            panic!("bad proj string accepted");
-        };
+        let proj_err = Crs::from_proj_string("+proj=definitely_not_a_projection")
+            .err()
+            .expect("bad projection string is rejected");
         let msg = alloc::format!("{proj_err}");
         assert!(msg.starts_with("invalid CRS definition:"), "got: {msg}");
     }

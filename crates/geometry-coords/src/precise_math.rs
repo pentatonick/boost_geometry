@@ -275,10 +275,9 @@ impl Expansion {
             result.terms[result.length] = tail;
             result.length += 1;
         }
-        if head != 0.0 || result.length == 0 {
-            result.terms[result.length] = head;
-            result.length += 1;
-        }
+        debug_assert!(head != 0.0 || result.length == 0);
+        result.terms[result.length] = head;
+        result.length += 1;
         result
     }
 

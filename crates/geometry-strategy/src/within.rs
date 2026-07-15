@@ -275,19 +275,24 @@ where
         return InOut::Exterior;
     };
     let first = prev;
+    let mut has_segment = false;
     for curr in it {
+        has_segment = true;
         match apply_segment(p, prev, curr) {
             Step::Touches => return InOut::Boundary,
             Step::Count(c) => count += c,
         }
         prev = curr;
     }
-    // Open ring: close the loop explicitly. For a closed ring `prev`
-    // already equals `first`, so the kernel below returns `count = 0`
-    // (eq1 && eq2 with equal y-spans → no touch, no contribution).
-    match apply_segment(p, prev, first) {
-        Step::Touches => return InOut::Boundary,
-        Step::Count(c) => count += c,
+    // Close an open coordinate sequence explicitly. A repeated closing
+    // vertex already contributed through the preceding real edge.
+    let repeats_first =
+        has_segment && prev.get::<0>() == first.get::<0>() && prev.get::<1>() == first.get::<1>();
+    if !repeats_first {
+        match apply_segment(p, prev, first) {
+            Step::Touches => return InOut::Boundary,
+            Step::Count(c) => count += c,
+        }
     }
     if count == 0 {
         InOut::Exterior
@@ -340,57 +345,60 @@ where
         return Step::Count(0);
     }
 
-    // calculate_count: lines 186-203.
-    let count = if eq1 {
-        if s2x > px { 1 } else { -1 }
-    } else if eq2 {
-        if s1x > px { -1 } else { 1 }
-    } else if s1x < px && s2x > px {
+    // An endpoint on the ray contributes a half count only when it is
+    // vertically below the query. This is the direct form of Boost's
+    // `side_equal * count > 0` reduction.
+    if eq1 {
+        if py == s1y {
+            return Step::Touches;
+        }
+        return if py < s1y {
+            Step::Count(0)
+        } else if s2x > px {
+            Step::Count(1)
+        } else {
+            Step::Count(-1)
+        };
+    }
+    if eq2 {
+        if py == s2y {
+            return Step::Touches;
+        }
+        return if py < s2y {
+            Step::Count(0)
+        } else if s1x > px {
+            Step::Count(-1)
+        } else {
+            Step::Count(1)
+        };
+    }
+
+    let count = if s1x < px && s2x > px {
         2
     } else if s2x < px && s1x > px {
         -2
     } else {
-        0
-    };
-
-    if count == 0 {
         return Step::Count(0);
-    }
-
-    // side: for ±1, side_equal; for ±2, cartesian side cross product.
-    // Mirrors lines 100-110 of point_in_poly_winding.hpp.
-    let side: i32 = if count == 1 || count == -1 {
-        let se = if eq1 { s1 } else { s2 };
-        let sey = se.get::<1>();
-        if py == sey {
-            0
-        } else if py < sey {
-            -count
-        } else {
-            count
-        }
-    } else {
-        // Cartesian side: sign of (s2 - s1) × (p - s1).
-        // Mirrors `side_by_triangle::side_value` at
-        // strategy/cartesian/side_by_triangle.hpp:178-200.
-        let cross = (s2x - s1x) * (py - s1y) - (s2y - s1y) * (px - s1x);
-        if cross > P::Scalar::ZERO {
-            1
-        } else if cross < P::Scalar::ZERO {
-            -1
-        } else {
-            0
-        }
     };
 
-    if side == 0 {
-        return Step::Touches;
-    }
-
-    if side * count > 0 {
-        Step::Count(count)
+    // Cartesian side: sign of (s2 - s1) × (p - s1). A zero side is a
+    // boundary touch; otherwise it contributes only when its sign agrees
+    // with the crossing direction.
+    let cross = (s2x - s1x) * (py - s1y) - (s2y - s1y) * (px - s1x);
+    if cross > P::Scalar::ZERO {
+        if count > 0 {
+            Step::Count(count)
+        } else {
+            Step::Count(0)
+        }
+    } else if cross < P::Scalar::ZERO {
+        if count < 0 {
+            Step::Count(count)
+        } else {
+            Step::Count(0)
+        }
     } else {
-        Step::Count(0)
+        Step::Touches
     }
 }
 
@@ -400,14 +408,106 @@ mod tests {
     //! (the Cartesian section). Each test cites the C++ line(s) it
     //! mirrors.
 
-    use super::{WithinBox, WithinPoly, WithinRing, WithinStrategy};
+    use super::{Step, WithinBox, WithinPoly, WithinRing, WithinStrategy, apply_segment};
     use geometry_cs::Cartesian;
     use geometry_model::{Box, Point2D, Polygon, Ring, polygon};
+    use geometry_trait::Point as _;
 
     type P = Point2D<f64, Cartesian>;
 
     fn pt(x: f64, y: f64) -> P {
         Point2D::new(x, y)
+    }
+
+    #[allow(clippy::float_cmp)]
+    fn reference_step(p: &P, s1: &P, s2: &P) -> i32 {
+        let px = p.get::<0>();
+        let py = p.get::<1>();
+        let s1x = s1.get::<0>();
+        let s2x = s2.get::<0>();
+        let s1y = s1.get::<1>();
+        let s2y = s2.get::<1>();
+
+        let eq1 = s1x == px;
+        let eq2 = s2x == px;
+        if eq1 && eq2 {
+            let (lo, hi) = if s1y <= s2y { (s1y, s2y) } else { (s2y, s1y) };
+            return if lo <= py && py <= hi { i32::MIN } else { 0 };
+        }
+
+        let count = if eq1 {
+            if s2x > px { 1 } else { -1 }
+        } else if eq2 {
+            if s1x > px { -1 } else { 1 }
+        } else if s1x < px && s2x > px {
+            2
+        } else if s2x < px && s1x > px {
+            -2
+        } else {
+            0
+        };
+        if count == 0 {
+            return 0;
+        }
+
+        let side = if count == 1 || count == -1 {
+            let sey = if eq1 { s1y } else { s2y };
+            if py == sey {
+                0
+            } else if py < sey {
+                -count
+            } else {
+                count
+            }
+        } else {
+            let cross = (s2x - s1x) * (py - s1y) - (s2y - s1y) * (px - s1x);
+            if cross > 0.0 {
+                1
+            } else if cross < 0.0 {
+                -1
+            } else {
+                0
+            }
+        };
+        if side == 0 {
+            i32::MIN
+        } else if side * count > 0 {
+            count
+        } else {
+            0
+        }
+    }
+
+    fn step_code(step: Step) -> i32 {
+        match step {
+            Step::Touches => i32::MIN,
+            Step::Count(count) => count,
+        }
+    }
+
+    #[test]
+    fn segment_step_matches_the_reference_branch_matrix() {
+        let values = [-2.0, -1.0, 0.0, 1.0, 2.0];
+        for &px in &values {
+            for &py in &values {
+                for &s1x in &values {
+                    for &s1y in &values {
+                        for &s2x in &values {
+                            for &s2y in &values {
+                                let point = pt(px, py);
+                                let first = pt(s1x, s1y);
+                                let second = pt(s2x, s2y);
+                                assert_eq!(
+                                    step_code(apply_segment(&point, &first, &second)),
+                                    reference_step(&point, &first, &second),
+                                    "point=({px}, {py}), segment=({s1x}, {s1y})→({s2x}, {s2y})"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn box_polygon() -> Polygon<P> {

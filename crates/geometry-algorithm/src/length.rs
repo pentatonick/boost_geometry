@@ -236,11 +236,7 @@ mod tests {
         let got = length(&ls);
         let direct = Andoyer::WGS84.distance(&deg(4.0, 52.0), &deg(3.0, 40.0));
         assert!((got - direct).abs() < 1e-6);
-        assert!(
-            (got / 1000.0 - 1_336.039_890).abs() < 0.01,
-            "got {} km",
-            got / 1000.0
-        );
+        assert!((got / 1000.0 - 1_336.039_890).abs() < 0.01);
     }
 
     /// `length_with` with an explicit spherical strategy reaches the

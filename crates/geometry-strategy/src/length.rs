@@ -132,11 +132,10 @@ where
             // An open ring leaves the closing edge implicit — add it
             // explicitly. Mirrors the `closeable_view` wrap at
             // `algorithms/length.hpp:90`.
-            let mut it = g.points();
-            if let Some(first) = it.next() {
-                if let Some(last) = g.points().last() {
-                    total = total + Pythagoras.distance(last, first);
-                }
+            let mut points = g.points();
+            if let Some(first) = points.next() {
+                let last = points.last().unwrap_or(first);
+                total = total + Pythagoras.distance(last, first);
             }
         }
         total

@@ -38,6 +38,102 @@ pub trait TransformStrategy<P: Point> {
     fn transform(&self, src: &P) -> Self::Output;
 }
 
+/// Named constructor for 2D translation strategies.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Translate;
+
+impl Translate {
+    /// Translate by `(x, y)`.
+    #[must_use]
+    pub fn by<T: CoordinateScalar>(x: T, y: T) -> Affine2<T> {
+        Affine2::translation(x, y)
+    }
+}
+
+/// Named constructor for 2D scale strategies.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Scale;
+
+impl Scale {
+    /// Scale the two axes independently.
+    #[must_use]
+    pub fn by<T: CoordinateScalar>(x: T, y: T) -> Affine2<T> {
+        Affine2::scale(x, y)
+    }
+
+    /// Scale both axes by the same factor.
+    #[must_use]
+    pub fn uniform<T: CoordinateScalar>(factor: T) -> Affine2<T> {
+        Affine2::scale(factor, factor)
+    }
+}
+
+/// Named constructor for 2D rotation strategies.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Rotate;
+
+impl Rotate {
+    /// Rotate counter-clockwise by radians around the coordinate origin.
+    #[cfg(feature = "std")]
+    #[must_use]
+    pub fn radians(angle: f64) -> Affine2<f64> {
+        Affine2::rotation(angle)
+    }
+
+    /// Rotate counter-clockwise by degrees around the coordinate origin.
+    #[cfg(feature = "std")]
+    #[must_use]
+    pub fn degrees(angle: f64) -> Affine2<f64> {
+        Self::radians(angle.to_radians())
+    }
+
+    /// Rotate counter-clockwise by radians around `origin`.
+    #[cfg(feature = "std")]
+    #[must_use]
+    pub fn around<P>(angle: f64, origin: &P) -> Affine2<f64>
+    where
+        P: Point<Scalar = f64>,
+    {
+        let x = origin.get::<0>();
+        let y = origin.get::<1>();
+        Affine2::translation(x, y)
+            .then(Affine2::rotation(angle))
+            .then(Affine2::translation(-x, -y))
+    }
+}
+
+/// Named constructor for 2D shear/skew strategies.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Skew;
+
+impl Skew {
+    /// Apply direct x- and y-axis shear factors.
+    ///
+    /// The resulting mapping is `x' = x + x_shear*y` and
+    /// `y' = y_shear*x + y`.
+    #[must_use]
+    pub fn by(x_shear: f64, y_shear: f64) -> Affine2<f64> {
+        Affine2 {
+            m: [1.0, x_shear, 0.0, y_shear, 1.0, 0.0, 0.0, 0.0, 1.0],
+            _t: PhantomData,
+        }
+    }
+
+    /// Apply shears specified as angles in radians.
+    #[cfg(feature = "std")]
+    #[must_use]
+    pub fn radians(x_angle: f64, y_angle: f64) -> Affine2<f64> {
+        Self::by(x_angle.tan(), y_angle.tan())
+    }
+
+    /// Apply shears specified as angles in degrees.
+    #[cfg(feature = "std")]
+    #[must_use]
+    pub fn degrees(x_angle: f64, y_angle: f64) -> Affine2<f64> {
+        Self::radians(x_angle.to_radians(), y_angle.to_radians())
+    }
+}
+
 /// 3×3 affine matrix in homogeneous 2D coordinates.
 ///
 /// Mirrors `boost::geometry::strategy::transform::matrix_transformer<T, 2, 2>`
@@ -224,7 +320,7 @@ mod tests {
     //! `boost/geometry/test/algorithms/transform.cpp`: translation and
     //! scale map a point to the expected coordinates.
 
-    use super::{Affine2, TransformStrategy};
+    use super::{Affine2, Rotate, Scale, Skew, TransformStrategy, Translate};
     use geometry_cs::Cartesian;
     use geometry_model::Point2D;
     use geometry_trait::Point as _;
@@ -263,5 +359,25 @@ mod tests {
         let out = combined.transform(&P::new(1.0, 1.0));
         assert_eq!(out.get::<0>(), 3.0);
         assert_eq!(out.get::<1>(), 3.0);
+    }
+
+    #[test]
+    fn named_constructors_build_affine_strategies() {
+        assert_eq!(
+            Translate::by(2.0, 3.0).transform(&P::new(1.0, 1.0)),
+            P::new(3.0, 4.0)
+        );
+        assert_eq!(
+            Scale::uniform(2.0).transform(&P::new(1.0, 3.0)),
+            P::new(2.0, 6.0)
+        );
+        assert_eq!(
+            Skew::by(2.0, 0.0).transform(&P::new(1.0, 3.0)),
+            P::new(7.0, 3.0)
+        );
+        let rotated = Rotate::around(core::f64::consts::FRAC_PI_2, &P::new(1.0, 1.0))
+            .transform(&P::new(2.0, 1.0));
+        assert!((rotated.get::<0>() - 1.0).abs() < 1e-12);
+        assert!((rotated.get::<1>() - 2.0).abs() < 1e-12);
     }
 }

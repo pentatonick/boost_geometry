@@ -112,43 +112,47 @@ impl KarneyInverse {
             core::f64::consts::PI,
         ];
         let distance_seeds = [spherical_distance, half_meridian];
-        let mut best: Option<(f64, InverseResult)> = None;
+        let first_candidate = self.solve_seed(
+            &direct,
+            lon1,
+            lat1,
+            lon2,
+            lat2,
+            distance_seeds[0],
+            azimuth_seeds[0],
+        );
+        let first_endpoint = direct.apply(
+            lon1,
+            lat1,
+            first_candidate.distance,
+            first_candidate.azimuth,
+        );
+        let first_error = endpoint_error(first_endpoint.lon2, first_endpoint.lat2, lon2, lat2);
+        let mut best = (first_error, first_candidate);
 
-        for &azimuth_seed in &azimuth_seeds {
-            for &distance_seed in &distance_seeds {
+        for (azimuth_index, &azimuth_seed) in azimuth_seeds.iter().enumerate() {
+            let remaining_distances = if azimuth_index == 0 {
+                &distance_seeds[1..]
+            } else {
+                &distance_seeds[..]
+            };
+            for &distance_seed in remaining_distances {
                 let candidate =
                     self.solve_seed(&direct, lon1, lat1, lon2, lat2, distance_seed, azimuth_seed);
                 let endpoint = direct.apply(lon1, lat1, candidate.distance, candidate.azimuth);
                 let error = endpoint_error(endpoint.lon2, endpoint.lat2, lon2, lat2);
-                let replace = match best {
-                    None => true,
-                    Some((best_error, best_result)) => {
-                        error < best_error
-                            || (error <= self.tolerance
-                                && best_error <= self.tolerance
-                                && candidate.distance < best_result.distance)
-                    }
-                };
+                let (best_error, best_result) = best;
+                let replace = error < best_error
+                    || (error <= self.tolerance
+                        && best_error <= self.tolerance
+                        && candidate.distance < best_result.distance);
                 if replace {
-                    best = Some((error, candidate));
+                    best = (error, candidate);
                 }
             }
         }
 
-        best.map_or_else(
-            || {
-                self.solve_seed(
-                    &direct,
-                    lon1,
-                    lat1,
-                    lon2,
-                    lat2,
-                    spherical_distance,
-                    spherical_azimuth,
-                )
-            },
-            |(_, result)| result,
-        )
+        best.1
     }
 
     #[cfg(feature = "std")]

@@ -283,8 +283,14 @@ where
         }
         matches!(relation, Relation::Equal)
     } else {
-        compare_ordinate(left, right, dimension_index(dimension), relation, exact)
-            .unwrap_or(matches!(relation, Relation::Equal))
+        compare_ordinate(
+            left,
+            right,
+            usize::from(dimension.unsigned_abs()),
+            relation,
+            exact,
+        )
+        .unwrap_or(matches!(relation, Relation::Equal))
     }
 }
 
@@ -307,8 +313,14 @@ where
     validate_dimension(dimension, shared_dimensions);
 
     if dimension >= 2 {
-        return compare_ordinate(left, right, dimension_index(dimension), relation, exact)
-            .unwrap_or(matches!(relation, Relation::Equal));
+        return compare_ordinate(
+            left,
+            right,
+            usize::from(dimension.unsigned_abs()),
+            relation,
+            exact,
+        )
+        .unwrap_or(matches!(relation, Relation::Equal));
     }
 
     if dimension == 1 {
@@ -460,16 +472,9 @@ fn validate_dimension(dimension: i8, shared_dimensions: usize) {
     );
     assert!(
         dimension == ALL_DIMENSIONS
-            || (dimension >= 0 && dimension_index(dimension) < shared_dimensions),
+            || (dimension >= 0 && (dimension.unsigned_abs() as usize) < shared_dimensions),
         "comparison dimension must be present in both points"
     );
-}
-
-fn dimension_index(dimension: i8) -> usize {
-    match usize::try_from(dimension) {
-        Ok(index) => index,
-        Err(_) => unreachable!("validated comparison dimensions are non-negative"),
-    }
 }
 
 #[allow(clippy::float_cmp, reason = "exact comparison is a selectable policy")]

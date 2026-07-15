@@ -87,6 +87,21 @@ pub fn ceil<T: Float>(value: T) -> T {
     value.ceil()
 }
 
+/// Tangent of a floating-point coordinate in radians.
+pub fn tan<T: Float>(value: T) -> T {
+    value.tan()
+}
+
+/// Natural logarithm of a positive floating-point coordinate.
+pub fn ln<T: Float>(value: T) -> T {
+    value.ln()
+}
+
+/// Least non-negative remainder of `value` divided by `modulus`.
+pub fn rem_euclid<T: Float>(value: T, modulus: T) -> T {
+    value.rem_euclid(modulus)
+}
+
 /// Sealed marker for the floating-point types this crate dispatches
 /// math primitives over (`f32`, `f64`).
 ///
@@ -128,6 +143,15 @@ pub trait Float: private::Sealed + Copy {
     /// `value.ceil()` dispatched onto `std` or `libm`.
     #[must_use]
     fn ceil(self) -> Self;
+    /// `value.tan()` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn tan(self) -> Self;
+    /// `value.ln()` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn ln(self) -> Self;
+    /// `value.rem_euclid(modulus)` dispatched onto `std` or core arithmetic.
+    #[must_use]
+    fn rem_euclid(self, modulus: Self) -> Self;
 }
 
 impl Float for f32 {
@@ -218,6 +242,44 @@ impl Float for f32 {
     fn ceil(self) -> Self {
         libm::ceilf(self)
     }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn tan(self) -> Self {
+        f32::tan(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn tan(self) -> Self {
+        libm::tanf(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn ln(self) -> Self {
+        f32::ln(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn ln(self) -> Self {
+        libm::logf(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn rem_euclid(self, modulus: Self) -> Self {
+        f32::rem_euclid(self, modulus)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn rem_euclid(self, modulus: Self) -> Self {
+        let remainder = self % modulus;
+        if remainder < 0.0 {
+            remainder + libm::fabsf(modulus)
+        } else {
+            remainder
+        }
+    }
 }
 
 impl Float for f64 {
@@ -307,6 +369,44 @@ impl Float for f64 {
     #[inline]
     fn ceil(self) -> Self {
         libm::ceil(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn tan(self) -> Self {
+        f64::tan(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn tan(self) -> Self {
+        libm::tan(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn ln(self) -> Self {
+        f64::ln(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn ln(self) -> Self {
+        libm::log(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn rem_euclid(self, modulus: Self) -> Self {
+        f64::rem_euclid(self, modulus)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn rem_euclid(self, modulus: Self) -> Self {
+        let remainder = self % modulus;
+        if remainder < 0.0 {
+            remainder + libm::fabs(modulus)
+        } else {
+            remainder
+        }
     }
 }
 

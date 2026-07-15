@@ -55,6 +55,23 @@ fn box_normalization_preserves_nan_and_normalizes_the_other_longitude() {
     assert_close(lat2, 20.0);
 }
 
+/// `util/normalize_spheroidal_box_coordinates.hpp:82-93` canonicalizes both
+/// an exact negative antimeridian and a positive longitude whose modulo lands
+/// on that antimeridian to positive 180 degrees.
+#[test]
+fn negative_antimeridian_representations_are_canonicalized() {
+    for (first, second) in [(-180.0, -170.0), (540.0, 550.0)] {
+        let (mut lon1, mut lat1, mut lon2, mut lat2) = (first, -10.0, second, 20.0);
+        normalize_spheroidal_box_coordinates::<Degree, _>(
+            &mut lon1, &mut lat1, &mut lon2, &mut lat2,
+        );
+        assert_close(lon1, 180.0);
+        assert_close(lon2, 190.0);
+        assert_close(lat1, -10.0);
+        assert_close(lat2, 20.0);
+    }
+}
+
 /// `test/util/math_normalize_spheroidal.cpp:84-90` — the same normalization
 /// contract applies to integral degree coordinates without a floating cast.
 #[test]

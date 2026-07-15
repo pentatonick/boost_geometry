@@ -765,9 +765,8 @@ fn str_pack_height<T: Indexable, Params: SplitParameters>(
     for column in 0..column_count {
         let children_in_column =
             child_count / column_count + usize::from(column < child_count % column_count);
-        if children_in_column == 0 {
-            continue;
-        }
+        // `column_count <= child_count` for every non-empty packed level, so
+        // each column owns at least one child.
         let base = keyed.len() / remaining_children;
         let extra = keyed.len() % remaining_children;
         let take = base * children_in_column + extra.min(children_in_column);
@@ -846,27 +845,13 @@ mod tests {
     use geometry_trait::Point as _;
 
     type P = Point2D<f64, Cartesian>;
-    type Leaf<T> = Vec<T>;
-
     trait LeafProbe<T> {
         fn values(&self) -> &[T];
-        fn packed_group_bounds(&self) -> Option<&[Bounds]>;
-        fn packed_group(&self, index: usize) -> &[T];
     }
 
     impl<T> LeafProbe<T> for Vec<T> {
         fn values(&self) -> &[T] {
             self
-        }
-
-        fn packed_group_bounds(&self) -> Option<&[Bounds]> {
-            None
-        }
-
-        fn packed_group(&self, index: usize) -> &[T] {
-            const GROUP_SIZE: usize = 8;
-            let start = index * GROUP_SIZE;
-            &self[start..(start + GROUP_SIZE).min(self.len())]
         }
     }
 
@@ -942,64 +927,6 @@ mod tests {
             self.rank.admissions += other.rank.admissions;
             self.rank.replacements += other.rank.replacements;
             self.rank.shifted_ranks += other.rank.shifted_ranks;
-        }
-    }
-
-    enum PackedFrontierItem<'a, T> {
-        Node(&'a Node<T>),
-        Group(&'a Leaf<T>, usize),
-        Value(&'a T),
-    }
-
-    struct PackedFrontierEntry<'a, T> {
-        dist: f64,
-        item: PackedFrontierItem<'a, T>,
-    }
-
-    impl<T> PartialEq for PackedFrontierEntry<'_, T> {
-        fn eq(&self, other: &Self) -> bool {
-            self.dist.total_cmp(&other.dist).is_eq()
-        }
-    }
-
-    impl<T> Eq for PackedFrontierEntry<'_, T> {}
-
-    impl<T> PartialOrd for PackedFrontierEntry<'_, T> {
-        fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    impl<T> Ord for PackedFrontierEntry<'_, T> {
-        fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-            other.dist.total_cmp(&self.dist)
-        }
-    }
-
-    #[derive(Debug, Default)]
-    struct PackedFrontierMetrics {
-        pushes: usize,
-        pops: usize,
-        high_water: usize,
-        branch_expansions: usize,
-        leaf_expansions: usize,
-        group_pushes: usize,
-        group_pops: usize,
-        value_pushes: usize,
-        value_pops: usize,
-    }
-
-    impl PackedFrontierMetrics {
-        fn add(&mut self, other: &Self) {
-            self.pushes += other.pushes;
-            self.pops += other.pops;
-            self.high_water = self.high_water.max(other.high_water);
-            self.branch_expansions += other.branch_expansions;
-            self.leaf_expansions += other.leaf_expansions;
-            self.group_pushes += other.group_pushes;
-            self.group_pops += other.group_pops;
-            self.value_pushes += other.value_pushes;
-            self.value_pops += other.value_pops;
         }
     }
 
@@ -1099,162 +1026,6 @@ mod tests {
                         }
                     }
                 }
-            }
-        }
-        let frontier_metrics = frontier.metrics();
-        metrics.frontier_pushes = frontier_metrics.pushes;
-        metrics.frontier_pops = frontier_metrics.pops;
-        metrics.frontier_high_water = frontier_metrics.high_water;
-        metrics.rank = ranks.metrics();
-        (ranks.into_values(), metrics)
-    }
-
-    fn nearest_packed_frontier_with_metrics<T: Indexable, Params: SplitParameters>(
-        tree: &Rtree<T, Params>,
-        query: [f64; 2],
-        k: usize,
-    ) -> (Vec<&T>, PackedFrontierMetrics) {
-        let mut values = Vec::with_capacity(k.min(tree.len));
-        let mut frontier: SearchFrontier<PackedFrontierEntry<'_, T>> = SearchFrontier::new();
-        let mut metrics = PackedFrontierMetrics::default();
-        frontier.push(PackedFrontierEntry {
-            dist: 0.0,
-            item: PackedFrontierItem::Node(&tree.root),
-        });
-        while values.len() < k {
-            let Some(entry) = frontier.pop() else {
-                break;
-            };
-            match entry.item {
-                PackedFrontierItem::Node(Node::Branch(children)) => {
-                    metrics.branch_expansions += 1;
-                    frontier.extend(children.iter().map(|(bounds, child)| PackedFrontierEntry {
-                        dist: bounds.comparable_min_distance_to(query),
-                        item: PackedFrontierItem::Node(child),
-                    }));
-                }
-                PackedFrontierItem::Node(Node::Leaf(leaf)) => {
-                    metrics.leaf_expansions += 1;
-                    if let Some(group_bounds) = leaf.packed_group_bounds() {
-                        metrics.group_pushes += group_bounds.len();
-                        frontier.extend(group_bounds.iter().enumerate().map(|(index, bounds)| {
-                            PackedFrontierEntry {
-                                dist: bounds.comparable_min_distance_to(query),
-                                item: PackedFrontierItem::Group(leaf, index),
-                            }
-                        }));
-                    } else {
-                        metrics.value_pushes += leaf.len();
-                        frontier.extend(leaf.values().iter().map(|value| PackedFrontierEntry {
-                            dist: value.bounds().comparable_min_distance_to(query),
-                            item: PackedFrontierItem::Value(value),
-                        }));
-                    }
-                }
-                PackedFrontierItem::Group(leaf, index) => {
-                    metrics.group_pops += 1;
-                    let group = leaf.packed_group(index);
-                    metrics.value_pushes += group.len();
-                    frontier.extend(group.iter().map(|value| PackedFrontierEntry {
-                        dist: value.bounds().comparable_min_distance_to(query),
-                        item: PackedFrontierItem::Value(value),
-                    }));
-                }
-                PackedFrontierItem::Value(value) => {
-                    metrics.value_pops += 1;
-                    values.push(value);
-                }
-            }
-        }
-        let frontier_metrics = frontier.metrics();
-        metrics.pushes = frontier_metrics.pushes;
-        metrics.pops = frontier_metrics.pops;
-        metrics.high_water = frontier_metrics.high_water;
-        (values, metrics)
-    }
-
-    fn nearest_bounded_group_frontier_with_metrics<T: Indexable, Params: SplitParameters>(
-        tree: &Rtree<T, Params>,
-        query: [f64; 2],
-        k: usize,
-    ) -> (Vec<&T>, BoundedSearchMetrics) {
-        if k == 0 || tree.len == 0 {
-            return (Vec::new(), BoundedSearchMetrics::default());
-        }
-        let mut ranks = NearestBound::new(k, k.min(tree.len));
-        let mut frontier: SearchFrontier<PackedFrontierEntry<'_, T>> = SearchFrontier::new();
-        let mut metrics = BoundedSearchMetrics::default();
-        frontier.push(PackedFrontierEntry {
-            dist: 0.0,
-            item: PackedFrontierItem::Node(&tree.root),
-        });
-        while let Some(PackedFrontierEntry { dist, item }) = frontier.pop() {
-            if dist.total_cmp(&ranks.bound()).is_ge() {
-                metrics.terminated_by_bound += 1;
-                break;
-            }
-            match item {
-                PackedFrontierItem::Node(Node::Branch(children)) => {
-                    metrics.branch_expansions += 1;
-                    metrics.child_distance_evaluations += children.len();
-                    for (bounds, child) in children {
-                        let dist = bounds.comparable_min_distance_to(query);
-                        if dist.total_cmp(&ranks.bound()).is_lt() {
-                            metrics.child_pushes += 1;
-                            frontier.push(PackedFrontierEntry {
-                                dist,
-                                item: PackedFrontierItem::Node(child),
-                            });
-                        } else {
-                            metrics.child_pruned += 1;
-                        }
-                    }
-                }
-                PackedFrontierItem::Node(Node::Leaf(leaf)) => {
-                    metrics.leaf_expansions += 1;
-                    if let Some(group_bounds) = leaf.packed_group_bounds() {
-                        metrics.leaf_group_bound_evaluations += group_bounds.len();
-                        for (index, bounds) in group_bounds.iter().enumerate() {
-                            let dist = bounds.comparable_min_distance_to(query);
-                            if dist.total_cmp(&ranks.bound()).is_lt() {
-                                frontier.push(PackedFrontierEntry {
-                                    dist,
-                                    item: PackedFrontierItem::Group(leaf, index),
-                                });
-                            } else {
-                                metrics.leaf_groups_pruned += 1;
-                            }
-                        }
-                    } else {
-                        metrics.value_distance_evaluations += leaf.len();
-                        for value in leaf.values() {
-                            record_value_candidate(value, query, &mut ranks, &mut metrics);
-                        }
-                    }
-                }
-                PackedFrontierItem::Group(leaf, index) => {
-                    metrics.leaf_groups_scanned += 1;
-                    let group = leaf.packed_group(index);
-                    metrics.value_distance_evaluations += group.len();
-                    let reverse = group
-                        .first()
-                        .zip(group.last())
-                        .is_some_and(|(first, last)| {
-                            let first_y = first.bounds().center()[1];
-                            let last_y = last.bounds().center()[1];
-                            (last_y - query[1]).abs() < (first_y - query[1]).abs()
-                        });
-                    if reverse {
-                        for value in group.iter().rev() {
-                            record_value_candidate(value, query, &mut ranks, &mut metrics);
-                        }
-                    } else {
-                        for value in group {
-                            record_value_candidate(value, query, &mut ranks, &mut metrics);
-                        }
-                    }
-                }
-                PackedFrontierItem::Value(_) => unreachable!("values are ranked, not queued"),
             }
         }
         let frontier_metrics = frontier.metrics();
@@ -1645,24 +1416,6 @@ mod tests {
         assert_eq!(isqrt_ceil(2), 2);
         assert_eq!(isqrt_ceil(4), 2);
 
-        let values = vec![P::new(0.0, 0.0), P::new(1.0, 1.0)];
-        assert_eq!(LeafProbe::packed_group(&values, 0).len(), 2);
-
-        let first = PackedFrontierEntry {
-            dist: 1.0,
-            item: PackedFrontierItem::Group(&values, 0),
-        };
-        let equal = PackedFrontierEntry {
-            dist: 1.0,
-            item: PackedFrontierItem::Value(&values[0]),
-        };
-        let farther = PackedFrontierEntry {
-            dist: 2.0,
-            item: PackedFrontierItem::Value(&values[1]),
-        };
-        assert!(first == equal);
-        assert!(first.partial_cmp(&farther).is_some());
-
         let ordered_values: Vec<P> = (0..12).map(|x| P::new(f64::from(x), 0.0)).collect();
         let mut ranks = NearestBound::new(1, 1);
         let mut metrics = BoundedSearchMetrics::default();
@@ -1679,16 +1432,6 @@ mod tests {
         let tree = Rtree::<P>::new();
         assert!(
             nearest_with_metrics(&tree, [0.0, 0.0], 0, false, 8, false, 8)
-                .0
-                .is_empty()
-        );
-        assert!(
-            nearest_packed_frontier_with_metrics(&tree, [0.0, 0.0], 1)
-                .0
-                .is_empty()
-        );
-        assert!(
-            nearest_bounded_group_frontier_with_metrics(&tree, [0.0, 0.0], 0)
                 .0
                 .is_empty()
         );
@@ -2056,54 +1799,6 @@ mod tests {
         );
     }
 
-    fn record_bulk_packed_frontier_shape(distribution: &str, points: &[P]) {
-        const Q: usize = 100;
-        const K: usize = 8;
-
-        let tree: Rtree<P> = points.iter().copied().collect();
-        let mut total = PackedFrontierMetrics::default();
-        for query in profile_queries(Q) {
-            let expected = tree.nearest(query, K);
-            let (observed, metrics) = nearest_packed_frontier_with_metrics(&tree, query, K);
-            assert_eq!(observed, expected);
-            total.add(&metrics);
-        }
-        eprintln!(
-            "[rtree-packed-frontier] distribution={distribution} expected_results={} pushes={} pops={} high_water={} branch_expansions={} leaf_expansions={} group_pushes={} group_pops={} value_pushes={} value_pops={}",
-            Q * K,
-            total.pushes,
-            total.pops,
-            total.high_water,
-            total.branch_expansions,
-            total.leaf_expansions,
-            total.group_pushes,
-            total.group_pops,
-            total.value_pushes,
-            total.value_pops,
-        );
-    }
-
-    fn record_bulk_bounded_group_frontier_shape(distribution: &str, points: &[P]) {
-        const Q: usize = 100;
-        const K: usize = 8;
-
-        let tree: Rtree<P> = points.iter().copied().collect();
-        let mut total = BoundedSearchMetrics::default();
-        for query in profile_queries(Q) {
-            let expected = tree.nearest(query, K);
-            let (observed, metrics) = nearest_bounded_group_frontier_with_metrics(&tree, query, K);
-            assert_eq!(observed, expected);
-            total.add(&metrics);
-        }
-        report_bounded_metrics(
-            "bulk-group-frontier",
-            distribution,
-            "bounded-group-frontier",
-            Q * K,
-            &total,
-        );
-    }
-
     fn record_bulk_leaf_bvh_shape(terminal_size: usize, distribution: &str, points: &[P]) {
         const Q: usize = 100;
         const K: usize = 8;
@@ -2137,30 +1832,6 @@ mod tests {
             for terminal_size in [2, 4, 8] {
                 record_bulk_leaf_bvh_shape(terminal_size, distribution, &points);
             }
-        }
-    }
-
-    #[test]
-    fn records_bulk_packed_frontier_shape() {
-        const N: usize = 50_000;
-
-        for (distribution, points) in [
-            ("uniform", uniform_points(N)),
-            ("clustered", clustered_points(N)),
-        ] {
-            record_bulk_packed_frontier_shape(distribution, &points);
-        }
-    }
-
-    #[test]
-    fn records_bulk_bounded_group_frontier_shape() {
-        const N: usize = 50_000;
-
-        for (distribution, points) in [
-            ("uniform", uniform_points(N)),
-            ("clustered", clustered_points(N)),
-        ] {
-            record_bulk_bounded_group_frontier_shape(distribution, &points);
         }
     }
 

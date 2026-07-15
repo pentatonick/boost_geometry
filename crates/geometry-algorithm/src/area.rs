@@ -362,11 +362,7 @@ mod tests {
         ]));
         let got = area(&pg).abs();
         let expected = 12_309e6;
-        assert!(
-            (got - expected).abs() / expected < 0.02,
-            "got {} km² expected ~12309 km²",
-            got / 1e6
-        );
+        assert!((got - expected).abs() / expected < 0.02);
     }
 
     /// `area_geo.cpp` — a geographic polygon with a hole wound opposite

@@ -197,9 +197,7 @@ where
         let end = nodes[candidate.end].coordinate;
         let delta = (end.x - start.x, end.y - start.y);
         let length = hypot(delta.0, delta.1);
-        if length <= snap_tolerance {
-            continue;
-        }
+        debug_assert!(length > snap_tolerance);
         let midpoint = Coordinate {
             x: (start.x + end.x) * 0.5,
             y: (start.y + end.y) * 0.5,
@@ -304,9 +302,7 @@ fn append_atomic_edges<P>(
             .splits
             .sort_by(|left, right| left.0.total_cmp(&right.0));
         for pair in segment.splits.windows(2) {
-            if (pair[1].0 - pair[0].0).abs() <= 1e-12 {
-                continue;
-            }
+            debug_assert!((pair[1].0 - pair[0].0).abs() > 1e-12);
             let start = canonical_node(nodes, pair[0].1, tolerance);
             let end = canonical_node(nodes, pair[1].1, tolerance);
             if start != end {
@@ -353,9 +349,7 @@ where
         let mut edge_index = seed;
         let mut node_indices = alloc::vec![first];
         for _ in 0..=edges.len() {
-            if used[edge_index] {
-                return Err(OverlayError::Unsupported);
-            }
+            debug_assert!(!used[edge_index]);
             used[edge_index] = true;
             let edge = edges[edge_index];
             node_indices.push(edge.end);
@@ -364,9 +358,7 @@ where
             }
             edge_index = next_edge(nodes, edges, &used, edge).ok_or(OverlayError::Unsupported)?;
         }
-        if node_indices.last().copied() != Some(first) {
-            return Err(OverlayError::Unsupported);
-        }
+        debug_assert_eq!(node_indices.last().copied(), Some(first));
         let area = node_indices.windows(2).fold(0.0, |sum, pair| {
             let a = nodes[pair[0]].coordinate;
             let b = nodes[pair[1]].coordinate;
@@ -424,12 +416,12 @@ where
     let end = Coordinate::from_point(end);
     let point = Coordinate::from_point(point);
     let delta = (end.x - start.x, end.y - start.y);
-    if delta.0.abs() >= delta.1.abs() && delta.0 != 0.0 {
+    if delta.0.abs() >= delta.1.abs() {
+        debug_assert_ne!(delta.0, 0.0);
         (point.x - start.x) / delta.0
-    } else if delta.1 != 0.0 {
-        (point.y - start.y) / delta.1
     } else {
-        0.0
+        debug_assert_ne!(delta.1, 0.0);
+        (point.y - start.y) / delta.1
     }
 }
 
@@ -466,4 +458,39 @@ fn coordinate_scale(first: &Shape, second: &Shape) -> f64 {
         .fold(1.0_f64, |scale, coordinate| {
             scale.max(coordinate.x.abs()).max(coordinate.y.abs())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use geometry_cs::Cartesian;
+    use geometry_model::Point2D;
+
+    use super::{Coordinate, Edge, Node, trace_rings};
+
+    type P = Point2D<f64, Cartesian>;
+
+    #[test]
+    fn trace_rings_discards_a_closed_zero_area_cycle() {
+        let nodes = [
+            Node {
+                point: P::new(0.0, 0.0),
+                coordinate: Coordinate { x: 0.0, y: 0.0 },
+            },
+            Node {
+                point: P::new(1.0, 0.0),
+                coordinate: Coordinate { x: 1.0, y: 0.0 },
+            },
+            Node {
+                point: P::new(2.0, 0.0),
+                coordinate: Coordinate { x: 2.0, y: 0.0 },
+            },
+        ];
+        let edges = [
+            Edge { start: 0, end: 1 },
+            Edge { start: 1, end: 2 },
+            Edge { start: 2, end: 0 },
+        ];
+
+        assert!(trace_rings(&nodes, &edges, 1e-10).unwrap().is_empty());
+    }
 }

@@ -57,7 +57,10 @@ impl<T: Ord, const INLINE_CAPACITY: usize> SearchFrontier<T, INLINE_CAPACITY> {
         match &mut self.entries {
             FrontierEntries::Inline(entries) => {
                 if let Err(entry) = entries.push(entry) {
-                    self.spill(INLINE_CAPACITY + 1).push(entry);
+                    let inline = replace(entries, InlineHeap::new());
+                    let mut spilled = Self::spilled_heap(inline, INLINE_CAPACITY + 1);
+                    spilled.push(entry);
+                    self.entries = FrontierEntries::Spilled(spilled);
                 }
             }
             FrontierEntries::Spilled(entries) => entries.push(entry),
@@ -81,14 +84,16 @@ impl<T: Ord, const INLINE_CAPACITY: usize> SearchFrontier<T, INLINE_CAPACITY> {
                 if frontier.capacity() >= frontier.len() + incoming =>
             {
                 for entry in entries {
-                    if frontier.push(entry).is_err() {
-                        unreachable!("capacity was checked before extending");
-                    }
+                    let pushed = frontier.push(entry);
+                    debug_assert!(pushed.is_ok(), "capacity was checked before extending");
                 }
             }
             FrontierEntries::Inline(frontier) => {
                 let capacity = frontier.len() + incoming;
-                self.spill(capacity).extend(entries);
+                let inline = replace(frontier, InlineHeap::new());
+                let mut spilled = Self::spilled_heap(inline, capacity);
+                spilled.extend(entries);
+                self.entries = FrontierEntries::Spilled(spilled);
             }
             FrontierEntries::Spilled(frontier) => frontier.extend(entries),
         }
@@ -127,19 +132,9 @@ impl<T: Ord, const INLINE_CAPACITY: usize> SearchFrontier<T, INLINE_CAPACITY> {
         }
     }
 
-    #[cold]
-    fn spill(&mut self, capacity: usize) -> &mut BinaryHeap<T> {
-        let previous = replace(
-            &mut self.entries,
-            FrontierEntries::Spilled(BinaryHeap::with_capacity(capacity)),
-        );
-        let FrontierEntries::Spilled(entries) = &mut self.entries else {
-            unreachable!("the frontier was just replaced with a spilled heap");
-        };
-        let FrontierEntries::Inline(previous) = previous else {
-            unreachable!("only an inline frontier can spill");
-        };
-        entries.extend(previous.into_vec());
+    fn spilled_heap(inline: InlineHeap<T, Max, INLINE_CAPACITY>, capacity: usize) -> BinaryHeap<T> {
+        let mut entries = BinaryHeap::with_capacity(capacity);
+        entries.extend(inline.into_vec());
         entries
     }
 

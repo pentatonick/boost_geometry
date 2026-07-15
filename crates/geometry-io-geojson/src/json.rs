@@ -237,7 +237,9 @@ impl JsonParser<'_> {
             Some(b't') => self.expect_literal("true", JsonValue::Bool(true)),
             Some(b'f') => self.expect_literal("false", JsonValue::Bool(false)),
             Some(b'n') => self.expect_literal("null", JsonValue::Null),
-            Some(b) if b == b'-' || b.is_ascii_digit() => self.parse_number(),
+            Some(b) if b == b'-' || b.is_ascii_digit() => {
+                Ok(JsonValue::Number(self.parse_number()?))
+            }
             Some(b) => Err(GeoJsonError::Json(alloc::format!(
                 "unexpected character {:?}",
                 b as char
@@ -328,9 +330,7 @@ impl JsonParser<'_> {
         if !matches!(self.peek(), Some(b'-' | b'0'..=b'9')) {
             return Ok(None);
         }
-        let JsonValue::Number(x) = self.parse_number()? else {
-            unreachable!("parse_number always returns a number");
-        };
+        let x = self.parse_number()?;
         self.skip_ws();
         if self.peek() != Some(b',') {
             self.pos = start;
@@ -342,9 +342,7 @@ impl JsonParser<'_> {
             self.pos = start;
             return Ok(None);
         }
-        let JsonValue::Number(y) = self.parse_number()? else {
-            unreachable!("parse_number always returns a number");
-        };
+        let y = self.parse_number()?;
         self.skip_ws();
         if self.peek() == Some(b']') {
             self.pos += 1;
@@ -394,8 +392,9 @@ impl JsonParser<'_> {
                     let rest = &self.bytes[self.pos..];
                     let ch_len = utf8_char_len(rest[0]);
                     let slice = rest.get(..ch_len).ok_or(GeoJsonError::UnexpectedEof)?;
-                    let s = core::str::from_utf8(slice)
-                        .map_err(|_| GeoJsonError::Json("invalid UTF-8 in string".to_string()))?;
+                    let s = core::str::from_utf8(slice).expect(
+                        "GeoJSON input is valid UTF-8 and the cursor advances by characters",
+                    );
                     out.push_str(s);
                     self.pos += ch_len;
                 }
@@ -406,7 +405,7 @@ impl JsonParser<'_> {
     /// Parse a number: optional sign, integer part, optional fraction,
     /// optional `e`/`E` exponent. The lexeme is handed to Rust's `f64`
     /// parser.
-    fn parse_number(&mut self) -> Result<JsonValue, GeoJsonError> {
+    fn parse_number(&mut self) -> Result<f64, GeoJsonError> {
         let start = self.pos;
         if self.peek() == Some(b'-') {
             self.pos += 1;
@@ -420,10 +419,13 @@ impl JsonParser<'_> {
         }
         let slice = &self.bytes[start..self.pos];
         let text = core::str::from_utf8(slice)
-            .map_err(|_| GeoJsonError::Json("invalid number".to_string()))?;
-        text.parse::<f64>()
-            .map(JsonValue::Number)
-            .map_err(|_| GeoJsonError::Json(alloc::format!("invalid number {text:?}")))
+            .expect("number tokens contain only ASCII bytes copied from valid UTF-8 input");
+        match text.parse::<f64>() {
+            Ok(number) => Ok(number),
+            Err(_) => Err(GeoJsonError::Json(alloc::format!(
+                "invalid number {text:?}"
+            ))),
+        }
     }
 }
 

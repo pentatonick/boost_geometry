@@ -1,7 +1,9 @@
 //! Public-facade regression tests for degenerate and holed areal overlay.
 
-use boost_geometry::model::{MultiPolygon, Point2D, Polygon, polygon};
-use boost_geometry::prelude::{Cartesian, area, difference, intersection, sym_difference, r#union};
+use boost_geometry::model::{MultiPolygon, Point2D, Polygon, Ring, polygon};
+use boost_geometry::prelude::{
+    Cartesian, Dimension, area, difference, intersection, relation, sym_difference, r#union,
+};
 use boost_geometry::trait_::{MultiPolygon as _, Polygon as _};
 
 type P = Point2D<f64, Cartesian>;
@@ -77,6 +79,108 @@ fn identical_polygons_have_canonical_boolean_results() {
             .count(),
         0
     );
+}
+
+/// Empty and one-vertex rings have no areal boundary. Set-theoretic Boolean
+/// identities still hold through the public polygon operations, matching the
+/// degenerate-input families in Boost's overlay suite.
+#[test]
+fn degenerate_polygons_obey_boolean_identities() {
+    let empty = Polygon::new(Ring::<P>::from_vec(Vec::new()));
+    let singleton = Polygon::new(Ring::from_vec(vec![P::new(1.0, 1.0)]));
+    let filled = square(0.0, 0.0, 2.0, 2.0);
+
+    for degenerate in [&empty, &singleton] {
+        assert_eq!(
+            intersection(degenerate, &filled)
+                .unwrap()
+                .polygons()
+                .count(),
+            0
+        );
+        assert_eq!(
+            difference(degenerate, &filled).unwrap().polygons().count(),
+            0
+        );
+        assert!((total_area(&r#union(degenerate, &filled).unwrap()) - 4.0).abs() < 1e-9);
+        assert!((total_area(&difference(&filled, degenerate).unwrap()) - 4.0).abs() < 1e-9);
+        assert!((total_area(&sym_difference(degenerate, &filled).unwrap()) - 4.0).abs() < 1e-9);
+    }
+}
+
+/// Consecutive duplicate vertices do not contribute an edge. Boost's overlay
+/// case corpus contains spike and redundant-vertex inputs; this public case
+/// isolates the adjacent-duplicate boundary before Boolean graph assembly.
+#[test]
+fn adjacent_duplicate_vertices_do_not_change_boolean_results() {
+    let redundant: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(0.0, 2.0),
+        P::new(0.0, 2.0),
+        P::new(2.0, 2.0),
+        P::new(2.0, 0.0),
+        P::new(0.0, 0.0),
+    ]));
+    let canonical = square(0.0, 0.0, 2.0, 2.0);
+
+    assert!((total_area(&intersection(&redundant, &canonical).unwrap()) - 4.0).abs() < 1e-9);
+    assert!((total_area(&r#union(&redundant, &canonical).unwrap()) - 4.0).abs() < 1e-9);
+    assert_eq!(difference(&redundant, &canonical).unwrap().0.len(), 0);
+}
+
+/// `tests/xmltester/tests/general/TestNGOverlayA.xml`, "AA - repeated
+/// points" — GEOS removes a repeated run on one boundary and preserves the
+/// canonical union and difference areas.
+#[test]
+fn geos_repeated_boundary_points_preserve_areal_overlay() {
+    let repeated: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(100.0, 200.0),
+        P::new(200.0, 200.0),
+        P::new(200.0, 100.0),
+        P::new(100.0, 100.0),
+        P::new(100.0, 151.0),
+        P::new(100.0, 151.0),
+        P::new(100.0, 151.0),
+        P::new(100.0, 151.0),
+        P::new(100.0, 200.0),
+    ]));
+    let adjacent: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(300.0, 200.0),
+        P::new(300.0, 100.0),
+        P::new(200.0, 100.0),
+        P::new(200.0, 200.0),
+        P::new(200.0, 200.0),
+        P::new(300.0, 200.0),
+    ]));
+
+    assert_eq!(intersection(&repeated, &adjacent).unwrap().0.len(), 0);
+    assert_eq!(
+        relation(&repeated, &adjacent).unwrap().boundary_boundary(),
+        Dimension::Curve
+    );
+    assert!((total_area(&r#union(&repeated, &adjacent).unwrap()) - 20_000.0).abs() < 1e-9);
+    assert!((total_area(&difference(&repeated, &adjacent).unwrap()) - 10_000.0).abs() < 1e-9);
+    assert!((total_area(&sym_difference(&repeated, &adjacent).unwrap()) - 20_000.0).abs() < 1e-9);
+}
+
+/// The public overlay kernel uses a scale-relative snap tolerance. A collinear
+/// boundary edge shorter than that tolerance collapses to one canonical node
+/// without changing the represented polygon.
+#[test]
+fn scale_relative_snap_discards_a_collapsed_boundary_edge() {
+    let with_tiny_edge: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(0.0, 10.0),
+        P::new(60_000_000.0, 10.0),
+        P::new(60_000_000.0, 0.0),
+        P::new(59_999_999.999, 0.0),
+        P::new(0.0, 0.0),
+    ]));
+    let canonical = square(0.0, 0.0, 60_000_000.0, 10.0);
+
+    let overlap = intersection(&with_tiny_edge, &canonical).unwrap();
+    assert_eq!(overlap.polygons().count(), 1);
+    assert!((total_area(&overlap) - 600_000_000.0).abs() < 1e-6);
 }
 
 /// `test/algorithms/overlay/overlay.cpp:380-402` — hole boundaries participate

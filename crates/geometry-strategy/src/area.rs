@@ -260,11 +260,10 @@ where
         // Open ring leaves the closing edge implicit — add it
         // explicitly. Mirrors the `closed_clockwise_view` closure half
         // at `views/detail/closed_clockwise_view.hpp`.
-        let mut it = r.points();
-        if let Some(first) = it.next() {
-            if let Some(last) = r.points().last() {
-                acc = acc + segment_term::<R::Point>(last, first);
-            }
+        let mut points = r.points();
+        if let Some(first) = points.next() {
+            let last = points.last().unwrap_or(first);
+            acc = acc + segment_term::<R::Point>(last, first);
         }
     }
     acc

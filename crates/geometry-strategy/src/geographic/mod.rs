@@ -20,6 +20,7 @@ mod inverse;
 mod inverse_karney;
 pub mod length;
 mod meridian;
+pub mod rhumb;
 pub mod spheroid_calc;
 mod vertex;
 
@@ -40,6 +41,7 @@ pub use inverse::InverseResult;
 pub use inverse_karney::{Karney, KarneyInverse};
 pub use length::{GeographicLength, GeographicPerimeter};
 pub use meridian::{Meridian, MeridianInverseResult, MeridianSegmentKind};
+pub use rhumb::{Rhumb, RhumbFamily};
 #[cfg(feature = "std")]
 pub use vertex::{
     geographic_vertex_latitude, geographic_vertex_longitude, spherical_vertex_latitude,

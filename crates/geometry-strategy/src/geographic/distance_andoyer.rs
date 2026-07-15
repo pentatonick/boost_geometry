@@ -243,11 +243,7 @@ mod tests {
     #[test]
     fn polar_1deg_lon_10deg_lat() {
         let d = Andoyer::WGS84.distance(&deg(0.0, 90.0), &deg(1.0, 80.0));
-        assert!(
-            (d / 1000.0 - 1_116.814_237).abs() < 0.01,
-            "{} km expected ~ 1116.814 km",
-            d / 1000.0
-        );
+        assert!((d / 1000.0 - 1_116.814_237).abs() < 0.01);
     }
 
     /// `test/strategies/andoyer.cpp:226-227` — zero distance on equal
@@ -264,11 +260,7 @@ mod tests {
     #[test]
     fn lon_4_lat_52_to_lon_3_lat_40() {
         let d = Andoyer::WGS84.distance(&deg(4.0, 52.0), &deg(3.0, 40.0));
-        assert!(
-            (d / 1000.0 - 1_336.039_890).abs() < 0.01,
-            "{} km expected ~ 1336.040 km",
-            d / 1000.0
-        );
+        assert!((d / 1000.0 - 1_336.039_890).abs() < 0.01);
     }
 
     /// `test/strategies/andoyer.cpp:243-246` — four antipodal
@@ -297,12 +289,7 @@ mod tests {
             (deg(90.0, 0.0), deg(-90.0, 0.0)),
         ] {
             let d = Andoyer::WGS84.distance(&a, &b);
-            assert!(
-                (d / 1000.0 - expected_km).abs() < 1.0,
-                "got {} km, expected ~ {} km",
-                d / 1000.0,
-                expected_km,
-            );
+            assert!((d / 1000.0 - expected_km).abs() < 1.0);
         }
     }
 

@@ -40,4 +40,6 @@ pub mod crs;
 pub mod reproject;
 
 pub use crs::{Crs, CrsError};
+// feature-group: Reprojection
+// feature-desc: CRS-to-CRS point reprojection (standalone crate)
 pub use reproject::{ReprojectPoints, reproject};

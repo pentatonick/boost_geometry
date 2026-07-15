@@ -107,12 +107,10 @@ impl<'a> Parser<'a> {
     /// `boost/geometry/io/wkt/read.hpp` (it likewise reads only the
     /// coordinates its point type declares).
     fn skip_dimension_suffix(&mut self) -> Result<(), WktError> {
-        if let Token::Ident(word) = self.peek() {
-            if word == "Z" || word == "M" || word == "ZM" {
-                self.advance()?;
-            }
+        match self.peek() {
+            Token::Ident(word) if word == "Z" || word == "M" || word == "ZM" => self.advance(),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     /// Read exactly two ordinates into a 2D point. Any further ordinates
@@ -582,7 +580,6 @@ mod tests {
     )]
 
     use super::*;
-    use geometry_model::DynKind;
     use geometry_trait::{
         Linestring as _, MultiLinestring as _, MultiPoint as _, MultiPolygon as _, Point as _,
         Polygon as _, Ring as _,
@@ -610,128 +607,140 @@ mod tests {
     #[test]
     fn point_example() {
         let g = from_wkt("POINT (10 10)").unwrap();
-        assert_eq!(g.kind(), DynKind::Point);
-        if let DynGeometry::Point(p) = g {
-            assert_eq!(p.get::<0>(), 10.0);
-            assert_eq!(p.get::<1>(), 10.0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(g, DynGeometry::Point(Pt::new(10.0, 10.0)));
     }
 
     #[test]
     fn linestring_example() {
         let g = from_wkt("LINESTRING (10 10, 20 20, 30 40)").unwrap();
-        assert_eq!(g.kind(), DynKind::LineString);
-        if let DynGeometry::LineString(ls) = g {
-            assert_eq!(ls.points().len(), 3);
-            let last = ls.points().last().unwrap();
-            assert_eq!(last.get::<0>(), 30.0);
-            assert_eq!(last.get::<1>(), 40.0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::LineString(Linestring::from_vec(vec![
+                Pt::new(10.0, 10.0),
+                Pt::new(20.0, 20.0),
+                Pt::new(30.0, 40.0),
+            ]))
+        );
     }
 
     #[test]
     fn polygon_example() {
         let g = from_wkt("POLYGON ((10 10, 10 20, 20 20, 20 15, 10 10))").unwrap();
-        assert_eq!(g.kind(), DynKind::Polygon);
-        if let DynGeometry::Polygon(p) = g {
-            assert_eq!(p.exterior().points().len(), 5);
-            assert_eq!(p.interiors().count(), 0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::Polygon(Polygon::new(Ring::from_vec(vec![
+                Pt::new(10.0, 10.0),
+                Pt::new(10.0, 20.0),
+                Pt::new(20.0, 20.0),
+                Pt::new(20.0, 15.0),
+                Pt::new(10.0, 10.0),
+            ])))
+        );
     }
 
     #[test]
     fn polygon_with_hole() {
         let g =
             from_wkt("POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0), (2 2, 2 4, 4 4, 4 2, 2 2))").unwrap();
-        if let DynGeometry::Polygon(p) = g {
-            assert_eq!(p.interiors().count(), 1);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::Polygon(Polygon::with_inners(
+                Ring::from_vec(vec![
+                    Pt::new(0.0, 0.0),
+                    Pt::new(0.0, 10.0),
+                    Pt::new(10.0, 10.0),
+                    Pt::new(10.0, 0.0),
+                    Pt::new(0.0, 0.0),
+                ]),
+                vec![Ring::from_vec(vec![
+                    Pt::new(2.0, 2.0),
+                    Pt::new(2.0, 4.0),
+                    Pt::new(4.0, 4.0),
+                    Pt::new(4.0, 2.0),
+                    Pt::new(2.0, 2.0),
+                ])],
+            ))
+        );
     }
 
     #[test]
     fn multipoint_parenthesised_form() {
         let g = from_wkt("MULTIPOINT ((10 10), (20 20))").unwrap();
-        assert_eq!(g.kind(), DynKind::MultiPoint);
-        if let DynGeometry::MultiPoint(mp) = g {
-            assert_eq!(mp.points().len(), 2);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::MultiPoint(MultiPoint::from_vec(vec![
+                Pt::new(10.0, 10.0),
+                Pt::new(20.0, 20.0),
+            ]))
+        );
     }
 
     #[test]
     fn multipoint_bare_form() {
         let g = from_wkt("MULTIPOINT (10 10, 20 20)").unwrap();
-        if let DynGeometry::MultiPoint(mp) = g {
-            assert_eq!(mp.points().len(), 2);
-            let second = mp.points().nth(1).unwrap();
-            assert_eq!(second.get::<0>(), 20.0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::MultiPoint(MultiPoint::from_vec(vec![
+                Pt::new(10.0, 10.0),
+                Pt::new(20.0, 20.0),
+            ]))
+        );
     }
 
     #[test]
     fn multilinestring_example() {
         let g = from_wkt("MULTILINESTRING ((10 10, 20 20), (15 15, 30 15))").unwrap();
-        assert_eq!(g.kind(), DynKind::MultiLineString);
-        if let DynGeometry::MultiLineString(mls) = g {
-            assert_eq!(mls.linestrings().len(), 2);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::MultiLineString(MultiLinestring::from_vec(vec![
+                Linestring::from_vec(vec![Pt::new(10.0, 10.0), Pt::new(20.0, 20.0)]),
+                Linestring::from_vec(vec![Pt::new(15.0, 15.0), Pt::new(30.0, 15.0)]),
+            ]))
+        );
     }
 
     #[test]
     fn multipolygon_example() {
         let g = from_wkt("MULTIPOLYGON (((10 10, 10 20, 20 20, 20 15, 10 10)))").unwrap();
-        assert_eq!(g.kind(), DynKind::MultiPolygon);
-        if let DynGeometry::MultiPolygon(mpg) = g {
-            assert_eq!(mpg.polygons().len(), 1);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::MultiPolygon(MultiPolygon::from_vec(vec![Polygon::new(Ring::from_vec(
+                vec![
+                    Pt::new(10.0, 10.0),
+                    Pt::new(10.0, 20.0),
+                    Pt::new(20.0, 20.0),
+                    Pt::new(20.0, 15.0),
+                    Pt::new(10.0, 10.0),
+                ],
+            ))]))
+        );
     }
 
     #[test]
     fn geometrycollection_example() {
         let g = from_wkt("GEOMETRYCOLLECTION (POINT (10 10), LINESTRING (10 10, 20 20))").unwrap();
-        assert_eq!(g.kind(), DynKind::GeometryCollection);
-        if let DynGeometry::GeometryCollection(items) = g {
-            assert_eq!(items.len(), 2);
-            assert_eq!(items[0].kind(), DynKind::Point);
-            assert_eq!(items[1].kind(), DynKind::LineString);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::GeometryCollection(vec![
+                DynGeometry::Point(Pt::new(10.0, 10.0)),
+                DynGeometry::LineString(Linestring::from_vec(vec![
+                    Pt::new(10.0, 10.0),
+                    Pt::new(20.0, 20.0),
+                ])),
+            ])
+        );
     }
 
     #[test]
     fn linestring_empty() {
         let g = from_wkt("LINESTRING EMPTY").unwrap();
-        if let DynGeometry::LineString(ls) = g {
-            assert_eq!(ls.points().len(), 0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(g, DynGeometry::LineString(Linestring::from_vec(Vec::new())));
     }
 
     #[test]
     fn geometrycollection_empty() {
         let g = from_wkt("GEOMETRYCOLLECTION EMPTY").unwrap();
-        if let DynGeometry::GeometryCollection(items) = g {
-            assert_eq!(items.len(), 0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(g, DynGeometry::GeometryCollection(Vec::new()));
     }
 
     #[test]
@@ -762,12 +771,15 @@ mod tests {
     fn dimension_suffix_is_skipped() {
         // The Z ordinate is dropped; the 2D coordinates survive.
         let g = from_wkt("POINT Z (10 10 5)").unwrap();
-        if let DynGeometry::Point(p) = g {
-            assert_eq!(p.get::<0>(), 10.0);
-            assert_eq!(p.get::<1>(), 10.0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(g, DynGeometry::Point(Pt::new(10.0, 10.0)));
+    }
+
+    #[test]
+    fn malformed_token_after_dimension_suffix_is_reported() {
+        assert_eq!(
+            from_wkt("POINT Z @"),
+            Err(WktError::UnexpectedChar { pos: 8, ch: '@' })
+        );
     }
 
     // ---- EMPTY forms for the remaining collection kinds --------------
@@ -777,30 +789,30 @@ mod tests {
     #[test]
     fn polygon_empty() {
         let g = from_wkt("POLYGON EMPTY").unwrap();
-        if let DynGeometry::Polygon(p) = g {
-            assert_eq!(p.exterior().points().len(), 0);
-            assert_eq!(p.interiors().count(), 0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(g, DynGeometry::Polygon(Polygon::new(Ring::new())));
     }
 
     /// `MULTIPOINT EMPTY`, `MULTILINESTRING EMPTY`, and `MULTIPOLYGON
     /// EMPTY` each yield an empty container of the matching kind.
     #[test]
     fn multi_kinds_empty() {
-        match from_wkt("MULTIPOINT EMPTY").unwrap() {
-            DynGeometry::MultiPoint(mp) => assert_eq!(mp.points().len(), 0),
-            _ => unreachable!(),
-        }
-        match from_wkt("MULTILINESTRING EMPTY").unwrap() {
-            DynGeometry::MultiLineString(mls) => assert_eq!(mls.linestrings().len(), 0),
-            _ => unreachable!(),
-        }
-        match from_wkt("MULTIPOLYGON EMPTY").unwrap() {
-            DynGeometry::MultiPolygon(mpg) => assert_eq!(mpg.polygons().len(), 0),
-            _ => unreachable!(),
-        }
+        let multipoint = from_wkt("MULTIPOINT EMPTY").unwrap();
+        assert_eq!(
+            multipoint,
+            DynGeometry::MultiPoint(MultiPoint::from_vec(Vec::new()))
+        );
+
+        let multilinestring = from_wkt("MULTILINESTRING EMPTY").unwrap();
+        assert_eq!(
+            multilinestring,
+            DynGeometry::MultiLineString(MultiLinestring::from_vec(Vec::new()))
+        );
+
+        let multipolygon = from_wkt("MULTIPOLYGON EMPTY").unwrap();
+        assert_eq!(
+            multipolygon,
+            DynGeometry::MultiPolygon(MultiPolygon::from_vec(Vec::new()))
+        );
     }
 
     // ---- Grammar error branches -------------------------------------
@@ -964,13 +976,13 @@ mod tests {
             ),
         ];
         for (err, want_expected, want_found) in cases {
-            match err {
-                WktError::TypeMismatch { expected, found } => {
-                    assert_eq!(expected, want_expected);
-                    assert_eq!(found, want_found);
+            assert_eq!(
+                err,
+                &WktError::TypeMismatch {
+                    expected: want_expected,
+                    found: want_found,
                 }
-                other => panic!("expected TypeMismatch, got {other:?}"),
-            }
+            );
         }
     }
 }

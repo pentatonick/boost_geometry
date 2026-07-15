@@ -304,6 +304,11 @@ where
 /// # Errors
 ///
 /// Returns the first [`ValidityFailure`] not accepted by `options`.
+///
+/// # Panics
+///
+/// Panics if a custom ring implementation passes validation with a non-empty
+/// point iterator but yields no point when iterated again immediately after.
 #[inline]
 #[must_use = "validity failures must be handled"]
 pub fn is_valid_with<G>(geometry: &G, options: ValidityOptions) -> Result<(), ValidityFailure>
@@ -600,6 +605,11 @@ where
 /// # Errors
 ///
 /// Returns the first [`ValidityFailure`] not accepted by `options`.
+///
+/// # Panics
+///
+/// Panics if a custom ring implementation passes validation with a non-empty
+/// point iterator but yields no point when iterated again immediately after.
 #[inline]
 #[must_use = "validity failures must be handled"]
 pub fn is_valid_polygon_with<G, P>(
@@ -616,10 +626,12 @@ where
     let inners: Vec<_> = polygon.interiors().collect();
     for inner in &inners {
         validate_ring(*inner, true, options)?;
-        if let Some(rep) = inner.points().next() {
-            if !WithinRing.covered_by(rep, polygon.exterior()) {
-                return Err(ValidityFailure::InteriorRingOutside);
-            }
+        let rep = inner
+            .points()
+            .next()
+            .expect("a validated ring contains at least four points");
+        if !WithinRing.covered_by(rep, polygon.exterior()) {
+            return Err(ValidityFailure::InteriorRingOutside);
         }
         let interaction = ring_pair_interaction(polygon.exterior(), *inner);
         if interaction.proper_crossing {
@@ -639,12 +651,12 @@ where
             if interaction.contacts.len() > 1 {
                 return Err(ValidityFailure::DisconnectedInterior);
             }
-            if interaction.contacts.is_empty()
+            let nested = interaction.contacts.is_empty()
                 && (ring_first_point_within(inners[first], inners[second])
-                    || ring_first_point_within(inners[second], inners[first]))
-            {
-                return Err(ValidityFailure::NestedInteriorRings);
-            }
+                    || ring_first_point_within(inners[second], inners[first]));
+            (!nested)
+                .then_some(())
+                .ok_or(ValidityFailure::NestedInteriorRings)?;
         }
     }
     Ok(())

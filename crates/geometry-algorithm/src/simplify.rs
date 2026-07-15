@@ -34,6 +34,25 @@ where
     strategy.simplify(g, max_distance)
 }
 
+/// Return a simplified copy of `g` using an explicit strategy.
+///
+/// Mirrors the strategy overload of `boost::geometry::simplify` from
+/// `boost/geometry/algorithms/simplify.hpp:993-1011`. The strategy is the
+/// final argument so calls read consistently with other `_with` entries in
+/// this crate.
+#[inline]
+#[must_use]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "simplify strategies are zero-sized or small Copy values, matching the crate's other _with entries"
+)]
+pub fn simplify_with<G, S>(g: &G, max_distance: f64, strategy: S) -> S::Output
+where
+    S: SimplifyStrategy<G>,
+{
+    strategy.simplify(g, max_distance)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,

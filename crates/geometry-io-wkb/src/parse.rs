@@ -387,8 +387,6 @@ mod tests {
 
     use super::*;
     use alloc::vec;
-    use geometry_model::DynKind;
-    use geometry_trait::{Linestring as _, Point as _, Polygon as _, Ring as _};
 
     /// The 8 little-endian bytes of the f64 `1.0`.
     const F1: [u8; 8] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x3F];
@@ -404,12 +402,7 @@ mod tests {
         b.extend_from_slice(&F1);
         b.extend_from_slice(&F2);
         let g = from_wkb(&b).unwrap();
-        assert_eq!(g.kind(), DynKind::Point);
-        let DynGeometry::Point(p) = g else {
-            unreachable!()
-        };
-        assert_eq!(p.get::<0>(), 1.0);
-        assert_eq!(p.get::<1>(), 2.0);
+        assert_eq!(g, DynGeometry::Point(Pt::new(1.0, 2.0)));
     }
 
     #[test]
@@ -421,14 +414,13 @@ mod tests {
         b.extend_from_slice(&F3);
         b.extend_from_slice(&F1);
         let g = from_wkb(&b).unwrap();
-        assert_eq!(g.kind(), DynKind::LineString);
-        let DynGeometry::LineString(ls) = g else {
-            unreachable!()
-        };
-        assert_eq!(ls.points().len(), 2);
-        let last = ls.points().last().unwrap();
-        assert_eq!(last.get::<0>(), 3.0);
-        assert_eq!(last.get::<1>(), 1.0);
+        assert_eq!(
+            g,
+            DynGeometry::LineString(Linestring::from_vec(vec![
+                Pt::new(1.0, 2.0),
+                Pt::new(3.0, 1.0),
+            ]))
+        );
     }
 
     #[test]
@@ -446,12 +438,14 @@ mod tests {
         b.extend_from_slice(&F1);
         b.extend_from_slice(&F2);
         let g = from_wkb(&b).unwrap();
-        assert_eq!(g.kind(), DynKind::Polygon);
-        let DynGeometry::Polygon(pg) = g else {
-            unreachable!()
-        };
-        assert_eq!(pg.exterior().points().len(), 3);
-        assert_eq!(pg.interiors().count(), 0);
+        assert_eq!(
+            g,
+            DynGeometry::Polygon(Polygon::new(Ring::from_vec(vec![
+                Pt::new(1.0, 2.0),
+                Pt::new(3.0, 1.0),
+                Pt::new(1.0, 2.0),
+            ])))
+        );
     }
 
     #[test]
@@ -563,12 +557,13 @@ mod tests {
         b.extend_from_slice(&le_point_record());
         b.extend_from_slice(&le_point_record());
         let g = from_wkb(&b).unwrap();
-        assert_eq!(g.kind(), DynKind::MultiPoint);
-        let DynGeometry::MultiPoint(mp) = g else {
-            unreachable!()
-        };
-        assert_eq!(mp.0.len(), 2);
-        assert_eq!(mp.0[0].get::<0>(), 1.0);
+        assert_eq!(
+            g,
+            DynGeometry::MultiPoint(MultiPoint::from_vec(vec![
+                Pt::new(1.0, 2.0),
+                Pt::new(1.0, 2.0),
+            ]))
+        );
     }
 
     /// A valid `MultiLineString` of one empty member parses (the happy
@@ -578,11 +573,12 @@ mod tests {
         let mut b = vec![0x01, 0x05, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
         b.extend_from_slice(&le_empty_linestring_record());
         let g = from_wkb(&b).unwrap();
-        assert_eq!(g.kind(), DynKind::MultiLineString);
-        let DynGeometry::MultiLineString(mls) = g else {
-            unreachable!()
-        };
-        assert_eq!(mls.0.len(), 1);
+        assert_eq!(
+            g,
+            DynGeometry::MultiLineString(MultiLinestring::from_vec(vec![Linestring::from_vec(
+                Vec::new()
+            ),]))
+        );
     }
 
     /// A valid `MultiPolygon` of one empty member parses (the happy
@@ -592,11 +588,10 @@ mod tests {
         let mut b = vec![0x01, 0x06, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
         b.extend_from_slice(&le_empty_polygon_record());
         let g = from_wkb(&b).unwrap();
-        assert_eq!(g.kind(), DynKind::MultiPolygon);
-        let DynGeometry::MultiPolygon(mpg) = g else {
-            unreachable!()
-        };
-        assert_eq!(mpg.0.len(), 1);
+        assert_eq!(
+            g,
+            DynGeometry::MultiPolygon(MultiPolygon::from_vec(vec![Polygon::new(Ring::new())]))
+        );
     }
 
     /// A `GeometryCollection` mixing a point and a line string parses,
@@ -607,13 +602,13 @@ mod tests {
         b.extend_from_slice(&le_point_record());
         b.extend_from_slice(&le_empty_linestring_record());
         let g = from_wkb(&b).unwrap();
-        assert_eq!(g.kind(), DynKind::GeometryCollection);
-        let DynGeometry::GeometryCollection(items) = g else {
-            unreachable!()
-        };
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].kind(), DynKind::Point);
-        assert_eq!(items[1].kind(), DynKind::LineString);
+        assert_eq!(
+            g,
+            DynGeometry::GeometryCollection(vec![
+                DynGeometry::Point(Pt::new(1.0, 2.0)),
+                DynGeometry::LineString(Linestring::from_vec(Vec::new())),
+            ])
+        );
     }
 
     /// A `MultiLineString` whose member is a `Point` reports the mismatch

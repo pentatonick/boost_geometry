@@ -64,7 +64,17 @@ impl KarneyDirect {
         let ep2 = e2 / (one_minus_f * one_minus_f);
 
         let sin_alpha1 = azimuth12.sin();
+        let sin_alpha1 = if sin_alpha1.abs() <= f64::EPSILON {
+            0.0
+        } else {
+            sin_alpha1
+        };
         let cos_alpha1 = azimuth12.cos();
+        let cos_alpha1 = if cos_alpha1.abs() <= f64::EPSILON {
+            0.0
+        } else {
+            cos_alpha1
+        };
         let mut sin_beta1 = lat1.sin() * one_minus_f;
         let mut cos_beta1 = lat1.cos();
         let beta_norm = sin_beta1.hypot(cos_beta1);
@@ -83,7 +93,10 @@ impl KarneyDirect {
 
         let mut sin_sigma1 = sin_beta1;
         let sin_omega1 = sin_alpha0 * sin_beta1;
-        let mut cos_sigma1 = if sin_beta1 != 0.0 || cos_alpha1 != 0.0 {
+        // Boost evaluates these terms with `sin_cos_degrees`, which returns an
+        // exact zero for the equatorial due-east/west cases. The radian
+        // trigonometric functions leave a sub-epsilon residue instead.
+        let mut cos_sigma1 = if sin_beta1.abs() > f64::EPSILON || cos_alpha1.abs() > f64::EPSILON {
             cos_beta1 * cos_alpha1
         } else {
             1.0

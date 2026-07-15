@@ -248,10 +248,8 @@ fn write_expanded_scalar<W: core::fmt::Write + ?Sized>(
     }
     if decimal_pos <= 0 {
         out.write_str("0.")?;
-        write_zeroes(
-            out,
-            usize::try_from(-decimal_pos).expect("negative decimal position"),
-        )?;
+        let zeroes = usize::try_from(-decimal_pos).expect("negative decimal position");
+        write_zeroes(out, zeroes)?;
         return out.write_str(digits);
     }
 

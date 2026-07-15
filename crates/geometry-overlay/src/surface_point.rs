@@ -142,7 +142,6 @@ mod tests {
     use geometry_algorithm::within;
     use geometry_cs::Cartesian;
     use geometry_model::{Point2D, Polygon, polygon};
-    use geometry_trait::Point as _;
 
     type P = Point2D<f64, Cartesian>;
 
@@ -167,12 +166,7 @@ mod tests {
             (0.0, 0.0)
         ]];
         let p = point_on_surface(&pg).unwrap();
-        assert!(
-            within(&p, &pg),
-            "point ({}, {}) not inside L",
-            p.get::<0>(),
-            p.get::<1>()
-        );
+        assert!(within(&p, &pg));
     }
 
     #[test]
@@ -190,11 +184,6 @@ mod tests {
             [(3.0, 3.0), (7.0, 3.0), (7.0, 7.0), (3.0, 7.0), (3.0, 3.0)]
         ];
         let p = point_on_surface(&pg).unwrap();
-        assert!(
-            within(&p, &pg),
-            "point ({}, {}) not inside",
-            p.get::<0>(),
-            p.get::<1>()
-        );
+        assert!(within(&p, &pg));
     }
 }

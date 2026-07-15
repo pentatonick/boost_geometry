@@ -117,10 +117,14 @@ pub mod values;
 pub use bounds::Bounds;
 pub use indexable::Indexable;
 pub use nearest_iter::NearestIter;
+// feature-group: Spatial index
 pub use predicate::{
     AndPredicate, NotPredicate, Predicate, QueryPredicate, Satisfies, and, not, satisfies,
 };
 pub use query_iter::{QueryIter, QueryWithIter};
+// feature-group: Spatial index
+// feature-desc: Bulk-loadable R-tree with nearest-neighbour and predicate queries
+// feature-keep: Rtree
 pub use rtree::Rtree;
 pub use split::{
     AsymmetricQuadratic, AsymmetricRStarSplit, Linear, Quadratic, RStarSplit, SplitParameters,

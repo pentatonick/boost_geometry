@@ -211,6 +211,49 @@ fn linear_relations_cover_disjoint_touch_and_overlap_kernels() {
     assert!(crosses(&horizontal, &diagonal).unwrap());
 }
 
+/// `test/algorithms/relate/relate_linear_linear.cpp:155-164` — consecutive
+/// duplicate vertices contribute no segment, while a closed linestring has no
+/// mod-2 boundary. These are exact Boost DE-9IM fixtures exercised through the
+/// public relation facade.
+#[test]
+fn duplicated_and_closed_linestrings_match_boost_matrices() {
+    let reference =
+        Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(2.0, 2.0), P::new(4.0, 2.0)]);
+    for duplicated in [
+        Linestring::from_vec(vec![P::new(1.0, 1.0), P::new(2.0, 2.0), P::new(2.0, 2.0)]),
+        Linestring::from_vec(vec![P::new(1.0, 1.0), P::new(1.0, 1.0), P::new(2.0, 2.0)]),
+    ] {
+        assert!(
+            relation(&duplicated, &reference)
+                .unwrap()
+                .matches("1FF0FF102")
+                .unwrap()
+        );
+    }
+
+    let open = Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(10.0, 0.0)]);
+    let closed = Linestring::from_vec(vec![
+        P::new(5.0, 0.0),
+        P::new(9.0, 0.0),
+        P::new(5.0, 5.0),
+        P::new(1.0, 0.0),
+        P::new(5.0, 0.0),
+    ]);
+    let observed = relation(&open, &closed).unwrap();
+    assert!(observed.matches("1F1FF01F2").unwrap());
+
+    // `relate_linear_linear.cpp:170-174` — a two-coordinate point-size
+    // linestring is topologically a point in either ordered position.
+    let point_size = Linestring::from_vec(vec![P::new(1.0, 0.0), P::new(1.0, 0.0)]);
+    let horizontal = Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(5.0, 0.0)]);
+    let point_line = relation(&point_size, &horizontal).unwrap();
+    assert!(point_line.matches("0FFFFF102").unwrap());
+    assert_eq!(
+        relation(&horizontal, &point_size).unwrap(),
+        point_line.transposed()
+    );
+}
+
 /// `test/algorithms/relate/relate_linear_areal.cpp:44-87` — a line on an
 /// areal boundary and the reversed ordered pair exercise the boundary mask.
 #[test]
@@ -282,6 +325,7 @@ fn public_matrix_masks_cover_every_symbol_and_overlay_errors() {
     };
     assert!(matrix.matches("F012F012F").unwrap());
     assert!(matrix.matches("*T*******").unwrap());
+    assert_eq!(matrix.matches("********"), Err(RelateError::InvalidMask));
     assert_eq!(matrix.matches("F012X012F"), Err(RelateError::InvalidMask));
 
     let huge = box_at(0.0, 0.0, 200_000_000.0, 200_000_000.0);
@@ -385,6 +429,20 @@ fn geometry_collections_relate_through_runtime_public_dispatch() {
             .unwrap()
     );
 
+    let closed_line =
+        DynGeometryCollection(vec![DynGeometry::LineString(Linestring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+            P::new(0.0, 0.0),
+        ]))]);
+    let closed_endpoint = DynGeometryCollection(vec![DynGeometry::Point(P::new(0.0, 0.0))]);
+    assert!(
+        relation(&closed_endpoint, &closed_line)
+            .unwrap()
+            .matches("0FFFFF1F2")
+            .unwrap()
+    );
+
     let first = DynGeometryCollection(vec![
         DynGeometry::Polygon(box_at(0.0, 0.0, 5.0, 5.0)),
         DynGeometry::LineString(Linestring::from_vec(vec![
@@ -437,4 +495,145 @@ fn segment_dynamic_and_collection_reverse_pairs_are_public() {
             .matches("FF2F11212")
             .unwrap()
     );
+}
+
+/// `test/algorithms/relate/relate_linear_linear.cpp:104-139` and
+/// `relate_gc.cpp:55-111` — generic topology dispatch promotes degenerate
+/// linear/areal inputs to their actual dimension and recursively expands every
+/// runtime multi/collection variant.
+#[test]
+fn generic_topology_dispatch_covers_degenerate_and_dynamic_variants() {
+    let segment = Segment::new(P::new(0.0, 0.0), P::new(4.0, 0.0));
+    let line = Linestring::from_vec(vec![P::new(2.0, -1.0), P::new(2.0, 1.0)]);
+    assert_eq!(
+        relation(&line, &segment).unwrap().interior_interior(),
+        Dimension::Point
+    );
+
+    let degenerate_line = Linestring::from_vec(vec![P::new(1.0, 0.0), P::new(1.0, 0.0)]);
+    assert_eq!(
+        relation(&degenerate_line, &segment)
+            .unwrap()
+            .interior_interior(),
+        Dimension::Point
+    );
+    assert_eq!(
+        relation(&segment, &degenerate_line).unwrap(),
+        relation(&degenerate_line, &segment).unwrap().transposed()
+    );
+
+    let degenerate_polygon: Polygon<P> =
+        Polygon::new(Ring::from_vec(vec![P::new(1.0, 0.0), P::new(3.0, 0.0)]));
+    assert_eq!(
+        relation(&degenerate_polygon, &segment)
+            .unwrap()
+            .interior_interior(),
+        Dimension::Curve
+    );
+
+    let dynamic_multi_point = DynGeometry::MultiPoint(MultiPoint::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(2.0, 2.0),
+    ]));
+    assert_eq!(
+        relation(&dynamic_multi_point, &P::new(2.0, 2.0))
+            .unwrap()
+            .interior_interior(),
+        Dimension::Point
+    );
+
+    let dynamic_multi_line = DynGeometry::MultiLineString(MultiLinestring::from_vec(vec![
+        Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(2.0, 2.0)]),
+    ]));
+    assert_eq!(
+        relation(&dynamic_multi_line, &P::new(1.0, 1.0))
+            .unwrap()
+            .interior_interior(),
+        Dimension::Point
+    );
+
+    let dynamic_multi_polygon = DynGeometry::MultiPolygon(MultiPolygon::from_vec(vec![square()]));
+    assert_eq!(
+        relation(&dynamic_multi_polygon, &P::new(2.0, 2.0))
+            .unwrap()
+            .interior_interior(),
+        Dimension::Point
+    );
+
+    let dynamic_empty_line = DynGeometry::<f64, Cartesian>::LineString(Linestring::new());
+    assert_eq!(
+        relation(&dynamic_empty_line, &P::new(2.0, 2.0))
+            .unwrap()
+            .exterior_interior(),
+        Dimension::Point
+    );
+
+    let redundant_polygon: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(0.0, 4.0),
+        P::new(0.0, 4.0),
+        P::new(4.0, 4.0),
+        P::new(4.0, 0.0),
+        P::new(0.0, 0.0),
+    ]));
+    assert_eq!(
+        relation(&redundant_polygon, &P::new(2.0, 2.0))
+            .unwrap()
+            .interior_interior(),
+        Dimension::Point
+    );
+
+    let nested = DynGeometry::GeometryCollection(vec![DynGeometry::GeometryCollection(vec![
+        dynamic_multi_point,
+        dynamic_multi_line,
+        dynamic_multi_polygon,
+    ])]);
+    assert!(
+        relation(&nested, &P::new(1.0, 1.0))
+            .unwrap()
+            .interior_interior()
+            .is_set()
+    );
+}
+
+/// Generic topology range checks cover point/line storage and polygon holes.
+/// The reversed linear–areal order exercises the second public `crosses`
+/// alternative rather than relying only on matrix transposition.
+#[test]
+fn generic_topology_rejects_out_of_range_members_and_crosses_both_orders() {
+    let segment = Segment::new(P::new(-1.0, 2.0), P::new(5.0, 2.0));
+    assert!(matches!(
+        relation(&P::new(f64::MAX, 0.0), &segment),
+        Err(OverlayError::Unsupported)
+    ));
+
+    let polygon_with_bad_hole = Polygon::with_inners(
+        square().outer,
+        vec![Ring::from_vec(vec![
+            P::new(1.0, 1.0),
+            P::new(f64::MAX, 1.0),
+            P::new(2.0, 2.0),
+            P::new(1.0, 1.0),
+        ])],
+    );
+    assert!(matches!(
+        relation(&polygon_with_bad_hole, &segment),
+        Err(OverlayError::Unsupported)
+    ));
+
+    let donut = Polygon::with_inners(
+        square().outer,
+        vec![Ring::from_vec(vec![
+            P::new(1.0, 1.0),
+            P::new(3.0, 1.0),
+            P::new(3.0, 3.0),
+            P::new(1.0, 3.0),
+            P::new(1.0, 1.0),
+        ])],
+    );
+    assert!(relation(&donut, &segment).is_ok());
+
+    let bounds = ModelBox::from_corners(P::new(0.0, 0.0), P::new(4.0, 4.0));
+    assert!(crosses(&segment, &bounds).unwrap());
+    assert!(crosses(&bounds, &segment).unwrap());
 }

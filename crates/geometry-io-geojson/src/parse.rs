@@ -87,9 +87,10 @@ fn parse_geometry(value: &JsonValue) -> Result<DynGeometry<f64, Cartesian>, GeoJ
             coords(value)?,
         )?))),
         "Polygon" => Ok(DynGeometry::Polygon(read_polygon(coords(value)?)?)),
-        "MultiPoint" => Ok(DynGeometry::MultiPoint(MultiPoint(read_positions(
-            coords(value)?,
-        )?))),
+        "MultiPoint" => {
+            let points = read_positions(coords(value)?)?;
+            Ok(DynGeometry::MultiPoint(MultiPoint(points)))
+        }
         "MultiLineString" => read_multi_linestring(coords(value)?),
         "MultiPolygon" => read_multi_polygon(coords(value)?),
         "GeometryCollection" => read_geometry_collection(value),
@@ -218,45 +219,31 @@ mod tests {
     )]
 
     use super::from_geojson;
-    use geometry_model::{DynGeometry, DynKind};
-    use geometry_trait::{Linestring as _, MultiPolygon as _, Point as _, Polygon as _, Ring as _};
+    use geometry_model::{DynGeometry, DynKind, Linestring, MultiPolygon, Point2D, Polygon, Ring};
 
     #[test]
     fn point_example() {
         let g = from_geojson(r#"{"type":"Point","coordinates":[100.0,0.0]}"#).unwrap();
-        assert_eq!(g.kind(), DynKind::Point);
-        if let DynGeometry::Point(p) = g {
-            assert_eq!(p.get::<0>(), 100.0);
-            assert_eq!(p.get::<1>(), 0.0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(g, DynGeometry::Point(Point2D::new(100.0, 0.0)));
     }
 
     #[test]
     fn point_altitude_ordinate_is_ignored() {
         let g = from_geojson(r#"{"type":"Point","coordinates":[100.0,0.0,500.0]}"#).unwrap();
-        if let DynGeometry::Point(p) = g {
-            assert_eq!(p.get::<0>(), 100.0);
-            assert_eq!(p.get::<1>(), 0.0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(g, DynGeometry::Point(Point2D::new(100.0, 0.0)));
     }
 
     #[test]
     fn linestring_example() {
         let g = from_geojson(r#"{"type":"LineString","coordinates":[[100.0,0.0],[101.0,1.0]]}"#)
             .unwrap();
-        assert_eq!(g.kind(), DynKind::LineString);
-        if let DynGeometry::LineString(ls) = g {
-            assert_eq!(ls.points().len(), 2);
-            let last = ls.points().last().unwrap();
-            assert_eq!(last.get::<0>(), 101.0);
-            assert_eq!(last.get::<1>(), 1.0);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::LineString(Linestring::from_vec(vec![
+                Point2D::new(100.0, 0.0),
+                Point2D::new(101.0, 1.0),
+            ]))
+        );
     }
 
     #[test]
@@ -269,13 +256,25 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        assert_eq!(g.kind(), DynKind::Polygon);
-        if let DynGeometry::Polygon(p) = g {
-            assert_eq!(p.exterior().points().len(), 5);
-            assert_eq!(p.interiors().count(), 1);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::Polygon(Polygon::with_inners(
+                Ring::from_vec(vec![
+                    Point2D::new(100.0, 0.0),
+                    Point2D::new(101.0, 0.0),
+                    Point2D::new(101.0, 1.0),
+                    Point2D::new(100.0, 1.0),
+                    Point2D::new(100.0, 0.0),
+                ]),
+                vec![Ring::from_vec(vec![
+                    Point2D::new(100.8, 0.8),
+                    Point2D::new(100.8, 0.2),
+                    Point2D::new(100.2, 0.2),
+                    Point2D::new(100.2, 0.8),
+                    Point2D::new(100.8, 0.8),
+                ])],
+            ))
+        );
     }
 
     #[test]
@@ -295,12 +294,25 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        assert_eq!(g.kind(), DynKind::MultiPolygon);
-        if let DynGeometry::MultiPolygon(mpg) = g {
-            assert_eq!(mpg.polygons().count(), 2);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::MultiPolygon(MultiPolygon::from_vec(vec![
+                Polygon::new(Ring::from_vec(vec![
+                    Point2D::new(102.0, 2.0),
+                    Point2D::new(103.0, 2.0),
+                    Point2D::new(103.0, 3.0),
+                    Point2D::new(102.0, 3.0),
+                    Point2D::new(102.0, 2.0),
+                ])),
+                Polygon::new(Ring::from_vec(vec![
+                    Point2D::new(100.0, 0.0),
+                    Point2D::new(101.0, 0.0),
+                    Point2D::new(101.0, 1.0),
+                    Point2D::new(100.0, 1.0),
+                    Point2D::new(100.0, 0.0),
+                ])),
+            ]))
+        );
     }
 
     #[test]
@@ -313,14 +325,16 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        assert_eq!(g.kind(), DynKind::GeometryCollection);
-        if let DynGeometry::GeometryCollection(items) = g {
-            assert_eq!(items.len(), 2);
-            assert_eq!(items[0].kind(), DynKind::Point);
-            assert_eq!(items[1].kind(), DynKind::LineString);
-        } else {
-            unreachable!();
-        }
+        assert_eq!(
+            g,
+            DynGeometry::GeometryCollection(vec![
+                DynGeometry::Point(Point2D::new(100.0, 0.0)),
+                DynGeometry::LineString(Linestring::from_vec(vec![
+                    Point2D::new(101.0, 0.0),
+                    Point2D::new(102.0, 1.0),
+                ])),
+            ])
+        );
     }
 
     #[test]

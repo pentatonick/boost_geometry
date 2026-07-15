@@ -46,6 +46,28 @@ pub trait SimplifyStrategy<G> {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DouglasPeucker<D = PointToSegment<Pythagoras>>(pub D);
 
+/// Visvalingam–Whyatt area-ranked line simplification.
+///
+/// Repeatedly removes the interior vertex with the smallest adjacent-triangle
+/// area while that area is at most the tolerance supplied to
+/// [`SimplifyStrategy::simplify`]. Endpoints are always retained.
+///
+/// Implements the method from Visvalingam and Whyatt, “Line Generalisation by
+/// Repeated Elimination of Points” (1993). Boost.Geometry has no equivalent
+/// strategy; this is an opt-in peer of [`DouglasPeucker`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct VisvalingamWhyatt;
+
+/// Topology-preserving Visvalingam–Whyatt line simplification.
+///
+/// Uses the same area ranking as [`VisvalingamWhyatt`], and applies the Davies
+/// refinement when removing a vertex would introduce a self-intersection: the
+/// preceding retained vertex is removed next so the transient crossing is
+/// eliminated. The implementation uses an allocation-only quadratic scan,
+/// keeping the strategy available in `no_std` builds.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct VisvalingamWhyattPreserve;
+
 impl<P, L, D> SimplifyStrategy<L> for DouglasPeucker<D>
 where
     P: Point<Scalar = f64> + PointMut + Default + Copy,
@@ -82,6 +104,175 @@ where
             .collect();
         geometry_model::Linestring::from_vec(out)
     }
+}
+
+impl<P, L> SimplifyStrategy<L> for VisvalingamWhyatt
+where
+    P: Point<Scalar = f64> + PointMut + Default + Copy,
+    L: Linestring<Point = P>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    type Output = geometry_model::Linestring<P>;
+
+    fn simplify(&self, ls: &L, max_distance: f64) -> Self::Output {
+        visvalingam_whyatt(ls, max_distance, false)
+    }
+}
+
+impl<P, L> SimplifyStrategy<L> for VisvalingamWhyattPreserve
+where
+    P: Point<Scalar = f64> + PointMut + Default + Copy,
+    L: Linestring<Point = P>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    type Output = geometry_model::Linestring<P>;
+
+    fn simplify(&self, ls: &L, max_distance: f64) -> Self::Output {
+        visvalingam_whyatt(ls, max_distance, true)
+    }
+}
+
+fn visvalingam_whyatt<P, L>(
+    ls: &L,
+    minimum_area: f64,
+    preserve_topology: bool,
+) -> geometry_model::Linestring<P>
+where
+    P: Point<Scalar = f64> + PointMut + Default + Copy,
+    L: Linestring<Point = P>,
+{
+    let points: Vec<P> = ls.points().copied().collect();
+    if points.len() < 3 || minimum_area <= 0.0 || minimum_area.is_nan() {
+        return geometry_model::Linestring::from_vec(points);
+    }
+
+    let mut retained: Vec<usize> = (0..points.len()).collect();
+    let mut forced_predecessor = None;
+
+    while retained.len() > 2 {
+        let selected = forced_predecessor
+            .take()
+            .and_then(|index| retained.iter().position(|candidate| *candidate == index))
+            .filter(|slot| *slot > 0 && *slot + 1 < retained.len())
+            .map(|slot| (slot, 0.0))
+            .or_else(|| smallest_triangle(&points, &retained));
+        // `retained.len() > 2` guarantees at least one interior triangle, so
+        // the fallback scan always produces a candidate even when a forced
+        // predecessor is no longer eligible.
+        let (slot, area) = selected.expect("an interior triangle is available");
+        if area > minimum_area {
+            break;
+        }
+
+        let creates_crossing =
+            preserve_topology && removal_creates_crossing(&points, &retained, slot);
+        let predecessor = retained[slot - 1];
+        retained.remove(slot);
+        if creates_crossing {
+            forced_predecessor = Some(predecessor);
+        }
+    }
+
+    geometry_model::Linestring::from_vec(retained.into_iter().map(|index| points[index]).collect())
+}
+
+fn smallest_triangle<P>(points: &[P], retained: &[usize]) -> Option<(usize, f64)>
+where
+    P: Point<Scalar = f64>,
+{
+    let mut selected = None;
+    for slot in 1..retained.len().saturating_sub(1) {
+        let area = triangle_area(
+            &points[retained[slot - 1]],
+            &points[retained[slot]],
+            &points[retained[slot + 1]],
+        );
+        if selected.is_none_or(|(_, smallest)| area < smallest) {
+            selected = Some((slot, area));
+        }
+    }
+    selected
+}
+
+#[inline]
+fn triangle_area<P>(first: &P, middle: &P, last: &P) -> f64
+where
+    P: Point<Scalar = f64>,
+{
+    let twice_area = (middle.get::<0>() - first.get::<0>()) * (last.get::<1>() - first.get::<1>())
+        - (middle.get::<1>() - first.get::<1>()) * (last.get::<0>() - first.get::<0>());
+    twice_area.abs() * 0.5
+}
+
+fn removal_creates_crossing<P>(points: &[P], retained: &[usize], slot: usize) -> bool
+where
+    P: Point<Scalar = f64>,
+{
+    let left = retained[slot - 1];
+    let current = retained[slot];
+    let right = retained[slot + 1];
+
+    retained.windows(2).any(|edge| {
+        let start = edge[0];
+        let end = edge[1];
+        if start == left
+            || end == left
+            || start == current
+            || end == current
+            || start == right
+            || end == right
+        {
+            return false;
+        }
+        segments_intersect(&points[left], &points[right], &points[start], &points[end])
+    })
+}
+
+fn segments_intersect<P>(first: &P, second: &P, third: &P, fourth: &P) -> bool
+where
+    P: Point<Scalar = f64>,
+{
+    let o1 = orientation(first, second, third);
+    let o2 = orientation(first, second, fourth);
+    let o3 = orientation(third, fourth, first);
+    let o4 = orientation(third, fourth, second);
+
+    if o1 != o2 && o3 != o4 && o1 != 0 && o2 != 0 && o3 != 0 && o4 != 0 {
+        return true;
+    }
+    (o1 == 0 && point_on_segment(third, first, second))
+        || (o2 == 0 && point_on_segment(fourth, first, second))
+        || (o3 == 0 && point_on_segment(first, third, fourth))
+        || (o4 == 0 && point_on_segment(second, third, fourth))
+}
+
+#[inline]
+fn orientation<P>(first: &P, second: &P, third: &P) -> i8
+where
+    P: Point<Scalar = f64>,
+{
+    let cross = (second.get::<0>() - first.get::<0>()) * (third.get::<1>() - first.get::<1>())
+        - (second.get::<1>() - first.get::<1>()) * (third.get::<0>() - first.get::<0>());
+    if cross > 0.0 {
+        1
+    } else if cross < 0.0 {
+        -1
+    } else {
+        0
+    }
+}
+
+#[inline]
+fn point_on_segment<P>(point: &P, first: &P, second: &P) -> bool
+where
+    P: Point<Scalar = f64>,
+{
+    let x = point.get::<0>();
+    let y = point.get::<1>();
+    first.get::<0>().min(second.get::<0>()) <= x
+        && x <= first.get::<0>().max(second.get::<0>())
+        && first.get::<1>().min(second.get::<1>()) <= y
+        && y <= first.get::<1>().max(second.get::<1>())
 }
 
 /// Recursive Douglas–Peucker split over `pts[lo..=hi]`.
@@ -135,7 +326,9 @@ mod tests {
 
     extern crate alloc;
 
-    use super::{DouglasPeucker, SimplifyStrategy};
+    use super::{
+        DouglasPeucker, SimplifyStrategy, orientation, point_on_segment, segments_intersect,
+    };
     use crate::cartesian::{PointToSegment, Pythagoras};
     use alloc::vec;
     use alloc::vec::Vec;
@@ -202,5 +395,39 @@ mod tests {
         let dup: Linestring<Pt> = linestring![(0., 0.), (0., 0.), (0., 0.), (5., 0.)];
         let s2 = default_dp().simplify(&dup, -1.0);
         assert_eq!(s2.0.len(), 4, "negative tolerance keeps every vertex");
+    }
+
+    #[test]
+    fn private_collinear_intersection_guards_cover_every_endpoint_order() {
+        let a = Pt::new(0.0, 0.0);
+        let b = Pt::new(2.0, 0.0);
+        assert!(segments_intersect(
+            &a,
+            &b,
+            &Pt::new(1.0, 0.0),
+            &Pt::new(1.0, 1.0)
+        ));
+        assert!(segments_intersect(
+            &a,
+            &b,
+            &Pt::new(1.0, 1.0),
+            &Pt::new(1.0, 0.0)
+        ));
+        assert!(segments_intersect(
+            &Pt::new(1.0, 0.0),
+            &Pt::new(1.0, 1.0),
+            &a,
+            &b,
+        ));
+        assert!(segments_intersect(
+            &Pt::new(1.0, 1.0),
+            &Pt::new(1.0, 0.0),
+            &a,
+            &b,
+        ));
+        assert_eq!(orientation(&a, &b, &Pt::new(1.0, 1.0)), 1);
+        assert_eq!(orientation(&a, &b, &Pt::new(1.0, -1.0)), -1);
+        assert_eq!(orientation(&a, &b, &Pt::new(1.0, 0.0)), 0);
+        assert!(point_on_segment(&Pt::new(1.0, 0.0), &a, &b));
     }
 }
