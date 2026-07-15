@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/pentatonick/boost_geometry/compare/geometry-model-v0.0.7...geometry-model-v0.0.8) - 2026-07-15
+
+### Added
+
+- complete parity tier one algorithms
+
+### Fixed
+
+- preserve exact cardinal Karney results
+
+### Other
+
+- close remaining executable coverage gaps
+- Complete algorithms parity port
+
 ## [0.0.7](https://github.com/pentatonick/boost_geometry/compare/geometry-model-v0.0.6...geometry-model-v0.0.7) - 2026-07-14
 
 ### Fixed
