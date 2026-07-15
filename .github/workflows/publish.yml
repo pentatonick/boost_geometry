@@ -23,12 +23,20 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test --workspace
-      - name: Verify tag matches workspace version
+      - name: Verify tag matches the facade crate version
         run: |
+          # release-plz versions each crate independently, so an unchanged
+          # crate (e.g. geometry-tag) can lag behind the release. The tag
+          # tracks the facade crate `boost_geometry` — verify against that,
+          # not an arbitrary `.packages[0]`.
           version="$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[0].version')"
+            | jq -r '.packages[] | select(.name == "boost_geometry") | .version')"
+          if [ -z "${version}" ]; then
+            echo "Could not read boost_geometry version from cargo metadata" >&2
+            exit 1
+          fi
           if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match workspace version v${version}" >&2
+            echo "Tag ${GITHUB_REF_NAME} does not match boost_geometry version v${version}" >&2
             exit 1
           fi
       - name: Publish workspace crates in dependency order
