@@ -1,6 +1,6 @@
 //! Public-facade regression tests for degenerate and holed areal overlay.
 
-use boost_geometry::model::{MultiPolygon, Point2D, Polygon, polygon};
+use boost_geometry::model::{MultiPolygon, Point2D, Polygon, Ring, polygon};
 use boost_geometry::prelude::{Cartesian, area, difference, intersection, sym_difference, r#union};
 use boost_geometry::trait_::{MultiPolygon as _, Polygon as _};
 
@@ -77,6 +77,33 @@ fn identical_polygons_have_canonical_boolean_results() {
             .count(),
         0
     );
+}
+
+/// Empty and one-vertex rings have no areal boundary. Set-theoretic Boolean
+/// identities still hold through the public polygon operations, matching the
+/// degenerate-input families in Boost's overlay suite.
+#[test]
+fn degenerate_polygons_obey_boolean_identities() {
+    let empty = Polygon::new(Ring::<P>::from_vec(Vec::new()));
+    let singleton = Polygon::new(Ring::from_vec(vec![P::new(1.0, 1.0)]));
+    let filled = square(0.0, 0.0, 2.0, 2.0);
+
+    for degenerate in [&empty, &singleton] {
+        assert_eq!(
+            intersection(degenerate, &filled)
+                .unwrap()
+                .polygons()
+                .count(),
+            0
+        );
+        assert_eq!(
+            difference(degenerate, &filled).unwrap().polygons().count(),
+            0
+        );
+        assert!((total_area(&r#union(degenerate, &filled).unwrap()) - 4.0).abs() < 1e-9);
+        assert!((total_area(&difference(&filled, degenerate).unwrap()) - 4.0).abs() < 1e-9);
+        assert!((total_area(&sym_difference(degenerate, &filled).unwrap()) - 4.0).abs() < 1e-9);
+    }
 }
 
 /// `test/algorithms/overlay/overlay.cpp:380-402` — hole boundaries participate

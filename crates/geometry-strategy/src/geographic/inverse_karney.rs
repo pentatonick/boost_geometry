@@ -135,20 +135,12 @@ impl KarneyInverse {
             }
         }
 
-        best.map_or_else(
-            || {
-                self.solve_seed(
-                    &direct,
-                    lon1,
-                    lat1,
-                    lon2,
-                    lat2,
-                    spherical_distance,
-                    spherical_azimuth,
-                )
-            },
-            |(_, result)| result,
-        )
+        // Both seed grids are non-empty, and the first candidate always
+        // initializes `best` (including when its endpoint error is NaN).
+        // Keep that structural invariant explicit instead of carrying an
+        // unreachable fallback solve with duplicate inputs.
+        best.expect("the non-empty seed grid always produces a candidate")
+            .1
     }
 
     #[cfg(feature = "std")]
