@@ -147,10 +147,13 @@ where
             for second in (first + 1)..work.len() {
                 let unioned = union_poly(&work[first], &work[second])?;
                 if unioned.0.len() == 1 {
-                    if let Some(polygon) = unioned.0.into_iter().next() {
-                        stitched = Some((first, second, polygon));
-                        break 'pairs;
-                    }
+                    let polygon = unioned
+                        .0
+                        .into_iter()
+                        .next()
+                        .expect("a single-result union contains one polygon");
+                    stitched = Some((first, second, polygon));
+                    break 'pairs;
                 }
             }
         }
@@ -221,11 +224,7 @@ mod tests {
         let b = square(1.0, 1.0, 2.0);
         let merged = merge_polygons(vec![a, b]).unwrap();
         assert_eq!(merged.polygons().count(), 1);
-        assert!(
-            close(total_area(&merged), 7.0),
-            "area {}",
-            total_area(&merged)
-        );
+        assert!(close(total_area(&merged), 7.0));
     }
 
     #[test]

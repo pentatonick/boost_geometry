@@ -117,9 +117,10 @@ where
         let next = cumulative.last().copied().unwrap_or(0.0) + metric.distance(&edge[0], &edge[1]);
         cumulative.push(next);
     }
-    let Some(total) = cumulative.last().copied() else {
-        return MultiLinestring(Vec::new());
-    };
+    // `cumulative` is initialized with the zero-distance origin above.
+    let total = *cumulative
+        .last()
+        .expect("cumulative distances are non-empty");
     if total == 0.0 {
         return MultiLinestring(vec![ModelLinestring::from_vec(points)]);
     }
@@ -170,9 +171,8 @@ where
         .position(|range| distance <= range[1])
         .unwrap_or(cumulative.len().saturating_sub(2));
     let edge_length = cumulative[edge_index + 1] - cumulative[edge_index];
-    if edge_length == 0.0 {
-        return points[edge_index];
-    }
+    // A positive in-range distance selects the first cumulative interval
+    // ending at that distance; zero-length plateaus are therefore skipped.
     metric.interpolate(
         &points[edge_index],
         &points[edge_index + 1],

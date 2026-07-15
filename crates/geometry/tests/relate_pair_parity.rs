@@ -498,6 +498,29 @@ fn generic_topology_dispatch_covers_degenerate_and_dynamic_variants() {
         Dimension::Point
     );
 
+    let dynamic_empty_line = DynGeometry::<f64, Cartesian>::LineString(Linestring::new());
+    assert_eq!(
+        relation(&dynamic_empty_line, &P::new(2.0, 2.0))
+            .unwrap()
+            .exterior_interior(),
+        Dimension::Point
+    );
+
+    let redundant_polygon: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(0.0, 4.0),
+        P::new(0.0, 4.0),
+        P::new(4.0, 4.0),
+        P::new(4.0, 0.0),
+        P::new(0.0, 0.0),
+    ]));
+    assert_eq!(
+        relation(&redundant_polygon, &P::new(2.0, 2.0))
+            .unwrap()
+            .interior_interior(),
+        Dimension::Point
+    );
+
     let nested = DynGeometry::GeometryCollection(vec![DynGeometry::GeometryCollection(vec![
         dynamic_multi_point,
         dynamic_multi_line,

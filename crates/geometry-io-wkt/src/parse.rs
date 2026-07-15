@@ -770,6 +770,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn malformed_token_after_dimension_suffix_is_reported() {
+        assert_eq!(
+            from_wkt("POINT Z @"),
+            Err(WktError::UnexpectedChar { pos: 8, ch: '@' })
+        );
+    }
+
     // ---- EMPTY forms for the remaining collection kinds --------------
 
     /// `POLYGON EMPTY` yields a polygon with an empty exterior ring and

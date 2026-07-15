@@ -156,18 +156,16 @@ where
             .filter(|slot| *slot > 0 && *slot + 1 < retained.len())
             .map(|slot| (slot, 0.0))
             .or_else(|| smallest_triangle(&points, &retained));
-        let Some((slot, area)) = selected else {
-            break;
-        };
+        // `retained.len() > 2` guarantees at least one interior triangle, so
+        // the fallback scan always produces a candidate even when a forced
+        // predecessor is no longer eligible.
+        let (slot, area) = selected.expect("an interior triangle is available");
         if area > minimum_area {
             break;
         }
 
         let creates_crossing =
             preserve_topology && removal_creates_crossing(&points, &retained, slot);
-        if creates_crossing && retained.len() <= 4 {
-            break;
-        }
         let predecessor = retained[slot - 1];
         retained.remove(slot);
         if creates_crossing {

@@ -243,11 +243,7 @@ mod tests {
         let deg = |lon: f64, lat: f64| -> Gg { WithCs::new(Adapt([lon, lat])) };
 
         let d = distance_with(&deg(1.0, 80.0), &deg(0.0, 90.0), Thomas::WGS84);
-        assert!(
-            (d / 1000.0 - 1_116.825_795).abs() < 0.012,
-            "{} km",
-            d / 1000.0
-        );
+        assert!((d / 1000.0 - 1_116.825_795).abs() < 0.012);
     }
 
     /// Vincenty: a pair straddling the antimeridian normalises Δλ into
@@ -266,10 +262,6 @@ mod tests {
         let east = distance_with(&deg(170.0, 0.0), &deg(-170.0, 0.0), Vincenty::WGS84);
         let west = distance_with(&deg(-170.0, 0.0), &deg(170.0, 0.0), Vincenty::WGS84);
         assert!((east - west).abs() < 1e-6, "{east} vs {west}");
-        assert!(
-            (east / 1000.0 - 2_226.0).abs() < 5.0,
-            "{} km",
-            east / 1000.0
-        );
+        assert!((east / 1000.0 - 2_226.0).abs() < 5.0);
     }
 }

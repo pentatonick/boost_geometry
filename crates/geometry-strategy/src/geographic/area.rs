@@ -199,11 +199,7 @@ mod tests {
         // negative on a default (clockwise) ring; take the magnitude.
         let got = GeographicArea::WGS84.area(&r).abs();
         let expected = 12_309e6;
-        assert!(
-            (got - expected).abs() / expected < 0.02,
-            "got {} km² expected ~12309 km²",
-            got / 1e6
-        );
+        assert!((got - expected).abs() / expected < 0.02);
     }
 
     /// The polygon path matches the ring path (no holes).
@@ -218,11 +214,7 @@ mod tests {
         ]));
         let got = GeographicPolygonArea::WGS84.area(&pg).abs();
         let expected = 12_309e6;
-        assert!(
-            (got - expected).abs() / expected < 0.02,
-            "got {}",
-            got / 1e6
-        );
+        assert!((got - expected).abs() / expected < 0.02);
     }
 
     /// `Default` for both strategies is WGS84.

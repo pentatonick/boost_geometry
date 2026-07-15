@@ -298,23 +298,18 @@ mod tests {
     use super::{SegmentIntersection, segment_intersection};
     use geometry_cs::Cartesian;
     use geometry_model::{Point2D, Segment};
-    use geometry_trait::Point as _;
 
     type P = Point2D<f64, Cartesian>;
     type Seg = Segment<P>;
-
-    fn coords(p: &P) -> (f64, f64) {
-        (p.get::<0>(), p.get::<1>())
-    }
 
     #[test]
     fn proper_crossing() {
         let a = Seg::new(P::new(0.0, 0.0), P::new(2.0, 2.0));
         let b = Seg::new(P::new(0.0, 2.0), P::new(2.0, 0.0));
-        match segment_intersection::<Seg, P>(&a, &b) {
-            SegmentIntersection::Single(p) => assert_eq!(coords(&p), (1.0, 1.0)),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(
+            segment_intersection::<Seg, P>(&a, &b),
+            SegmentIntersection::Single(P::new(1.0, 1.0))
+        );
     }
 
     #[test]
@@ -322,27 +317,23 @@ mod tests {
         // b's start sits on the interior of a.
         let a = Seg::new(P::new(0.0, 0.0), P::new(4.0, 0.0));
         let b = Seg::new(P::new(2.0, 0.0), P::new(2.0, 3.0));
-        match segment_intersection::<Seg, P>(&a, &b) {
-            SegmentIntersection::Single(p) => assert_eq!(coords(&p), (2.0, 0.0)),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(
+            segment_intersection::<Seg, P>(&a, &b),
+            SegmentIntersection::Single(P::new(2.0, 0.0))
+        );
     }
 
     #[test]
     fn collinear_overlap() {
         let a = Seg::new(P::new(0.0, 0.0), P::new(4.0, 0.0));
         let b = Seg::new(P::new(2.0, 0.0), P::new(6.0, 0.0));
-        match segment_intersection::<Seg, P>(&a, &b) {
-            SegmentIntersection::Collinear { from, to } => {
-                let (mut lo, mut hi) = (coords(&from), coords(&to));
-                if lo.0 > hi.0 {
-                    core::mem::swap(&mut lo, &mut hi);
-                }
-                assert_eq!(lo, (2.0, 0.0));
-                assert_eq!(hi, (4.0, 0.0));
+        assert_eq!(
+            segment_intersection::<Seg, P>(&a, &b),
+            SegmentIntersection::Collinear {
+                from: P::new(2.0, 0.0),
+                to: P::new(4.0, 0.0),
             }
-            other => panic!("{other:?}"),
-        }
+        );
     }
 
     #[test]
@@ -350,10 +341,10 @@ mod tests {
         // Meet only at the shared endpoint (4,0).
         let a = Seg::new(P::new(0.0, 0.0), P::new(4.0, 0.0));
         let b = Seg::new(P::new(4.0, 0.0), P::new(8.0, 0.0));
-        match segment_intersection::<Seg, P>(&a, &b) {
-            SegmentIntersection::Single(p) => assert_eq!(coords(&p), (4.0, 0.0)),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(
+            segment_intersection::<Seg, P>(&a, &b),
+            SegmentIntersection::Single(P::new(4.0, 0.0))
+        );
     }
 
     #[test]
@@ -402,9 +393,9 @@ mod tests {
         // Verify the line-solve, not just topology.
         let a = Seg::new(P::new(0.0, 0.0), P::new(4.0, 4.0));
         let b = Seg::new(P::new(0.0, 4.0), P::new(4.0, 0.0));
-        match segment_intersection::<Seg, P>(&a, &b) {
-            SegmentIntersection::Single(p) => assert_eq!(coords(&p), (2.0, 2.0)),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(
+            segment_intersection::<Seg, P>(&a, &b),
+            SegmentIntersection::Single(P::new(2.0, 2.0))
+        );
     }
 }

@@ -219,11 +219,7 @@ mod tests {
         let mut p = P::new(45.0_f64.to_radians(), 0.0);
         reproject(&mut p, &wgs84(), &mercator()).unwrap();
         let expected_x = 6_378_137.0 * core::f64::consts::FRAC_PI_4;
-        assert!(
-            (p.get::<0>() - expected_x).abs() < 1.0,
-            "x = {}",
-            p.get::<0>()
-        );
+        assert!((p.get::<0>() - expected_x).abs() < 1.0);
         assert!(p.get::<1>().abs() < 1e-3, "y = {}", p.get::<1>());
     }
 

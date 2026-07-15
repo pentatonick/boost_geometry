@@ -208,6 +208,10 @@ fn ring_box_and_multi_geometries_use_public_buffer_dispatch() {
     let ring_result = buffer_with(&ring, miter_settings(1.0)).unwrap();
     assert!((buffered_area(&ring_result) - 27.0).abs() < 1e-9);
 
+    let open_ring: Ring<P, true, false> = Ring::from_vec(ring.0[..ring.0.len() - 1].to_vec());
+    let open_ring_result = buffer_with(&open_ring, miter_settings(1.0)).unwrap();
+    assert!((buffered_area(&open_ring_result) - 27.0).abs() < 1e-9);
+
     let bounds = ModelBox::from_corners(P::new(0.0, 0.0), P::new(2.0, 4.0));
     let box_result = buffer_with(&bounds, miter_settings(1.0)).unwrap();
     assert!((buffered_area(&box_result) - 24.0).abs() < 1e-9);

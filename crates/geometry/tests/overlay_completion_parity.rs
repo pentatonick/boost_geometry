@@ -106,6 +106,26 @@ fn degenerate_polygons_obey_boolean_identities() {
     }
 }
 
+/// Consecutive duplicate vertices do not contribute an edge. Boost's overlay
+/// case corpus contains spike and redundant-vertex inputs; this public case
+/// isolates the adjacent-duplicate boundary before Boolean graph assembly.
+#[test]
+fn adjacent_duplicate_vertices_do_not_change_boolean_results() {
+    let redundant: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(0.0, 2.0),
+        P::new(0.0, 2.0),
+        P::new(2.0, 2.0),
+        P::new(2.0, 0.0),
+        P::new(0.0, 0.0),
+    ]));
+    let canonical = square(0.0, 0.0, 2.0, 2.0);
+
+    assert!((total_area(&intersection(&redundant, &canonical).unwrap()) - 4.0).abs() < 1e-9);
+    assert!((total_area(&r#union(&redundant, &canonical).unwrap()) - 4.0).abs() < 1e-9);
+    assert_eq!(difference(&redundant, &canonical).unwrap().0.len(), 0);
+}
+
 /// `test/algorithms/overlay/overlay.cpp:380-402` — hole boundaries participate
 /// in clipping and assembly just like exterior boundaries.
 #[test]

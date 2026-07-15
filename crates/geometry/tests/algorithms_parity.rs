@@ -31,9 +31,9 @@ use boost_geometry::prelude::{
 };
 use boost_geometry::strategy::{
     CartesianAzimuth, CartesianBoxCentroid, CartesianPerimeter, ChamberlainDuquetteArea,
-    CrossTrack, EnvelopePoint, Haversine, HaversineClosestPoints, PointToSegment, Pythagoras,
-    Rhumb, Rotate, Scale, Skew, SphericalArea, SphericalPerimeter, Translate, VisvalingamWhyatt,
-    VisvalingamWhyattPreserve,
+    CrossTrack, EnvelopePoint, GeographicAzimuth, Haversine, HaversineClosestPoints,
+    PointToSegment, Pythagoras, Rhumb, Rotate, Scale, Skew, SphericalArea, SphericalPerimeter,
+    Translate, Vincenty, VisvalingamWhyatt, VisvalingamWhyattPreserve,
 };
 use boost_geometry::trait_::{
     IndexedAccess as _, Point as _, PointMut as _, Polygon as _, Ring as _, fold_dims, segment_end,
@@ -578,6 +578,39 @@ fn explicit_azimuth_and_centroid_strategies_are_public() {
     );
 }
 
+/// Boost's Andoyer formula treats a pole's cosine as zero with
+/// `math::equals`, so the public geographic strategy has deterministic pole
+/// limits despite `cos(π/2)` not being exactly zero in binary floating point.
+#[test]
+fn geographic_azimuth_uses_boost_pole_limits() {
+    type G = Point2D<f64, Geographic<Degree>>;
+    let origin = G::new(0.0, 0.0);
+
+    assert!(azimuth_with(&origin, &G::new(0.0, 90.0), GeographicAzimuth::WGS84).abs() < 1e-12);
+    assert!(
+        (azimuth_with(&origin, &G::new(0.0, -90.0), GeographicAzimuth::WGS84)
+            - core::f64::consts::PI)
+            .abs()
+            < 1e-12
+    );
+    assert!(
+        (azimuth_with(
+            &G::new(0.0, 90.0),
+            &G::new(90.0, 0.0),
+            GeographicAzimuth::WGS84,
+        ) - core::f64::consts::FRAC_PI_2)
+            .abs()
+            < 1e-12
+    );
+    let antipodal = azimuth_with(&origin, &G::new(180.0, 0.0), GeographicAzimuth::WGS84);
+    assert!(antipodal.abs() < 1e-12, "got {antipodal}");
+
+    assert_eq!(
+        distance_with(&G::new(0.0, 10.0), &G::new(360.0, 10.0), Vincenty::WGS84,),
+        0.0
+    );
+}
+
 /// `test/algorithms/is_simple.cpp:93-139` — duplicate, fold-back,
 /// self-crossing, closed, and empty linestring paths plus areal duplicate
 /// handling are observable through the public predicate.
@@ -804,6 +837,9 @@ fn coordinate_wise_algorithms_reach_the_fourth_ordinate() {
     type P4 = ModelPoint<f64, 4, Cartesian>;
     type P5 = ModelPoint<f64, 5, Cartesian>;
 
+    let mut zero = P0::default();
+    assign_values(&mut zero, &[]);
+
     let mut one = P1::default();
     assign_values(&mut one, &[7.0]);
     assert_eq!(one.get::<0>(), 7.0);
@@ -899,6 +935,16 @@ fn closest_points_and_densify_cover_non_crossing_and_four_dimensional_paths() {
     let (on_first, on_second) = closest_points(&first, &second);
     assert_eq!(on_first, P2::new(10.0, 0.0));
     assert_eq!(on_second, P2::new(10.0, 1.0));
+
+    let first_pair_is_best = Linestring::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(10.0, 0.0),
+        P2::new(20.0, 0.0),
+    ]);
+    let short_parallel = Linestring::from_vec(vec![P2::new(0.0, 1.0), P2::new(1.0, 1.0)]);
+    let (on_long, on_short) = closest_points(&first_pair_is_best, &short_parallel);
+    assert_eq!(on_long, P2::new(0.0, 0.0));
+    assert_eq!(on_short, P2::new(0.0, 1.0));
 
     let mut point = P4::default();
     point.set::<0>(1.0);
@@ -1172,6 +1218,7 @@ fn locate_and_segmentize_preserve_a_bent_linestring() {
     ]);
 
     assert_eq!(line_locate_point(&line, &P2::new(2.5, 1.0)), Some(0.75));
+    assert_eq!(line_locate_point(&line, &P2::new(1.0, 0.25)), Some(0.25));
     let pieces = linestring_segmentize(&line, 2);
     assert_eq!(pieces.0.len(), 2);
     assert_eq!(pieces.0[0].0, vec![P2::new(0.0, 0.0), P2::new(2.0, 0.0)]);
@@ -1216,6 +1263,20 @@ fn segmentize_with_haversine_uses_spherical_interpolation() {
 /// antipodal spherical endpoints.
 #[test]
 fn segmentize_handles_dimensions_and_degenerate_metrics() {
+    assert!(
+        linestring_segmentize(&Linestring::<P2>::from_vec(Vec::new()), 2)
+            .0
+            .is_empty()
+    );
+    assert!(
+        linestring_segmentize(
+            &Linestring::from_vec(vec![P2::new(0.0, 0.0), P2::new(1.0, 0.0)]),
+            0,
+        )
+        .0
+        .is_empty()
+    );
+
     let mut end = P4::default();
     end.set::<0>(4.0);
     end.set::<1>(8.0);

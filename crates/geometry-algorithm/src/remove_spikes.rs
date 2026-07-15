@@ -197,13 +197,7 @@ mod tests {
             linestring![(0.0, 0.0), (2.0, 0.0), (5.0, 0.0), (3.0, 0.0), (1.0, 0.0)];
         remove_spikes(&mut ls);
         let xs: Vec<f64> = ls.points().map(geometry_trait::Point::get::<0>).collect();
-        // The sequence is strictly monotone (no reversal remains): each
-        // step moves in one direction only.
-        for w in xs.windows(3) {
-            let d1 = w[1] - w[0];
-            let d2 = w[2] - w[1];
-            assert!(d1 * d2 >= 0.0, "residual reversal in {xs:?}");
-        }
+        assert_eq!(xs, vec![0.0, 1.0]);
     }
 
     /// A `Polygon` removes spikes from its exterior *and* every interior

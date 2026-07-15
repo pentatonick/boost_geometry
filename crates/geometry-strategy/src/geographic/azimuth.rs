@@ -83,8 +83,8 @@ where
     // The single-letter names `A, B, U, V, T, M, N, d` mirror
     // `formula::andoyer_inverse::apply` in
     // `formulas/andoyer_inverse.hpp:165-219` letter-for-letter; the
-    // exact `== 0.0` short-circuits are the intentional analogue of
-    // Boost's `math::equals` guards on the same lines.
+    // epsilon-aware short-circuits mirror Boost's `math::equals` guards on
+    // the same lines.
     #[allow(clippy::many_single_char_names, clippy::float_cmp)]
     #[inline]
     fn azimuth(&self, p1: &P1, p2: &P2) -> f64 {
@@ -111,14 +111,14 @@ where
         // `andoyer_inverse.hpp:127-163`. Boost returns 0 for the
         // aligned case (which is all this port needs to reproduce the
         // reference table).
-        if sin_d == 0.0 {
+        if sin_d.abs() <= f64::EPSILON {
             return 0.0;
         }
 
         let pi = core::f64::consts::PI;
 
         // Forward-azimuth term A + first-order flattening correction U.
-        let (a, u) = if cos_lat2 == 0.0 {
+        let (a, u) = if cos_lat2.abs() <= f64::EPSILON {
             (if sin_lat2 < 0.0 { pi } else { 0.0 }, 0.0)
         } else {
             let tan_lat2 = sin_lat2 / cos_lat2;
@@ -130,7 +130,7 @@ where
 
         // Correction term V (from the reverse-azimuth term B), needed
         // for the forward `dA = V·T − U`. B itself is not used forward.
-        let v = if cos_lat1 == 0.0 {
+        let v = if cos_lat1.abs() <= f64::EPSILON {
             0.0
         } else {
             let tan_lat1 = sin_lat1 / cos_lat1;
@@ -265,5 +265,9 @@ mod tests {
         let mut az = 0.5;
         normalize_azimuth(&mut az, 0.4, -0.1);
         assert_eq!(az, 0.5);
+
+        let mut az = -0.5;
+        normalize_azimuth(&mut az, -0.4, -0.1);
+        assert_eq!(az, -0.5);
     }
 }

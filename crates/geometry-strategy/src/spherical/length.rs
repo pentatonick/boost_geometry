@@ -101,7 +101,8 @@ where
             acc = acc + self.haversine.distance(w[0], w[1]);
         }
         if matches!(g.closure(), Closure::Open) {
-            if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+            if let Some(first) = pts.first() {
+                let last = pts.last().unwrap_or(first);
                 acc = acc + self.haversine.distance(last, first);
             }
         }

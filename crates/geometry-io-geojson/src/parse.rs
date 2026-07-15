@@ -87,9 +87,10 @@ fn parse_geometry(value: &JsonValue) -> Result<DynGeometry<f64, Cartesian>, GeoJ
             coords(value)?,
         )?))),
         "Polygon" => Ok(DynGeometry::Polygon(read_polygon(coords(value)?)?)),
-        "MultiPoint" => Ok(DynGeometry::MultiPoint(MultiPoint(read_positions(
-            coords(value)?,
-        )?))),
+        "MultiPoint" => {
+            let points = read_positions(coords(value)?)?;
+            Ok(DynGeometry::MultiPoint(MultiPoint(points)))
+        }
         "MultiLineString" => read_multi_linestring(coords(value)?),
         "MultiPolygon" => read_multi_polygon(coords(value)?),
         "GeometryCollection" => read_geometry_collection(value),
