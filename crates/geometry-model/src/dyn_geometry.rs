@@ -201,11 +201,12 @@ mod tests {
             DynGeometry::Point(Pt::new(1.0, 2.0)),
             DynGeometry::GeometryCollection(vec![DynGeometry::Point(Pt::new(3.0, 4.0))]),
         ]);
-        assert_eq!(nested.kind(), DynKind::GeometryCollection);
-        if let DynGeometry::GeometryCollection(items) = nested {
-            assert_eq!(items.len(), 2);
-            assert_eq!(items[0].kind(), DynKind::Point);
-            assert_eq!(items[1].kind(), DynKind::GeometryCollection);
-        }
+        assert_eq!(
+            nested,
+            DynGeometry::GeometryCollection(vec![
+                DynGeometry::Point(Pt::new(1.0, 2.0)),
+                DynGeometry::GeometryCollection(vec![DynGeometry::Point(Pt::new(3.0, 4.0))]),
+            ])
+        );
     }
 }

@@ -241,6 +241,17 @@ fn duplicated_and_closed_linestrings_match_boost_matrices() {
     ]);
     let observed = relation(&open, &closed).unwrap();
     assert!(observed.matches("1F1FF01F2").unwrap());
+
+    // `relate_linear_linear.cpp:170-174` — a two-coordinate point-size
+    // linestring is topologically a point in either ordered position.
+    let point_size = Linestring::from_vec(vec![P::new(1.0, 0.0), P::new(1.0, 0.0)]);
+    let horizontal = Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(5.0, 0.0)]);
+    let point_line = relation(&point_size, &horizontal).unwrap();
+    assert!(point_line.matches("0FFFFF102").unwrap());
+    assert_eq!(
+        relation(&horizontal, &point_size).unwrap(),
+        point_line.transposed()
+    );
 }
 
 /// `test/algorithms/relate/relate_linear_areal.cpp:44-87` — a line on an
@@ -314,6 +325,7 @@ fn public_matrix_masks_cover_every_symbol_and_overlay_errors() {
     };
     assert!(matrix.matches("F012F012F").unwrap());
     assert!(matrix.matches("*T*******").unwrap());
+    assert_eq!(matrix.matches("********"), Err(RelateError::InvalidMask));
     assert_eq!(matrix.matches("F012X012F"), Err(RelateError::InvalidMask));
 
     let huge = box_at(0.0, 0.0, 200_000_000.0, 200_000_000.0);
@@ -417,6 +429,20 @@ fn geometry_collections_relate_through_runtime_public_dispatch() {
             .unwrap()
     );
 
+    let closed_line =
+        DynGeometryCollection(vec![DynGeometry::LineString(Linestring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+            P::new(0.0, 0.0),
+        ]))]);
+    let closed_endpoint = DynGeometryCollection(vec![DynGeometry::Point(P::new(0.0, 0.0))]);
+    assert!(
+        relation(&closed_endpoint, &closed_line)
+            .unwrap()
+            .matches("0FFFFF1F2")
+            .unwrap()
+    );
+
     let first = DynGeometryCollection(vec![
         DynGeometry::Polygon(box_at(0.0, 0.0, 5.0, 5.0)),
         DynGeometry::LineString(Linestring::from_vec(vec![
@@ -490,6 +516,10 @@ fn generic_topology_dispatch_covers_degenerate_and_dynamic_variants() {
             .unwrap()
             .interior_interior(),
         Dimension::Point
+    );
+    assert_eq!(
+        relation(&segment, &degenerate_line).unwrap(),
+        relation(&degenerate_line, &segment).unwrap().transposed()
     );
 
     let degenerate_polygon: Polygon<P> =

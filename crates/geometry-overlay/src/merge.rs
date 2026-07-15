@@ -141,30 +141,33 @@ where
     I: IntoIterator<Item = Polygon<P>>,
 {
     let mut work: Vec<Polygon<P>> = triangles.into_iter().collect();
-    loop {
-        let mut stitched = None;
-        'pairs: for first in 0..work.len() {
-            for second in (first + 1)..work.len() {
-                let unioned = union_poly(&work[first], &work[second])?;
-                if unioned.0.len() == 1 {
-                    let polygon = unioned
-                        .0
-                        .into_iter()
-                        .next()
-                        .expect("a single-result union contains one polygon");
-                    stitched = Some((first, second, polygon));
-                    break 'pairs;
-                }
-            }
-        }
-        let Some((first, second, polygon)) = stitched else {
-            break;
-        };
+    while let Some((first, second, polygon)) = first_stitchable_pair(&work)? {
         work.remove(second);
         work.remove(first);
         work.push(polygon);
     }
     Ok(MultiPolygon(work))
+}
+
+fn first_stitchable_pair<P>(
+    polygons: &[Polygon<P>],
+) -> Result<Option<(usize, usize, Polygon<P>)>, OverlayError>
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    for first in 0..polygons.len() {
+        for second in (first + 1)..polygons.len() {
+            let mut unioned = union_poly(&polygons[first], &polygons[second])?
+                .0
+                .into_iter();
+            if let (Some(polygon), None) = (unioned.next(), unioned.next()) {
+                return Ok(Some((first, second, polygon)));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// The first `(i, j)` with `i < j` whose polygons *overlap in area*, or

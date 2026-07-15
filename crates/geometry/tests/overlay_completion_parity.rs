@@ -1,7 +1,9 @@
 //! Public-facade regression tests for degenerate and holed areal overlay.
 
 use boost_geometry::model::{MultiPolygon, Point2D, Polygon, Ring, polygon};
-use boost_geometry::prelude::{Cartesian, area, difference, intersection, sym_difference, r#union};
+use boost_geometry::prelude::{
+    Cartesian, Dimension, area, difference, intersection, relation, sym_difference, r#union,
+};
 use boost_geometry::trait_::{MultiPolygon as _, Polygon as _};
 
 type P = Point2D<f64, Cartesian>;
@@ -152,9 +154,33 @@ fn geos_repeated_boundary_points_preserve_areal_overlay() {
     ]));
 
     assert_eq!(intersection(&repeated, &adjacent).unwrap().0.len(), 0);
+    assert_eq!(
+        relation(&repeated, &adjacent).unwrap().boundary_boundary(),
+        Dimension::Curve
+    );
     assert!((total_area(&r#union(&repeated, &adjacent).unwrap()) - 20_000.0).abs() < 1e-9);
     assert!((total_area(&difference(&repeated, &adjacent).unwrap()) - 10_000.0).abs() < 1e-9);
     assert!((total_area(&sym_difference(&repeated, &adjacent).unwrap()) - 20_000.0).abs() < 1e-9);
+}
+
+/// The public overlay kernel uses a scale-relative snap tolerance. A collinear
+/// boundary edge shorter than that tolerance collapses to one canonical node
+/// without changing the represented polygon.
+#[test]
+fn scale_relative_snap_discards_a_collapsed_boundary_edge() {
+    let with_tiny_edge: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(0.0, 10.0),
+        P::new(60_000_000.0, 10.0),
+        P::new(60_000_000.0, 0.0),
+        P::new(59_999_999.999, 0.0),
+        P::new(0.0, 0.0),
+    ]));
+    let canonical = square(0.0, 0.0, 60_000_000.0, 10.0);
+
+    let overlap = intersection(&with_tiny_edge, &canonical).unwrap();
+    assert_eq!(overlap.polygons().count(), 1);
+    assert!((total_area(&overlap) - 600_000_000.0).abs() < 1e-6);
 }
 
 /// `test/algorithms/overlay/overlay.cpp:380-402` — hole boundaries participate

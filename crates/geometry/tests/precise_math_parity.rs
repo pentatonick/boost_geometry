@@ -6,7 +6,8 @@
 )]
 
 use boost_geometry::coords::precise_math::{
-    fast_expansion_sum_zeroelim, incircle, orient2d, two_product, two_sum, two_two_expansion_diff,
+    fast_expansion_sum_zeroelim, incircle, orient2d, scale_expansion_zeroelim, two_product,
+    two_sum, two_two_expansion_diff,
 };
 
 /// `util/precise_math.hpp:42-85` — error-free sums and products preserve the
@@ -65,4 +66,10 @@ fn expansion_difference_and_zero_eliminating_merge_cover_edge_inputs() {
     let length = fast_expansion_sum_zeroelim(&left, &right, &mut output);
     assert!(length >= 2);
     assert_eq!(output[..length].iter().sum::<f64>(), 1.0e16 + 2.0);
+
+    let factor = 1.0e16 + 2.0;
+    let length = scale_expansion_zeroelim(&[factor, -factor], 1.0e-16, &mut output);
+    assert_eq!(length, 2);
+    assert_ne!(output[0], 0.0);
+    assert_eq!(output[0], -output[1]);
 }

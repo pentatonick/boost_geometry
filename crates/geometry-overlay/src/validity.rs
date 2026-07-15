@@ -641,12 +641,12 @@ where
             if interaction.contacts.len() > 1 {
                 return Err(ValidityFailure::DisconnectedInterior);
             }
-            if interaction.contacts.is_empty()
+            let nested = interaction.contacts.is_empty()
                 && (ring_first_point_within(inners[first], inners[second])
-                    || ring_first_point_within(inners[second], inners[first]))
-            {
-                return Err(ValidityFailure::NestedInteriorRings);
-            }
+                    || ring_first_point_within(inners[second], inners[first]));
+            (!nested)
+                .then_some(())
+                .ok_or(ValidityFailure::NestedInteriorRings)?;
         }
     }
     Ok(())

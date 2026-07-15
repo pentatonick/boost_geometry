@@ -342,10 +342,10 @@ mod tests {
         ] {
             let expected = literal.parse::<f64>().unwrap();
             let tokens = tokenize(literal).unwrap();
-            let Token::Number(actual) = tokens[0] else {
-                panic!("expected number token");
-            };
-            assert_eq!(actual.to_bits(), expected.to_bits(), "literal {literal}");
+            assert!(
+                matches!(&tokens[0], Token::Number(actual) if actual.to_bits() == expected.to_bits()),
+                "literal {literal}: expected number token {expected:?}"
+            );
         }
     }
 

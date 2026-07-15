@@ -878,30 +878,28 @@ where
         }
         if !xy_equal(first_segment.0, first_segment.1) {
             for interval in segment_parameters(first_segment, &second_segments, &[]).windows(2) {
-                if interval[1] - interval[0] > f64::EPSILON {
-                    let sample = interpolate(
-                        first_segment.0,
-                        first_segment.1,
-                        (interval[0] + interval[1]) * 0.5,
-                    );
-                    let location = xy_location_linestring(sample, second);
-                    matrix.m[feature::INTERIOR][location.index()] = Dimension::Curve;
-                }
+                debug_assert!(interval[1] - interval[0] > f64::EPSILON);
+                let sample = interpolate(
+                    first_segment.0,
+                    first_segment.1,
+                    (interval[0] + interval[1]) * 0.5,
+                );
+                let location = xy_location_linestring(sample, second);
+                matrix.m[feature::INTERIOR][location.index()] = Dimension::Curve;
             }
         }
     }
     for &second_segment in &second_segments {
         if !xy_equal(second_segment.0, second_segment.1) {
             for interval in segment_parameters(second_segment, &first_segments, &[]).windows(2) {
-                if interval[1] - interval[0] > f64::EPSILON {
-                    let sample = interpolate(
-                        second_segment.0,
-                        second_segment.1,
-                        (interval[0] + interval[1]) * 0.5,
-                    );
-                    let location = xy_location_linestring(sample, first);
-                    matrix.m[location.index()][feature::INTERIOR] = Dimension::Curve;
-                }
+                debug_assert!(interval[1] - interval[0] > f64::EPSILON);
+                let sample = interpolate(
+                    second_segment.0,
+                    second_segment.1,
+                    (interval[0] + interval[1]) * 0.5,
+                );
+                let location = xy_location_linestring(sample, first);
+                matrix.m[location.index()][feature::INTERIOR] = Dimension::Curve;
             }
         }
     }
@@ -1319,9 +1317,8 @@ fn topology_segments(topology: &Topology) -> Vec<([f64; 2], [f64; 2])> {
     let mut segments = Vec::new();
     for line in &topology.lines {
         for points in line.windows(2) {
-            if !xy_equal(points[0], points[1]) {
-                segments.push((points[0], points[1]));
-            }
+            debug_assert!(!xy_equal(points[0], points[1]));
+            segments.push((points[0], points[1]));
         }
     }
     for polygon in &topology.polygons {
@@ -1351,11 +1348,15 @@ fn topology_location(topology: &Topology, point: [f64; 2]) -> Location {
                 on_line = true;
             }
         }
-        if let (Some(first), Some(last)) = (line.first(), line.last())
-            && !xy_equal(*first, *last)
-        {
-            endpoint_count += usize::from(xy_equal(point, *first));
-            endpoint_count += usize::from(xy_equal(point, *last));
+        let first = *line
+            .first()
+            .expect("topology lines have at least two points");
+        let last = *line
+            .last()
+            .expect("topology lines have at least two points");
+        if !xy_equal(first, last) {
+            endpoint_count += usize::from(xy_equal(point, first));
+            endpoint_count += usize::from(xy_equal(point, last));
         }
     }
     if on_line {
@@ -1398,12 +1399,12 @@ fn set_dimension(matrix: &mut De9im, row: Location, column: Location, dimension:
 fn segment_parameter(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> f64 {
     let dx = end[0] - start[0];
     let dy = end[1] - start[1];
-    if dx.abs() >= dy.abs() && dx != 0.0 {
+    if dx.abs() >= dy.abs() {
+        debug_assert_ne!(dx, 0.0);
         (point[0] - start[0]) / dx
-    } else if dy != 0.0 {
-        (point[1] - start[1]) / dy
     } else {
-        0.0
+        debug_assert_ne!(dy, 0.0);
+        (point[1] - start[1]) / dy
     }
 }
 
