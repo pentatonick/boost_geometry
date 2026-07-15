@@ -2,12 +2,14 @@
 
 use core::cmp::Ordering;
 
-use boost_geometry::model::{Point2D, Polygon, Ring};
+use boost_geometry::coords::Rational;
+use boost_geometry::model::{Point as ModelPoint, Point2D, Polygon, Ring};
 use boost_geometry::prelude::{
     Cartesian, Degree, Geographic, Radian, Spherical, ValidityFailure, ValidityOptions, is_valid,
     is_valid_with, validity_reason, validity_reason_with,
 };
 use boost_geometry::strategy::compare::{EqualTo, Greater, Less, LessExact};
+use boost_geometry::trait_::PointMut as _;
 
 type CartesianPoint = Point2D<f64, Cartesian>;
 const LESS: Less = Less;
@@ -157,6 +159,120 @@ fn spherical_and_geographic_compare_handle_angular_coordinates() {
         core::f64::consts::FRAC_PI_4,
     );
     assert!(EQUAL_TO.apply(&degrees, &radians));
+}
+
+/// The public angular policies cover explicit latitude and higher-dimension
+/// selection, pole equivalence, both antimeridian orderings, and every scalar
+/// conversion supported by angular coordinate systems.
+#[test]
+fn angular_compare_covers_dimensions_and_scalar_conversions() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let ordinary = SphericalPoint::new(20.0, 10.0);
+    let antimeridian = SphericalPoint::new(180.0, 10.0);
+    assert!(LESS.apply(&ordinary, &antimeridian));
+    assert!(GREATER.apply(&antimeridian, &ordinary));
+    assert!(LESS_EXACT.apply(&ordinary, &antimeridian));
+
+    assert!(EqualTo::<0>.apply(
+        &SphericalPoint::new(-30.0, 90.0),
+        &SphericalPoint::new(70.0, 90.0),
+    ));
+    assert!(EqualTo::<0>.apply(
+        &SphericalPoint::new(10.0, 0.0),
+        &SphericalPoint::new(10.0, 20.0),
+    ));
+    assert!(Less::<1>.apply(
+        &SphericalPoint::new(0.0, -10.0),
+        &SphericalPoint::new(0.0, 20.0),
+    ));
+    assert!(Greater::<1>.apply(
+        &SphericalPoint::new(0.0, 20.0),
+        &SphericalPoint::new(0.0, -10.0),
+    ));
+    assert!(EqualTo::<1>.apply(
+        &SphericalPoint::new(0.0, 20.0),
+        &SphericalPoint::new(10.0, 20.0),
+    ));
+
+    type SphericalPoint4 = ModelPoint<f64, 4, Spherical<Degree>>;
+    let point4 = |longitude, latitude, z, m| {
+        let mut point = SphericalPoint4::default();
+        point.set::<0>(longitude);
+        point.set::<1>(latitude);
+        point.set::<2>(z);
+        point.set::<3>(m);
+        point
+    };
+    let lower = point4(10.0, 20.0, 30.0, 40.0);
+    let higher_z = point4(10.0, 20.0, 31.0, 40.0);
+    let higher_m = point4(10.0, 20.0, 30.0, 41.0);
+    assert!(LESS.apply(&lower, &higher_z));
+    assert!(EQUAL_TO.apply(&lower, &lower));
+    assert!(Less::<2>.apply(&lower, &higher_z));
+    assert!(Less::<3>.apply(&lower, &higher_m));
+    assert!(EqualTo::<3>.apply(&lower, &higher_z));
+
+    let integer = Point2D::<i32, Geographic<Degree>>::new(0, 0);
+    let floating = Point2D::<f64, Geographic<Degree>>::new(1.0, 0.0);
+    assert!(LESS.apply(&integer, &floating));
+    assert!(GREATER.apply(&floating, &integer));
+
+    let single = Point2D::<f32, Spherical<Degree>>::new(1.0, 2.0);
+    let double = Point2D::<f64, Spherical<Degree>>::new(2.0, 2.0);
+    assert!(LESS.apply(&single, &double));
+
+    let rational = Point2D::<Rational<i64>, Spherical<Degree>>::new(
+        Rational::from_integer(1),
+        Rational::from_integer(2),
+    );
+    let rational_higher = Point2D::<Rational<i64>, Spherical<Degree>>::new(
+        Rational::from_integer(2),
+        Rational::from_integer(2),
+    );
+    assert!(LESS.apply(&rational, &rational_higher));
+}
+
+/// `test/policies/compare.cpp:241-250` exercises scalar-independent policy
+/// dispatch. The Rust public policy additionally accepts every pair in its
+/// integer, floating, and exact-rational comparison lattice.
+#[test]
+fn cartesian_compare_covers_the_public_scalar_lattice() {
+    macro_rules! assert_less {
+        ($left:expr, $right:expr) => {{
+            let left = Point2D::<_, Cartesian>::new($left, $left);
+            let right = Point2D::<_, Cartesian>::new($right, $right);
+            assert!(LESS.apply(&left, &right));
+        }};
+    }
+
+    assert_less!(1_i32, 2_i32);
+    assert_less!(1_i64, 2_i64);
+    assert_less!(1_i64, 2_i32);
+    assert_less!(1_f32, 2_f64);
+    assert_less!(1_f64, 2_f32);
+    assert_less!(1_i32, 2_f32);
+    assert_less!(1_f32, 2_i32);
+    assert_less!(1_i32, 2_f64);
+    assert_less!(1_f64, 2_i32);
+    assert_less!(1_i64, 2_f32);
+    assert_less!(1_f32, 2_i64);
+    assert_less!(1_i64, 2_f64);
+    assert_less!(1_f64, 2_i64);
+
+    let q32_one = Rational::<i32>::from_integer(1);
+    let q32_two = Rational::<i32>::from_integer(2);
+    let q64_one = Rational::<i64>::from_integer(1);
+    let q64_two = Rational::<i64>::from_integer(2);
+    assert_less!(q32_one, q64_two);
+    assert_less!(q64_one, q32_two);
+    assert_less!(q32_one, 2_i32);
+    assert_less!(1_i32, q32_two);
+    assert_less!(q64_one, 2_i64);
+    assert_less!(1_i64, q64_two);
+    assert_less!(q32_one, 2_f32);
+    assert_less!(1_f32, q32_two);
+    assert_less!(q64_one, 2_f64);
+    assert_less!(1_f64, q64_two);
 }
 
 fn duplicate_polygon() -> Polygon<CartesianPoint> {

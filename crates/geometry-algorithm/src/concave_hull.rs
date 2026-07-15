@@ -100,7 +100,7 @@ where
     deduplicate(&mut all_points);
 
     let mut boundary = convex_hull(geometry).0;
-    if boundary.len() > 1 && same_xy(boundary.first(), boundary.last()) {
+    while boundary.len() > 1 && same_xy(boundary.first(), boundary.last()) {
         boundary.pop();
     }
     if boundary.len() < 3 {
@@ -351,5 +351,47 @@ mod tests {
         );
         assert!(hull.outer.0.contains(&P::new(2.0, 1.0)));
         assert!(area(&hull).abs() < 16.0);
+    }
+
+    #[test]
+    fn private_intersection_guards_cover_invalid_insertions() {
+        type P = Point2D<f64, Cartesian>;
+        let boundary = [
+            P::new(0.0, 0.0),
+            P::new(0.0, 4.0),
+            P::new(4.0, 4.0),
+            P::new(4.0, 0.0),
+        ];
+        assert!(!insertion_is_simple(&boundary, 0, P::new(5.0, 2.0)));
+        assert!(!insertion_is_simple(&boundary, 0, P::new(5.0, -1.0)));
+
+        assert!(segments_intersect(
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+            P::new(1.0, 0.0),
+            P::new(1.0, 1.0),
+        ));
+        assert!(segments_intersect(
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+            P::new(1.0, 1.0),
+            P::new(1.0, 0.0),
+        ));
+        assert!(segments_intersect(
+            P::new(1.0, 0.0),
+            P::new(1.0, 1.0),
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+        ));
+        assert!(segments_intersect(
+            P::new(1.0, 1.0),
+            P::new(1.0, 0.0),
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+        ));
+        assert_eq!(
+            point_segment_distance(P::new(3.0, 4.0), P::new(0.0, 0.0), P::new(0.0, 0.0)),
+            5.0
+        );
     }
 }

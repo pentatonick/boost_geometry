@@ -371,7 +371,7 @@ mod tests {
     use geometry_cs::Cartesian;
     use geometry_model::{Point2D, Polygon, Ring};
 
-    use super::triangulate_earcut;
+    use super::*;
     use crate::area::area;
 
     #[test]
@@ -415,5 +415,56 @@ mod tests {
         assert_eq!(triangles.len(), 8);
         let sum: f64 = triangles.iter().map(|triangle| area(triangle).abs()).sum();
         assert!((sum - area(&polygon).abs()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn private_degenerate_clipping_and_intersection_guards() {
+        type P = Point2D<f64, Cartesian>;
+        assert_eq!(signed_area(&[P::new(0.0, 0.0), P::new(1.0, 0.0)]), 0.0);
+        assert!(clip_ears::<P>(&[]).is_empty());
+        assert!(
+            clip_ears(&[
+                P::new(0.0, 0.0),
+                P::new(1.0, 0.0),
+                P::new(2.0, 0.0),
+                P::new(3.0, 0.0),
+            ])
+            .is_empty()
+        );
+
+        assert!(segments_intersect(
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+            P::new(1.0, 0.0),
+            P::new(1.0, 1.0),
+        ));
+        assert!(segments_intersect(
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+            P::new(1.0, 1.0),
+            P::new(1.0, 0.0),
+        ));
+        assert!(segments_intersect(
+            P::new(1.0, 0.0),
+            P::new(1.0, 1.0),
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+        ));
+        assert!(segments_intersect(
+            P::new(1.0, 1.0),
+            P::new(1.0, 0.0),
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+        ));
+
+        let exterior = [P::new(0.0, 0.0), P::new(2.0, 0.0), P::new(0.0, 2.0)];
+        assert!(!bridge_is_visible(
+            exterior[0],
+            exterior[0],
+            0,
+            &exterior,
+            &[],
+            &[],
+        ));
     }
 }

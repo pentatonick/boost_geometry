@@ -62,6 +62,55 @@ fn chamberlain_duquette_area_is_public() {
     assert!((solid_angle - 0.000_304_601_954_726_850_5).abs() < 1e-12);
 }
 
+/// The opt-in spherical area strategy handles default radius scaling,
+/// interiors, declared counter-clockwise rings, and degenerate exteriors.
+#[test]
+fn chamberlain_duquette_covers_topology_and_orientation() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let outer: Ring<SphericalPoint> = Ring::from_vec(vec![
+        SphericalPoint::new(0.0, 0.0),
+        SphericalPoint::new(0.0, 2.0),
+        SphericalPoint::new(2.0, 2.0),
+        SphericalPoint::new(2.0, 0.0),
+        SphericalPoint::new(0.0, 0.0),
+    ]);
+    let mut hole: Ring<SphericalPoint> = Ring::from_vec(vec![
+        SphericalPoint::new(0.5, 0.5),
+        SphericalPoint::new(0.5, 1.5),
+        SphericalPoint::new(1.5, 1.5),
+        SphericalPoint::new(1.5, 0.5),
+        SphericalPoint::new(0.5, 0.5),
+    ]);
+    hole.0.reverse();
+    let outer_area = area_with(&Polygon::new(outer.clone()), ChamberlainDuquetteArea::UNIT);
+    let donut_area = area_with(
+        &Polygon::with_inners(outer.clone(), vec![hole]),
+        ChamberlainDuquetteArea::UNIT,
+    );
+    assert!(donut_area > 0.0 && donut_area < outer_area);
+
+    let earth_area = area_with(
+        &Polygon::new(outer.clone()),
+        ChamberlainDuquetteArea::default(),
+    );
+    assert!(
+        (earth_area - outer_area * ChamberlainDuquetteArea::EARTH.radius.powi(2)).abs()
+            < earth_area * 1e-12
+    );
+
+    let mut ccw_points = outer.0;
+    ccw_points.reverse();
+    let ccw: Polygon<SphericalPoint, false, true> =
+        Polygon::new(Ring::<SphericalPoint, false, true>::from_vec(ccw_points));
+    assert!((area_with(&ccw, ChamberlainDuquetteArea::UNIT) - outer_area).abs() < 1e-12);
+
+    let degenerate: Polygon<SphericalPoint> = Polygon::new(Ring::from_vec(vec![
+        SphericalPoint::new(0.0, 0.0),
+        SphericalPoint::new(1.0, 1.0),
+    ]));
+    assert_eq!(area_with(&degenerate, ChamberlainDuquetteArea::UNIT), 0.0);
+}
+
 /// Rhumb-line distance, bearing, destination, and linestring length are all
 /// reachable through named public entries, with an explicit-radius companion.
 #[test]
@@ -80,6 +129,40 @@ fn rhumb_measure_family_is_public() {
     let line = Linestring::from_vec(vec![start, east, SphericalPoint::new(2.0, 0.0)]);
     assert!((rhumb_length(&line) - 2.0 * distance).abs() < 1e-6);
     assert!((rhumb_distance_with(&start, &east, Rhumb::UNIT) - 1.0_f64.to_radians()).abs() < 1e-12);
+}
+
+/// Rhumb strategies expose custom radii, comparable distance, meridional
+/// motion, pole reflection, and the zero-scale destination guard publicly.
+#[test]
+fn rhumb_public_edge_cases_cover_poles_and_custom_radius() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let origin = SphericalPoint::new(0.0, 0.0);
+    let east = SphericalPoint::new(1.0, 0.0);
+    let custom = Rhumb::with_radius(2.0);
+    let expected = 2.0 * 1.0_f64.to_radians();
+    assert!((rhumb_distance_with(&origin, &east, custom) - expected).abs() < 1e-12);
+    assert!((comparable_distance_with(&origin, &east, custom) - expected).abs() < 1e-12);
+
+    let north = rhumb_destination(&origin, 0.0, Rhumb::EARTH.radius * 10.0_f64.to_radians());
+    assert!((north.get::<1>() - 10.0).abs() < 1e-12);
+
+    let reflected_north = rhumb_destination(
+        &SphericalPoint::new(0.0, 80.0),
+        0.0,
+        Rhumb::EARTH.radius * 20.0_f64.to_radians(),
+    );
+    assert!((reflected_north.get::<1>() - 80.0).abs() < 1e-12);
+    let reflected_south = rhumb_destination(
+        &SphericalPoint::new(0.0, -80.0),
+        core::f64::consts::PI,
+        Rhumb::EARTH.radius * 20.0_f64.to_radians(),
+    );
+    assert!((reflected_south.get::<1>() + 80.0).abs() < 1e-12);
+
+    let pole = SphericalPoint::new(30.0, 90.0);
+    let along_pole = rhumb_destination(&pole, core::f64::consts::FRAC_PI_2, 0.1);
+    assert!(along_pole.get::<0>().is_finite());
+    assert!(along_pole.get::<1>().is_finite());
 }
 
 /// Minimum rectangles and both concave-hull parameter faces operate on public
@@ -115,6 +198,105 @@ fn derived_hulls_are_public() {
     assert!(defaulted.outer.0.contains(&P2::new(2.0, 1.0)));
     let knn = k_nearest_concave_hull(&points, 3);
     assert!(knn.outer.0.contains(&P2::new(2.0, 1.0)));
+}
+
+/// Empty, point, segment, and sub-epsilon point sets exercise the documented
+/// degenerate minimum-rectangle contract through the public facade.
+#[test]
+fn minimum_rotated_rect_handles_degenerate_point_sets() {
+    let empty = minimum_rotated_rect(&MultiPoint::<P2>::from_vec(vec![]));
+    assert!(empty.outer.0.is_empty());
+
+    let point = P2::new(2.0, 3.0);
+    let single = minimum_rotated_rect(&MultiPoint::from_vec(vec![point]));
+    assert_eq!(single.outer.0, vec![point; 5]);
+
+    let first = P2::new(0.0, 0.0);
+    let second = P2::new(2.0, 2.0);
+    let segment = minimum_rotated_rect(&MultiPoint::from_vec(vec![first, second]));
+    assert_eq!(segment.outer.0.len(), 5);
+    assert_eq!(area(&segment), 0.0);
+    assert!(segment.outer.0.contains(&first));
+    assert!(segment.outer.0.contains(&second));
+
+    let tiny = f64::EPSILON / 4.0;
+    let sub_epsilon = minimum_rotated_rect(&MultiPoint::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(tiny, 0.0),
+        P2::new(0.0, tiny),
+    ]));
+    assert!(sub_epsilon.outer.0.is_empty());
+}
+
+/// Degenerate point sets and an over-large edge threshold are reference cases
+/// from the upstream concave-hull suite. They remain observable through the
+/// public facade, including the documented `k == 0` convex-hull boundary.
+#[test]
+fn concave_hull_handles_degenerate_and_threshold_boundaries() {
+    let empty = MultiPoint::<P2>::from_vec(vec![]);
+    assert!(concave_hull(&empty).outer.0.is_empty());
+
+    let repeated = MultiPoint::from_vec(vec![P2::new(1.0, 1.0); 4]);
+    assert_eq!(
+        concave_hull(&repeated).outer.0,
+        vec![P2::new(1.0, 1.0), P2::new(1.0, 1.0)]
+    );
+
+    let collinear = MultiPoint::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(2.0, 2.0),
+        P2::new(6.0, 6.0),
+    ]);
+    let collinear_hull = concave_hull(&collinear);
+    assert_eq!(collinear_hull.outer.0.len(), 3);
+    assert_eq!(
+        collinear_hull.outer.0.first(),
+        collinear_hull.outer.0.last()
+    );
+    assert!(collinear_hull.outer.0.contains(&P2::new(0.0, 0.0)));
+    assert!(collinear_hull.outer.0.contains(&P2::new(6.0, 6.0)));
+
+    let points = MultiPoint::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(2.0, 0.0),
+        P2::new(1.5, 1.0),
+        P2::new(2.0, 2.0),
+        P2::new(0.0, 2.0),
+    ]);
+    let thresholded = concave_hull_with(
+        &points,
+        ConcaveHullParams {
+            concavity: 1.2,
+            length_threshold: 3.0,
+        },
+    );
+    let convex = k_nearest_concave_hull(&points, 0);
+    assert_eq!(thresholded, convex);
+    assert_eq!(convex.outer.0.len(), 5);
+}
+
+/// The upstream consecutive-drilling fixture supplies several candidates per
+/// edge. The public implementation must retain every point while producing a
+/// closed, simple boundary.
+#[test]
+fn concave_hull_orders_multiple_edge_candidates() {
+    let points = MultiPoint::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(2.0, 1.0),
+        P2::new(4.0, 0.0),
+        P2::new(3.0, 2.0),
+        P2::new(4.0, 4.0),
+        P2::new(2.0, 3.0),
+        P2::new(0.0, 4.0),
+        P2::new(1.0, 2.0),
+    ]);
+
+    let hull = k_nearest_concave_hull(&points, points.0.len());
+    assert_eq!(hull.outer.0.first(), hull.outer.0.last());
+    assert!(is_simple(&hull));
+    for point in points.0 {
+        assert!(hull.outer.0.contains(&point));
+    }
 }
 
 /// Native ear clipping and monotone subdivision expose owned stock polygons;
@@ -153,6 +335,57 @@ fn earcut_rejects_an_unbridgeable_hole_atomically() {
 
     let triangles = triangulate_earcut(&polygon);
     assert_eq!(triangles.len(), 0);
+}
+
+/// Public ear clipping rejects undersized and collinear exteriors, ignores
+/// redundant adjacent vertices, and removes collinear boundary vertices while
+/// preserving the polygon's area.
+#[test]
+fn earcut_handles_degenerate_and_redundant_vertices() {
+    let degenerate_exteriors: [Ring<P2>; 3] = [
+        Ring::from_vec(vec![]),
+        Ring::from_vec(vec![P2::new(0.0, 0.0), P2::new(1.0, 1.0)]),
+        Ring::from_vec(vec![
+            P2::new(0.0, 0.0),
+            P2::new(1.0, 1.0),
+            P2::new(2.0, 2.0),
+            P2::new(0.0, 0.0),
+        ]),
+    ];
+    for exterior in degenerate_exteriors {
+        assert!(triangulate_earcut(&Polygon::new(exterior)).is_empty());
+    }
+
+    let polygon: Polygon<P2> = Polygon::new(Ring::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(0.0, 2.0),
+        P2::new(2.0, 2.0),
+        P2::new(2.0, 0.0),
+        P2::new(1.0, 0.0),
+        P2::new(1.0, 0.0),
+        P2::new(0.0, 0.0),
+    ]));
+    let triangles = triangulate_earcut(&polygon);
+    assert_eq!(triangles.len(), 3);
+    assert!(triangles.iter().all(|triangle| area(triangle).abs() > 0.0));
+    let triangle_area: f64 = triangles.iter().map(|triangle| area(triangle).abs()).sum();
+    assert!((triangle_area - area(&polygon).abs()).abs() < 1e-12);
+}
+
+/// Multiple independently visible holes exercise the public bridge selection
+/// path. Their triangulation must cover the exterior minus both interiors.
+#[test]
+fn earcut_triangulates_multiple_holes() {
+    let mut first_hole = square_ring(1.0, 1.0, 2.0);
+    first_hole.0.reverse();
+    let mut second_hole = square_ring(6.0, 6.0, 2.0);
+    second_hole.0.reverse();
+    let polygon = Polygon::with_inners(square_ring(0.0, 0.0, 10.0), vec![first_hole, second_hole]);
+
+    let triangles = triangulate_earcut(&polygon);
+    assert_eq!(triangles.len(), 14);
+    let triangle_area: f64 = triangles.iter().map(|triangle| area(triangle).abs()).sum();
+    assert!((triangle_area - area(&polygon).abs()).abs() < 1e-12);
 }
 
 /// `test/algorithms/correct_closure.cpp:51-84` — fix closure without changing
@@ -776,6 +1009,46 @@ fn chaikin_smoothing_subdivides_an_open_linestring() {
     );
 }
 
+/// The public Chaikin dispatch preserves polygon topology, open-ring closure
+/// declarations, degenerate inputs, and all four supported ordinates.
+#[test]
+fn chaikin_smoothing_covers_stock_topologies_and_dimensions() {
+    let empty = Linestring::<P2>::from_vec(vec![]);
+    assert!(chaikin_smoothing(&empty, 2).0.is_empty());
+    let singleton = Linestring::from_vec(vec![P2::new(1.0, 2.0)]);
+    assert_eq!(chaikin_smoothing(&singleton, 1), singleton);
+
+    let short_ring: Ring<P2> = Ring::from_vec(vec![P2::new(0.0, 0.0), P2::new(1.0, 0.0)]);
+    assert_eq!(chaikin_smoothing(&short_ring, 1), short_ring);
+
+    let open_ring: Ring<P2, true, false> = Ring::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(0.0, 2.0),
+        P2::new(2.0, 0.0),
+    ]);
+    let smoothed_open = chaikin_smoothing(&open_ring, 1);
+    assert_eq!(smoothed_open.0.len(), 6);
+    assert_ne!(smoothed_open.0.first(), smoothed_open.0.last());
+
+    let polygon =
+        Polygon::with_inners(square_ring(0.0, 0.0, 4.0), vec![square_ring(1.0, 1.0, 1.0)]);
+    let smoothed_polygon = chaikin_smoothing(&polygon, 1);
+    assert_eq!(smoothed_polygon.outer.0.len(), 9);
+    assert_eq!(smoothed_polygon.inners.len(), 1);
+    assert_eq!(smoothed_polygon.inners[0].0.len(), 9);
+
+    let line3 = Linestring::from_vec(vec![P3::new(0.0, 2.0, 4.0), P3::new(4.0, 6.0, 8.0)]);
+    let smoothed3 = chaikin_smoothing(&line3, 1);
+    assert_eq!(smoothed3.0[1], P3::new(1.0, 3.0, 5.0));
+
+    let mut start4 = P4::default();
+    start4.set::<3>(4.0);
+    let mut end4 = P4::default();
+    end4.set::<3>(8.0);
+    let smoothed4 = chaikin_smoothing(&Linestring::from_vec(vec![start4, end4]), 1);
+    assert_eq!(smoothed4.0[1].get::<3>(), 5.0);
+}
+
 /// Named strategies construct the existing affine matrix engine rather than
 /// introducing separate transform implementations.
 #[test]
@@ -786,7 +1059,14 @@ fn named_affine_strategies_feed_the_public_transform_entry() {
         P2::new(4.0, 6.0)
     );
     assert_eq!(transform(&point, &Scale::uniform(2.0)), P2::new(2.0, 4.0));
+    assert_eq!(transform(&point, &Scale::by(2.0, 3.0)), P2::new(2.0, 6.0));
     assert_eq!(transform(&point, &Skew::by(2.0, 0.0)), P2::new(5.0, 2.0));
+    let skewed_radians = transform(&point, &Skew::radians(0.0, core::f64::consts::FRAC_PI_4));
+    assert!((skewed_radians.get::<0>() - 1.0).abs() < 1e-12);
+    assert!((skewed_radians.get::<1>() - 3.0).abs() < 1e-12);
+    let skewed_degrees = transform(&point, &Skew::degrees(45.0, 0.0));
+    assert!((skewed_degrees.get::<0>() - 3.0).abs() < 1e-12);
+    assert!((skewed_degrees.get::<1>() - 2.0).abs() < 1e-12);
 
     let rotated = transform(&P2::new(1.0, 0.0), &Rotate::degrees(90.0));
     assert!(rotated.get::<0>().abs() < 1e-12);
@@ -841,6 +1121,33 @@ fn segmentize_with_haversine_uses_spherical_interpolation() {
     assert!((pieces.0[1].0[0].get::<0>() - 1.0).abs() < 1e-12);
 }
 
+/// Segmentization preserves all four Cartesian ordinates, retains a wholly
+/// degenerate line as one piece, and uses its documented linear fallback for
+/// antipodal spherical endpoints.
+#[test]
+fn segmentize_handles_dimensions_and_degenerate_metrics() {
+    let mut end = P4::default();
+    end.set::<0>(4.0);
+    end.set::<1>(8.0);
+    end.set::<2>(12.0);
+    end.set::<3>(16.0);
+    let pieces = linestring_segmentize(&Linestring::from_vec(vec![P4::default(), end]), 2);
+    assert_eq!(pieces.0[0].0[1].get::<2>(), 6.0);
+    assert_eq!(pieces.0[0].0[1].get::<3>(), 8.0);
+
+    let repeated = Linestring::from_vec(vec![P2::new(1.0, 1.0), P2::new(1.0, 1.0)]);
+    let degenerate = linestring_segmentize(&repeated, 3);
+    assert_eq!(degenerate.0, vec![repeated]);
+
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let antipodal = Linestring::from_vec(vec![
+        SphericalPoint::new(0.0, 0.0),
+        SphericalPoint::new(180.0, 0.0),
+    ]);
+    let antipodal_pieces = linestring_segmentize_with(&antipodal, 2, Haversine::UNIT);
+    assert!((antipodal_pieces.0[0].0[1].get::<0>() - 90.0).abs() < 1e-12);
+}
+
 /// The ported spherical cross-track and closest-point strategies share the
 /// same projection and are both reachable through explicit public entries.
 #[test]
@@ -857,6 +1164,72 @@ fn spherical_cross_track_and_closest_point_are_public() {
     assert!((source.get::<1>() - point.get::<1>()).abs() < 1e-12);
     assert!((projected.get::<0>() - 1.0).abs() < 1e-9);
     assert!(projected.get::<1>().abs() < 1e-9);
+}
+
+/// Reference cross-track cases cover degenerate segments, projections beyond
+/// the minor arc, polar projection fallback, reversed dispatch, and comparable
+/// strategy construction through the public facade.
+#[test]
+fn spherical_cross_track_public_edge_cases_choose_endpoints() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let point = SphericalPoint::new(1.0, 1.0);
+    let endpoint = SphericalPoint::new(2.0, 2.0);
+    let degenerate = Segment::new(endpoint, endpoint);
+    let distance = distance_with(&point, &degenerate, CrossTrack::UNIT);
+    assert!((distance - 0.024_678_3).abs() < 1e-6);
+    let projected_degenerate =
+        closest_points_with(&point, &degenerate, HaversineClosestPoints::UNIT).1;
+    assert_eq!(projected_degenerate.get::<0>(), endpoint.get::<0>());
+    assert_eq!(projected_degenerate.get::<1>(), endpoint.get::<1>());
+
+    let segment = Segment::new(
+        SphericalPoint::new(10.0, 15.0),
+        SphericalPoint::new(30.0, 15.0),
+    );
+    let beyond = SphericalPoint::new(5.0, 10.0);
+    let forward = distance_with(&beyond, &segment, CrossTrack::default());
+    let reverse = distance_with(&segment, &beyond, CrossTrack::default());
+    let expected_endpoint = distance_with(&beyond, segment.start(), Haversine::EARTH);
+    assert!((forward - expected_endpoint).abs() < 1e-9);
+    assert!((forward - reverse).abs() < 1e-9);
+    assert_eq!(
+        comparable_distance_with(&beyond, &segment, CrossTrack::default()),
+        forward
+    );
+    let (projected, source) =
+        closest_points_with(&segment, &beyond, HaversineClosestPoints::default());
+    assert_eq!(source.get::<0>(), beyond.get::<0>());
+    assert_eq!(source.get::<1>(), beyond.get::<1>());
+    assert_eq!(projected.get::<0>(), segment.start().get::<0>());
+    assert_eq!(projected.get::<1>(), segment.start().get::<1>());
+
+    let equator = Segment::new(
+        SphericalPoint::new(-10.0, 0.0),
+        SphericalPoint::new(10.0, 0.0),
+    );
+    let pole = SphericalPoint::new(0.0, 90.0);
+    let (_, projected_pole) = closest_points_with(&pole, &equator, HaversineClosestPoints::UNIT);
+    assert!(
+        (projected_pole.get::<0>() - equator.start().get::<0>()).abs() < 1e-12
+            || (projected_pole.get::<0>() - equator.end().get::<0>()).abs() < 1e-12
+    );
+    assert!(projected_pole.get::<1>().abs() < 1e-12);
+}
+
+/// Non-positive and NaN area tolerances are public no-op cases for the
+/// Visvalingam–Whyatt strategies.
+#[test]
+fn visvalingam_whyatt_non_positive_and_nan_tolerances_copy_through() {
+    let line = Linestring::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(1.0, 1.0),
+        P2::new(2.0, 0.0),
+    ]);
+    assert_eq!(simplify_with(&line, 0.0, VisvalingamWhyatt), line);
+    assert_eq!(
+        simplify_with(&line, f64::NAN, VisvalingamWhyattPreserve),
+        line
+    );
 }
 
 /// Value mapping can change scalar type, while the in-place face mutates every
@@ -879,6 +1252,106 @@ fn map_coords_supports_rebind_and_in_place_faces() {
     });
     assert_eq!(shifted.0[0], P2::new(11.0, 2.0));
     assert_eq!(shifted.0[1], P2::new(13.0, 4.0));
+}
+
+/// Every stock geometry implementation is reachable through the public
+/// facade. Mapping preserves topology, including polygon interiors and each
+/// member of multi-geometries; in-place mapping visits the same stored points.
+#[test]
+fn map_coords_supports_every_stock_geometry() {
+    let shift = |point: &P2| P2::new(point.get::<0>() + 10.0, point.get::<1>() - 1.0);
+
+    let point = P2::new(1.0, 2.0);
+    assert_eq!(map_coords(&point, shift), P2::new(11.0, 1.0));
+
+    let ring = square_ring(0.0, 0.0, 2.0);
+    let mapped_ring: Ring<P2> = map_coords(&ring, shift);
+    assert_eq!(mapped_ring.0.len(), ring.0.len());
+    assert_eq!(mapped_ring.0[2], P2::new(12.0, 1.0));
+
+    let polygon = Polygon::with_inners(ring.clone(), vec![square_ring(0.5, 0.5, 0.5)]);
+    let mapped_polygon: Polygon<P2> = map_coords(&polygon, shift);
+    assert_eq!(mapped_polygon.outer.0.len(), polygon.outer.0.len());
+    assert_eq!(mapped_polygon.inners.len(), 1);
+    assert_eq!(mapped_polygon.inners[0].0[0], P2::new(10.5, -0.5));
+
+    let points = MultiPoint::from_vec(vec![P2::new(1.0, 2.0), P2::new(3.0, 4.0)]);
+    let mapped_points: MultiPoint<P2> = map_coords(&points, shift);
+    assert_eq!(
+        mapped_points.0,
+        vec![P2::new(11.0, 1.0), P2::new(13.0, 3.0)]
+    );
+
+    let lines = MultiLinestring::from_vec(vec![
+        Linestring::from_vec(vec![P2::new(0.0, 0.0), P2::new(1.0, 1.0)]),
+        Linestring::from_vec(vec![P2::new(2.0, 2.0)]),
+    ]);
+    let mapped_lines: MultiLinestring<Linestring<P2>> = map_coords(&lines, shift);
+    assert_eq!(mapped_lines.0.len(), 2);
+    assert_eq!(mapped_lines.0[1].0[0], P2::new(12.0, 1.0));
+
+    let polygons = MultiPolygon::from_vec(vec![polygon.clone(), Polygon::new(ring.clone())]);
+    let mapped_polygons: MultiPolygon<Polygon<P2>> = map_coords(&polygons, shift);
+    assert_eq!(mapped_polygons.0.len(), 2);
+    assert_eq!(mapped_polygons.0[0].inners.len(), 1);
+    assert_eq!(mapped_polygons.0[1].outer.0[1], P2::new(12.0, -1.0));
+
+    let bounds = ModelBox::from_corners(P2::new(-1.0, -2.0), P2::new(3.0, 4.0));
+    let mapped_bounds: ModelBox<P2> = map_coords(&bounds, shift);
+    assert_eq!(mapped_bounds.get_indexed::<0, 0>(), 9.0);
+    assert_eq!(mapped_bounds.get_indexed::<1, 1>(), 3.0);
+
+    let segment = Segment::new(P2::new(-2.0, 3.0), P2::new(4.0, 5.0));
+    let mapped_segment: Segment<P2> = map_coords(&segment, shift);
+    assert_eq!(mapped_segment.get_indexed::<0, 0>(), 8.0);
+    assert_eq!(mapped_segment.get_indexed::<1, 1>(), 4.0);
+
+    let mut point_mut = point;
+    let mut line_mut = Linestring::from_vec(vec![point]);
+    let mut ring_mut = ring;
+    let mut polygon_mut = polygon;
+    let mut points_mut = points;
+    let mut lines_mut = lines;
+    let mut polygons_mut = polygons;
+    let mut bounds_mut = bounds;
+    let mut segment_mut = segment;
+    map_coords_in_place(&mut point_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0)
+    });
+    map_coords_in_place(&mut line_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0)
+    });
+    map_coords_in_place(&mut ring_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0)
+    });
+    map_coords_in_place(&mut polygon_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0)
+    });
+    map_coords_in_place(&mut points_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0)
+    });
+    map_coords_in_place(&mut lines_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0)
+    });
+    map_coords_in_place(&mut polygons_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0)
+    });
+    map_coords_in_place(&mut bounds_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0)
+    });
+    map_coords_in_place(&mut segment_mut, |point| {
+        point.set::<0>(point.get::<0>() + 10.0)
+    });
+
+    assert_eq!(point_mut, P2::new(11.0, 2.0));
+    assert_eq!(line_mut.0[0], P2::new(11.0, 2.0));
+    assert_eq!(ring_mut.0[2], P2::new(12.0, 2.0));
+    assert_eq!(polygon_mut.inners[0].0[0], P2::new(10.5, 0.5));
+    assert_eq!(points_mut.0[1], P2::new(13.0, 4.0));
+    assert_eq!(lines_mut.0[1].0[0], P2::new(12.0, 2.0));
+    assert_eq!(polygons_mut.0[1].outer.0[1], P2::new(12.0, 0.0));
+    assert_eq!(bounds_mut.get_indexed::<0, 0>(), 9.0);
+    assert_eq!(segment_mut.get_indexed::<1, 0>(), 14.0);
 }
 
 /// `test/algorithms/intersects/intersects.cpp:23-30` — polygons wholly inside

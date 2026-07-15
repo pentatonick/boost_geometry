@@ -328,7 +328,9 @@ mod tests {
 
     extern crate alloc;
 
-    use super::{DouglasPeucker, SimplifyStrategy};
+    use super::{
+        DouglasPeucker, SimplifyStrategy, orientation, point_on_segment, segments_intersect,
+    };
     use crate::cartesian::{PointToSegment, Pythagoras};
     use alloc::vec;
     use alloc::vec::Vec;
@@ -395,5 +397,39 @@ mod tests {
         let dup: Linestring<Pt> = linestring![(0., 0.), (0., 0.), (0., 0.), (5., 0.)];
         let s2 = default_dp().simplify(&dup, -1.0);
         assert_eq!(s2.0.len(), 4, "negative tolerance keeps every vertex");
+    }
+
+    #[test]
+    fn private_collinear_intersection_guards_cover_every_endpoint_order() {
+        let a = Pt::new(0.0, 0.0);
+        let b = Pt::new(2.0, 0.0);
+        assert!(segments_intersect(
+            &a,
+            &b,
+            &Pt::new(1.0, 0.0),
+            &Pt::new(1.0, 1.0)
+        ));
+        assert!(segments_intersect(
+            &a,
+            &b,
+            &Pt::new(1.0, 1.0),
+            &Pt::new(1.0, 0.0)
+        ));
+        assert!(segments_intersect(
+            &Pt::new(1.0, 0.0),
+            &Pt::new(1.0, 1.0),
+            &a,
+            &b,
+        ));
+        assert!(segments_intersect(
+            &Pt::new(1.0, 1.0),
+            &Pt::new(1.0, 0.0),
+            &a,
+            &b,
+        ));
+        assert_eq!(orientation(&a, &b, &Pt::new(1.0, 1.0)), 1);
+        assert_eq!(orientation(&a, &b, &Pt::new(1.0, -1.0)), -1);
+        assert_eq!(orientation(&a, &b, &Pt::new(1.0, 0.0)), 0);
+        assert!(point_on_segment(&Pt::new(1.0, 0.0), &a, &b));
     }
 }

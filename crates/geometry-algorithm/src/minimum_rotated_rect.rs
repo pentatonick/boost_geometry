@@ -29,7 +29,7 @@ where
 {
     let hull = convex_hull(geometry);
     let mut points = hull.0;
-    if points.len() > 1 && same_xy(points.first(), points.last()) {
+    while points.len() > 1 && same_xy(points.first(), points.last()) {
         points.pop();
     }
     match points.len() {
