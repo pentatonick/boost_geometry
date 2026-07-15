@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/pentatonick/boost_geometry/compare/geometry-coords-v0.0.7...geometry-coords-v0.0.8) - 2026-07-15
+
+### Added
+
+- complete parity tier two algorithms
+
+### Other
+
+- close remaining executable coverage gaps
+- expand parity edge coverage
+- Restore no_std support after algorithms port
+- Complete algorithms parity port
+
 ## [0.0.7](https://github.com/pentatonick/boost_geometry/compare/geometry-coords-v0.0.6...geometry-coords-v0.0.7) - 2026-07-14
 
 ### Fixed

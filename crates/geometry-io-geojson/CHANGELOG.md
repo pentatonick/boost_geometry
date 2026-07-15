@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/pentatonick/boost_geometry/compare/geometry-io-geojson-v0.0.7...geometry-io-geojson-v0.0.8) - 2026-07-15
+
+### Fixed
+
+- cover algorithm parity edge cases
+- preserve exact cardinal Karney results
+
+### Other
+
+- generate the feature table from pub-use tags
+- close remaining executable coverage gaps
+- expand parity edge coverage
+- Complete algorithms parity port
+
 ## [0.0.7](https://github.com/pentatonick/boost_geometry/compare/geometry-io-geojson-v0.0.6...geometry-io-geojson-v0.0.7) - 2026-07-14
 
 ### Fixed

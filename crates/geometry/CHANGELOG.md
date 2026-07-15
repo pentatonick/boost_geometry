@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/pentatonick/boost_geometry/compare/v0.0.7...v0.0.8) - 2026-07-15
+
+### Added
+
+- complete parity tier two algorithms
+- complete parity tier one algorithms
+- complete parity tier zero algorithms
+- complete policy parity
+- complete relate and buffer strategy parity
+- expose expand, buffer, union, relate, and _with strategy variants
+
+### Fixed
+
+- cover algorithm parity edge cases
+- preserve exact cardinal Karney results
+- harden overlay edge cases
+
+### Other
+
+- generate the feature table from pub-use tags
+- apply clippy lints and tighten float assertions
+- close remaining executable coverage gaps
+- expand parity edge coverage
+- extend overlay edge coverage
+- extend public algorithm edge coverage
+- expand algorithm edge case coverage
+- optimize polygon intersection predicates
+- Complete R-tree feature parity
+- Complete algorithms parity port
+
 ## [0.0.7](https://github.com/pentatonick/boost_geometry/compare/v0.0.6...v0.0.7) - 2026-07-14
 
 ### Fixed
