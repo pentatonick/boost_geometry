@@ -464,6 +464,30 @@ fn areal_offset_handles_collinear_duplicate_and_collapsed_boundaries() {
     let collapsed_result = buffer_with(&collapsed, miter_settings(1.0)).unwrap();
     assert_eq!(collapsed_result.0.len(), 1);
     assert!((buffered_area(&collapsed_result) - 1.0).abs() < 1e-12);
+
+    let near_parallel: Polygon<P> = Polygon::new(Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(1.0, 0.0),
+        P::new(2.0, 1e-20),
+        P::new(2.0, 2.0),
+        P::new(0.0, 2.0),
+        P::new(0.0, 0.0),
+    ]));
+    assert!(
+        !buffer_with(&near_parallel, miter_settings(1.0))
+            .unwrap()
+            .0
+            .is_empty()
+    );
+
+    let exact_collapse: Polygon<P> =
+        polygon![[(0.0, 0.0), (0.0, 2.0), (2.0, 2.0), (2.0, 0.0), (0.0, 0.0)]];
+    assert!(
+        buffer_with(&exact_collapse, miter_settings(-1.0))
+            .unwrap()
+            .0
+            .is_empty()
+    );
 }
 
 /// `test/algorithms/buffer/buffer_point_geo.cpp:34-49` — the default
@@ -674,4 +698,196 @@ fn angular_segment_ring_box_and_multi_dispatch_is_public() {
             .count(),
         2
     );
+}
+
+/// Angular projection failures are observable through the public buffer
+/// contract: invalid radii/spheroids, poles, empty inputs, and invalid
+/// projected members all return `Unsupported` instead of producing non-finite
+/// coordinates.
+#[test]
+fn angular_buffer_rejects_invalid_projection_inputs() {
+    type GeographicPoint = Point2D<f64, Geographic<Degree>>;
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+
+    let point = SphericalPoint::new(0.0, 0.0);
+    let round = BufferSettings::round(100.0, 36);
+    for radius in [f64::NAN, 0.0, -1.0] {
+        assert!(matches!(
+            buffer_with_strategy(&point, round, SphericalBuffer::new(radius)),
+            Err(OverlayError::Unsupported)
+        ));
+    }
+    for strategy in [SphericalBuffer::UNIT, SphericalBuffer::new(6_371_008.8)] {
+        for pole in [
+            SphericalPoint::new(0.0, 90.0),
+            SphericalPoint::new(0.0, -90.0),
+        ] {
+            assert!(matches!(
+                buffer_with_strategy(&pole, round, strategy),
+                Err(OverlayError::Unsupported)
+            ));
+        }
+    }
+
+    let geographic = GeographicPoint::new(0.0, 0.0);
+    for spheroid in [
+        Spheroid {
+            equatorial_radius: f64::NAN,
+            flattening: 0.0,
+        },
+        Spheroid {
+            equatorial_radius: 0.0,
+            flattening: 0.0,
+        },
+        Spheroid {
+            equatorial_radius: 1.0,
+            flattening: f64::NAN,
+        },
+        Spheroid {
+            equatorial_radius: 1.0,
+            flattening: -0.1,
+        },
+        Spheroid {
+            equatorial_radius: 1.0,
+            flattening: 1.0,
+        },
+    ] {
+        assert!(matches!(
+            buffer_with_strategy(&geographic, round, GeographicBuffer::new(spheroid)),
+            Err(OverlayError::Unsupported)
+        ));
+    }
+    let geographic_pole = buffer_with_strategy(
+        &GeographicPoint::new(0.0, 90.0),
+        round,
+        GeographicBuffer::WGS84,
+    );
+    assert!(matches!(geographic_pole, Err(OverlayError::Unsupported)));
+
+    let spherical = SphericalBuffer::new(6_371_008.8);
+    let empty_line = Linestring::<SphericalPoint>::from_vec(Vec::new());
+    let empty_ring = Ring::<SphericalPoint>::from_vec(Vec::new());
+    let empty_polygon = Polygon::<SphericalPoint>::new(Ring::from_vec(Vec::new()));
+    let empty_points = MultiPoint::<SphericalPoint>::from_vec(Vec::new());
+    let empty_lines = MultiLinestring::<Linestring<SphericalPoint>>::from_vec(Vec::new());
+    let empty_polygons = MultiPolygon::<Polygon<SphericalPoint>>::from_vec(Vec::new());
+    assert!(matches!(
+        buffer_with_strategy(&empty_line, round, spherical),
+        Err(OverlayError::Unsupported)
+    ));
+    assert!(matches!(
+        buffer_with_strategy(&empty_ring, round, spherical),
+        Err(OverlayError::Unsupported)
+    ));
+    assert!(matches!(
+        buffer_with_strategy(&empty_polygon, round, spherical),
+        Err(OverlayError::Unsupported)
+    ));
+    assert!(matches!(
+        buffer_with_strategy(&empty_points, round, spherical),
+        Err(OverlayError::Unsupported)
+    ));
+    assert!(matches!(
+        buffer_with_strategy(&empty_lines, round, spherical),
+        Err(OverlayError::Unsupported)
+    ));
+    assert!(matches!(
+        buffer_with_strategy(&empty_polygons, round, spherical),
+        Err(OverlayError::Unsupported)
+    ));
+
+    let short_line = Linestring::from_vec(vec![point]);
+    let short_ring: Ring<SphericalPoint> = Ring::from_vec(vec![point]);
+    let short_polygon = Polygon::new(short_ring.clone());
+    assert!(matches!(
+        buffer_with_strategy(&short_line, round, spherical),
+        Err(OverlayError::Unsupported)
+    ));
+    let short_ring_result = buffer_with_strategy(&short_ring, round, spherical);
+    let short_polygon_result = buffer_with_strategy(&short_polygon, round, spherical);
+    assert!(short_ring_result.unwrap().0.is_empty());
+    assert!(short_polygon_result.unwrap().0.is_empty());
+
+    let valid_ring: Ring<SphericalPoint> = Ring::from_vec(vec![
+        SphericalPoint::new(-0.1, -0.1),
+        SphericalPoint::new(-0.1, 0.1),
+        SphericalPoint::new(0.1, 0.1),
+        SphericalPoint::new(0.1, -0.1),
+        SphericalPoint::new(-0.1, -0.1),
+    ]);
+    let valid_polygon = Polygon::new(valid_ring.clone());
+    let asymmetric = BufferSettings {
+        distance: BufferDistanceStrategy::Asymmetric {
+            left: 10.0,
+            right: 20.0,
+        },
+        ..round
+    };
+    assert!(matches!(
+        buffer_with_strategy(&valid_ring, asymmetric, spherical),
+        Err(OverlayError::Unsupported)
+    ));
+    assert!(matches!(
+        buffer_with_strategy(&valid_polygon, asymmetric, spherical),
+        Err(OverlayError::Unsupported)
+    ));
+}
+
+/// The local angular projection must choose the short path across the date
+/// line and normalize every generated longitude back into the public range.
+/// A holed areal input also exercises interior-ring reprojection.
+#[test]
+fn angular_buffer_wraps_antimeridian_and_reprojects_holes() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let spherical = SphericalBuffer::new(6_371_008.8);
+
+    for longitude in [179.999, -179.999] {
+        let result = buffer_with_strategy(
+            &SphericalPoint::new(longitude, 0.0),
+            BufferSettings::round(1_000.0, 72),
+            spherical,
+        )
+        .unwrap();
+        let ring = result.polygons().next().unwrap().exterior();
+        assert!(
+            ring.points()
+                .all(|point| (-180.0..=180.0).contains(&point.x()))
+        );
+        assert!(ring.points().any(|point| point.x().is_sign_positive()));
+        assert!(ring.points().any(|point| point.x().is_sign_negative()));
+    }
+
+    for longitudes in [[-170.0, -170.0, 170.0], [170.0, 170.0, -170.0]] {
+        let line = Linestring::from_vec(
+            longitudes
+                .into_iter()
+                .enumerate()
+                .map(|(index, longitude)| SphericalPoint::new(longitude, index as f64 * 0.01))
+                .collect(),
+        );
+        assert!(
+            !buffer_with_strategy(&line, BufferSettings::round(100.0, 36), spherical)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+    }
+
+    let outer: Ring<SphericalPoint> = Ring::from_vec(vec![
+        SphericalPoint::new(-0.1, -0.1),
+        SphericalPoint::new(-0.1, 0.1),
+        SphericalPoint::new(0.1, 0.1),
+        SphericalPoint::new(0.1, -0.1),
+        SphericalPoint::new(-0.1, -0.1),
+    ]);
+    let inner: Ring<SphericalPoint> = Ring::from_vec(vec![
+        SphericalPoint::new(-0.04, -0.04),
+        SphericalPoint::new(0.04, -0.04),
+        SphericalPoint::new(0.04, 0.04),
+        SphericalPoint::new(-0.04, 0.04),
+        SphericalPoint::new(-0.04, -0.04),
+    ]);
+    let donut = Polygon::with_inners(outer, vec![inner]);
+    let result = buffer_with_strategy(&donut, BufferSettings::round(100.0, 36), spherical).unwrap();
+    assert_eq!(result.polygons().next().unwrap().interiors().count(), 1);
 }

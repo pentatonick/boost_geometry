@@ -1388,6 +1388,7 @@ fn segment_parameter(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> f64 {
 fn segment_parameters(
     segment: ([f64; 2], [f64; 2]),
     all_segments: &[([f64; 2], [f64; 2])],
+    split_points: &[[f64; 2]],
 ) -> Vec<f64> {
     let mut parameters = alloc::vec![0.0, 1.0];
     for &(start, end) in all_segments {
@@ -1405,6 +1406,11 @@ fn segment_parameters(
             SegmentRelation::Disjoint => {}
         }
     }
+    for &point in split_points {
+        if point_on_segment(point, segment.0, segment.1) {
+            parameters.push(segment_parameter(point, segment.0, segment.1));
+        }
+    }
     parameters.retain(|parameter| (-f64::EPSILON..=1.0 + f64::EPSILON).contains(parameter));
     parameters.sort_by(f64::total_cmp);
     parameters.dedup_by(|first, second| (*first - *second).abs() <= f64::EPSILON);
@@ -1418,7 +1424,8 @@ fn record_segment_cells(
     segment: ([f64; 2], [f64; 2]),
     all_segments: &[([f64; 2], [f64; 2])],
 ) {
-    for interval in segment_parameters(segment, all_segments).windows(2) {
+    let parameters = segment_parameters(segment, all_segments, &second.points);
+    for interval in parameters.windows(2) {
         if interval[1] - interval[0] <= f64::EPSILON {
             continue;
         }
@@ -1505,7 +1512,7 @@ fn relate_topologies(first: &Topology, second: &Topology) -> Result<De9im, Overl
         record_segment_cells(&mut matrix, first, second, segment, &all_segments);
     }
     for &segment in &second_segments {
-        for interval in segment_parameters(segment, &all_segments).windows(2) {
+        for interval in segment_parameters(segment, &all_segments, &first.points).windows(2) {
             if interval[1] - interval[0] <= f64::EPSILON {
                 continue;
             }

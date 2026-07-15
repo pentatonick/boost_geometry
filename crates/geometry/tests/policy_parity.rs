@@ -338,6 +338,34 @@ fn validity_failures_expose_reference_reason_messages() {
             ValidityFailure::InvalidCoordinate,
             "Geometry has point(s) with invalid coordinate(s)",
         ),
+        (
+            ValidityFailure::CoordinateOutOfRange,
+            "Geometry has coordinate(s) outside the supported arithmetic range",
+        ),
+        (
+            ValidityFailure::CollinearPointsOnFace,
+            "Geometry has collinear points on a face",
+        ),
+        (
+            ValidityFailure::NonCoplanarPointsOnFace,
+            "Geometry has non-coplanar points on a face",
+        ),
+        (
+            ValidityFailure::FewPointsOnFace,
+            "Geometry has too few points on a face",
+        ),
+        (
+            ValidityFailure::InconsistentOrientation,
+            "Geometry has inconsistent surface orientation",
+        ),
+        (
+            ValidityFailure::InvalidIntersection,
+            "Geometry has invalid face intersections",
+        ),
+        (
+            ValidityFailure::DisconnectedSurface,
+            "Geometry has a disconnected surface",
+        ),
     ];
     for (failure, reason) in reference_reasons {
         assert_eq!(failure.message(), reason);
@@ -363,6 +391,11 @@ fn validity_failures_expose_reference_reason_messages() {
 /// and the Boost behavior is selected explicitly through the public facade.
 #[test]
 fn validity_options_preserve_strict_behavior_and_offer_boost_defaults() {
+    let custom = ValidityOptions::new(true, false);
+    assert!(custom.allows_duplicates());
+    assert!(!custom.allows_spikes_for_linear());
+    assert_eq!(ValidityOptions::default(), ValidityOptions::STRICT);
+
     let duplicate = duplicate_polygon();
     assert_eq!(is_valid(&duplicate), Err(ValidityFailure::DuplicatePoints));
     assert!(is_valid_with(&duplicate, ValidityOptions::BOOST_DEFAULT).is_ok());

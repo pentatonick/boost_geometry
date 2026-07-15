@@ -438,3 +438,117 @@ fn segment_dynamic_and_collection_reverse_pairs_are_public() {
             .unwrap()
     );
 }
+
+/// `test/algorithms/relate/relate_linear_linear.cpp:104-139` and
+/// `relate_gc.cpp:55-111` — generic topology dispatch promotes degenerate
+/// linear/areal inputs to their actual dimension and recursively expands every
+/// runtime multi/collection variant.
+#[test]
+fn generic_topology_dispatch_covers_degenerate_and_dynamic_variants() {
+    let segment = Segment::new(P::new(0.0, 0.0), P::new(4.0, 0.0));
+    let line = Linestring::from_vec(vec![P::new(2.0, -1.0), P::new(2.0, 1.0)]);
+    assert_eq!(
+        relation(&line, &segment).unwrap().interior_interior(),
+        Dimension::Point
+    );
+
+    let degenerate_line = Linestring::from_vec(vec![P::new(1.0, 0.0), P::new(1.0, 0.0)]);
+    assert_eq!(
+        relation(&degenerate_line, &segment)
+            .unwrap()
+            .interior_interior(),
+        Dimension::Point
+    );
+
+    let degenerate_polygon: Polygon<P> =
+        Polygon::new(Ring::from_vec(vec![P::new(1.0, 0.0), P::new(3.0, 0.0)]));
+    assert_eq!(
+        relation(&degenerate_polygon, &segment)
+            .unwrap()
+            .interior_interior(),
+        Dimension::Curve
+    );
+
+    let dynamic_multi_point = DynGeometry::MultiPoint(MultiPoint::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(2.0, 2.0),
+    ]));
+    assert_eq!(
+        relation(&dynamic_multi_point, &P::new(2.0, 2.0))
+            .unwrap()
+            .interior_interior(),
+        Dimension::Point
+    );
+
+    let dynamic_multi_line = DynGeometry::MultiLineString(MultiLinestring::from_vec(vec![
+        Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(2.0, 2.0)]),
+    ]));
+    assert_eq!(
+        relation(&dynamic_multi_line, &P::new(1.0, 1.0))
+            .unwrap()
+            .interior_interior(),
+        Dimension::Point
+    );
+
+    let dynamic_multi_polygon = DynGeometry::MultiPolygon(MultiPolygon::from_vec(vec![square()]));
+    assert_eq!(
+        relation(&dynamic_multi_polygon, &P::new(2.0, 2.0))
+            .unwrap()
+            .interior_interior(),
+        Dimension::Point
+    );
+
+    let nested = DynGeometry::GeometryCollection(vec![DynGeometry::GeometryCollection(vec![
+        dynamic_multi_point,
+        dynamic_multi_line,
+        dynamic_multi_polygon,
+    ])]);
+    assert!(
+        relation(&nested, &P::new(1.0, 1.0))
+            .unwrap()
+            .interior_interior()
+            .is_set()
+    );
+}
+
+/// Generic topology range checks cover point/line storage and polygon holes.
+/// The reversed linear–areal order exercises the second public `crosses`
+/// alternative rather than relying only on matrix transposition.
+#[test]
+fn generic_topology_rejects_out_of_range_members_and_crosses_both_orders() {
+    let segment = Segment::new(P::new(-1.0, 2.0), P::new(5.0, 2.0));
+    assert!(matches!(
+        relation(&P::new(f64::MAX, 0.0), &segment),
+        Err(OverlayError::Unsupported)
+    ));
+
+    let polygon_with_bad_hole = Polygon::with_inners(
+        square().outer,
+        vec![Ring::from_vec(vec![
+            P::new(1.0, 1.0),
+            P::new(f64::MAX, 1.0),
+            P::new(2.0, 2.0),
+            P::new(1.0, 1.0),
+        ])],
+    );
+    assert!(matches!(
+        relation(&polygon_with_bad_hole, &segment),
+        Err(OverlayError::Unsupported)
+    ));
+
+    let donut = Polygon::with_inners(
+        square().outer,
+        vec![Ring::from_vec(vec![
+            P::new(1.0, 1.0),
+            P::new(3.0, 1.0),
+            P::new(3.0, 3.0),
+            P::new(1.0, 3.0),
+            P::new(1.0, 1.0),
+        ])],
+    );
+    assert!(relation(&donut, &segment).is_ok());
+
+    let bounds = ModelBox::from_corners(P::new(0.0, 0.0), P::new(4.0, 4.0));
+    assert!(crosses(&segment, &bounds).unwrap());
+    assert!(crosses(&bounds, &segment).unwrap());
+}

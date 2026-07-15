@@ -646,10 +646,11 @@ impl AngularBufferProjection for SphericalBuffer {
         if !self.radius.is_finite() || self.radius <= 0.0 {
             return Err(OverlayError::Unsupported);
         }
-        let east_scale = self.radius * cos(latitude);
-        if east_scale.abs() <= f64::EPSILON {
+        let longitude_scale = cos(latitude);
+        if longitude_scale.abs() <= f64::EPSILON {
             return Err(OverlayError::Unsupported);
         }
+        let east_scale = self.radius * longitude_scale;
         Ok(LocalProjection {
             longitude,
             latitude,
@@ -676,10 +677,11 @@ impl AngularBufferProjection for GeographicBuffer {
         let prime_vertical = spheroid.equatorial_radius / denominator;
         let meridional = spheroid.equatorial_radius * (1.0 - eccentricity_squared)
             / (denominator * denominator * denominator);
-        let east_scale = prime_vertical * cos(latitude);
-        if east_scale.abs() <= f64::EPSILON {
+        let longitude_scale = cos(latitude);
+        if longitude_scale.abs() <= f64::EPSILON {
             return Err(OverlayError::Unsupported);
         }
+        let east_scale = prime_vertical * longitude_scale;
         Ok(LocalProjection {
             longitude,
             latitude,

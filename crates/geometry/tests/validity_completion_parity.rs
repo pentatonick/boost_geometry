@@ -96,6 +96,32 @@ fn polygon_detects_disconnected_interior() {
         is_valid(&holes_share_edge),
         Err(ValidityFailure::SelfIntersection)
     );
+
+    // `test/algorithms/is_valid.cpp` case pg067: two otherwise disjoint
+    // holes touch at two isolated points, disconnecting the polygon interior.
+    let holes_touch_twice: Polygon<P> = polygon![
+        [
+            (0.0, 0.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 0.0),
+            (0.0, 0.0)
+        ],
+        [
+            (1.0, 1.0),
+            (2.0, 1.0),
+            (2.0, 8.0),
+            (9.0, 8.0),
+            (9.0, 9.0),
+            (1.0, 9.0),
+            (1.0, 1.0)
+        ],
+        [(2.0, 5.0), (5.0, 5.0), (5.0, 8.0), (2.0, 5.0)]
+    ];
+    assert_eq!(
+        is_valid(&holes_touch_twice),
+        Err(ValidityFailure::DisconnectedInterior)
+    );
 }
 
 /// `test/algorithms/is_valid.cpp:929-970` — multi-polygons may touch at an
@@ -103,6 +129,11 @@ fn polygon_detects_disconnected_interior() {
 /// interiors may not overlap/share an edge.
 #[test]
 fn multipolygon_checks_inter_member_topology() {
+    let invalid_member: MultiPolygon<Polygon<P>> = MultiPolygon::from_vec(vec![Polygon::new(
+        boost_geometry::model::Ring::from_vec(vec![P::new(0.0, 0.0)]),
+    )]);
+    assert_eq!(is_valid(&invalid_member), Err(ValidityFailure::FewPoints));
+
     let overlapping =
         MultiPolygon::from_vec(vec![square(0.0, 0.0, 4.0, 4.0), square(2.0, 2.0, 6.0, 6.0)]);
     assert_eq!(
