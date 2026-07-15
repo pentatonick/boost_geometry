@@ -6,6 +6,9 @@
 # This workspace ships libraries only, so the lockfile is not committed.
 Cargo.lock
 
+# Coverage instrumentation output (cargo llvm-cov / -C instrument-coverage)
+*.profraw
+
 # IDE and editor cruft
 .idea/
 .vscode/
