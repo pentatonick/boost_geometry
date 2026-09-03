@@ -665,10 +665,20 @@ where
             return Err(ValidityFailure::InteriorRingOutside);
         }
         let interaction = ring_pair_interaction(polygon.exterior(), *inner);
-        if interaction.proper_crossing {
+        // A hole that shares a *curve* with the exterior is a
+        // self-intersection, the same way two holes sharing one is (below).
+        // Only isolated contacts that cut the interior in two are
+        // `failure_disconnected_interior`. Boost 1.83, exterior
+        // (0,0)-(10,10) clockwise:
+        //
+        //   hole fully interior                        valid
+        //   hole touching the exterior at one point    valid
+        //   hole touching it at two points             failure=32
+        //   hole sharing a segment of it               failure=21
+        if interaction.proper_crossing || interaction.overlap {
             return Err(ValidityFailure::SelfIntersection);
         }
-        if interaction.overlap || interaction.contacts.len() > 1 {
+        if interaction.contacts.len() > 1 {
             return Err(ValidityFailure::DisconnectedInterior);
         }
     }

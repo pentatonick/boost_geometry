@@ -61,12 +61,22 @@ fn polygon_rejects_crossing_and_nested_interior_rings() {
     );
 }
 
-/// `test/algorithms/is_valid.cpp:612-628,680-687` — an exterior-edge contact
-/// can disconnect the polygon interior while isolated boundary points remain
-/// admissible.
+/// How a hole may and may not meet the exterior, and which failure each way
+/// of being wrong reports. Boost 1.83, exterior `(0,0)-(10,10)` clockwise:
+///
+/// ```text
+/// hole fully interior                      valid
+/// hole touching the exterior at one point  valid
+/// hole sharing a segment of it             failure=21
+/// hole touching it at two isolated points  failure=32
+/// ```
+///
+/// A shared *curve* is a self-intersection, the same as two holes sharing
+/// one. Only isolated contacts that cut the interior in two are
+/// `failure_disconnected_interior`.
 #[test]
 fn polygon_detects_disconnected_interior() {
-    let edge_touch: Polygon<P> = polygon![
+    let shared_edge: Polygon<P> = polygon![
         [
             (0.0, 0.0),
             (0.0, 10.0),
@@ -77,9 +87,39 @@ fn polygon_detects_disconnected_interior() {
         [(0.0, 3.0), (3.0, 3.0), (3.0, 7.0), (0.0, 7.0), (0.0, 3.0)]
     ];
     assert_eq!(
-        is_valid(&edge_touch),
+        is_valid(&shared_edge),
+        Err(ValidityFailure::SelfIntersection)
+    );
+
+    // A hole reaching from the top edge to the bottom one, meeting each at a
+    // single point: the interior really is cut in two.
+    let pinched_in_two: Polygon<P> = polygon![
+        [
+            (0.0, 0.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 0.0),
+            (0.0, 0.0)
+        ],
+        [(5.0, 10.0), (2.0, 5.0), (5.0, 0.0), (8.0, 5.0), (5.0, 10.0)]
+    ];
+    assert_eq!(
+        is_valid(&pinched_in_two),
         Err(ValidityFailure::DisconnectedInterior)
     );
+
+    // One isolated contact leaves the interior connected.
+    let touches_once: Polygon<P> = polygon![
+        [
+            (0.0, 0.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 0.0),
+            (0.0, 0.0)
+        ],
+        [(5.0, 10.0), (2.0, 5.0), (8.0, 5.0), (5.0, 10.0)]
+    ];
+    assert!(is_valid(&touches_once).is_ok());
 
     let holes_share_edge: Polygon<P> = polygon![
         [
