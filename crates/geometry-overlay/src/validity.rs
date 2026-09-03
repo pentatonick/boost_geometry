@@ -540,15 +540,18 @@ where
         return Err(ValidityFailure::Spikes);
     }
 
-    // No non-adjacent edge may intersect another.
-    if has_self_intersection(&pts) {
-        return Err(ValidityFailure::SelfIntersection);
-    }
-
     // Orientation — Boost's failure_wrong_orientation. The strategy area
     // already folds the declared PointOrder: a correctly wound exterior
     // is positive, a correctly wound hole negative. Zero area
     // (degenerate) fails either way.
+    //
+    // Checked *before* self-intersection, because that is the order Boost
+    // reports in: a counter-clockwise ring that also crosses itself comes
+    // back `failure_wrong_orientation`, and only a correctly wound ring
+    // goes on to be reported as `failure_self_intersections`. Spikes still
+    // come first — a wrongly wound ring carrying a spike is
+    // `failure_spikes`. Verified against Boost 1.83; see
+    // `orientation_is_reported_before_self_intersection`.
     let area = ShoelaceArea.area(ring);
     let zero = <P::Scalar as CoordinateScalar>::ZERO;
     let properly_oriented = if is_interior {
@@ -558,6 +561,11 @@ where
     };
     if !properly_oriented {
         return Err(ValidityFailure::WrongOrientation);
+    }
+
+    // No non-adjacent edge may intersect another.
+    if has_self_intersection(&pts) {
+        return Err(ValidityFailure::SelfIntersection);
     }
 
     Ok(())
@@ -842,7 +850,10 @@ mod tests {
             is_valid_ring(&huge_bowtie),
             Err(ValidityFailure::CoordinateOutOfRange)
         );
-        // The in-range analogue is still caught as a self-intersection.
+        // The in-range analogue is still caught — as WrongOrientation,
+        // which is what Boost 1.83 reports for it: a bow-tie has zero
+        // signed area, so it fails the orientation test before the
+        // self-intersection test is ever reached.
         let small_bowtie: Ring<P> = Ring::from_vec(vec![
             P::new(0.0, 0.0),
             P::new(2.0, 2.0),
@@ -852,7 +863,7 @@ mod tests {
         ]);
         assert_eq!(
             is_valid_ring(&small_bowtie),
-            Err(ValidityFailure::SelfIntersection)
+            Err(ValidityFailure::WrongOrientation)
         );
     }
 
@@ -869,7 +880,11 @@ mod tests {
 
     #[test]
     fn self_intersecting_bowtie() {
-        // A "bow-tie" quadrilateral whose diagonals cross.
+        // A "bow-tie" quadrilateral whose diagonals cross. Its two lobes
+        // cancel, so its signed area is zero and Boost reports the
+        // orientation failure rather than the crossing:
+        //
+        //   bowtie (zero area)  valid=0 failure=22  area=+0
         let r: Ring<P> = Ring::from_vec(vec![
             P::new(0.0, 0.0),
             P::new(2.0, 2.0),
@@ -877,7 +892,70 @@ mod tests {
             P::new(0.0, 2.0),
             P::new(0.0, 0.0),
         ]);
-        assert_eq!(is_valid_ring(&r), Err(ValidityFailure::SelfIntersection));
+        assert_eq!(is_valid_ring(&r), Err(ValidityFailure::WrongOrientation));
+    }
+
+    /// The order the ring checks report in, pinned against Boost 1.83.
+    ///
+    /// Boost runs spikes, then orientation, then self-intersection, and
+    /// stops at the first failure. Getting the last two the wrong way round
+    /// is not cosmetic: a caller that branches on the code — tilemaker's
+    /// `buildWayGeometry` re-clips on `failure_self_intersections` but not
+    /// on `failure_wrong_orientation` — takes a different path.
+    #[test]
+    fn orientation_is_reported_before_self_intersection() {
+        // ccw + selfint no spike   valid=0 failure=22  area=-17
+        let wound_wrong_and_crossing: Ring<P> = Ring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(4.0, 0.0),
+            P::new(4.0, 4.0),
+            P::new(0.0, 4.0),
+            P::new(0.0, 0.0),
+            P::new(1.0, -1.0),
+            P::new(3.0, -3.0),
+            P::new(1.0, -3.0),
+            P::new(3.0, -1.0),
+            P::new(0.0, 0.0),
+        ]);
+        assert_eq!(
+            is_valid_ring(&wound_wrong_and_crossing),
+            Err(ValidityFailure::WrongOrientation)
+        );
+
+        // cw self-int, +area       valid=0 failure=21  area=+98
+        let wound_right_and_crossing: Ring<P> = Ring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(0.0, 10.0),
+            P::new(10.0, 10.0),
+            P::new(10.0, 0.0),
+            P::new(0.0, 0.0),
+            P::new(3.0, -4.0),
+            P::new(7.0, -4.0),
+            P::new(3.0, -8.0),
+            P::new(7.0, -8.0),
+            P::new(0.0, 0.0),
+        ]);
+        assert_eq!(
+            is_valid_ring(&wound_right_and_crossing),
+            Err(ValidityFailure::SelfIntersection)
+        );
+
+        // ccw + real spike         valid=0 failure=12  area=-16
+        // Spikes still win over orientation.
+        let wound_wrong_with_spike: Ring<P> = Ring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+            P::new(2.0, -2.0),
+            P::new(2.0, 0.0),
+            P::new(4.0, 0.0),
+            P::new(4.0, 4.0),
+            P::new(0.0, 4.0),
+            P::new(0.0, 0.0),
+        ]);
+        assert_eq!(
+            is_valid_ring(&wound_wrong_with_spike),
+            Err(ValidityFailure::Spikes)
+        );
     }
 
     #[test]
