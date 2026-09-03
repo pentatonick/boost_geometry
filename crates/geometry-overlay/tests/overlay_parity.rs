@@ -419,3 +419,42 @@ fn two_turns_on_one_segment_are_ordered_by_the_second_operand() {
         ]
     );
 }
+
+/// A square and a rectangle overlapping along part of one side, running the
+/// same way round. The rectangle's corner at `(50, 100)` lands part-way along
+/// the square's top edge, and this arrangement splits there — but Boost walks
+/// the square across it without stopping, because the square has no vertex
+/// there, so the point never reaches the output.
+///
+/// The square's own corner at `(100, 100)` is a different matter: it is a
+/// vertex of the operand being walked, and it survives — until the ring-start
+/// cleaning takes it, which is why the answer begins at `(150, 100)`.
+#[test]
+fn a_point_the_walked_operand_runs_straight_past_is_not_emitted() {
+    let square: Polygon<P> = polygon![[
+        (0.0, 0.0),
+        (0.0, 100.0),
+        (100.0, 100.0),
+        (100.0, 0.0),
+        (0.0, 0.0)
+    ]];
+    let overlapping: Polygon<P> = polygon![[
+        (50.0, 100.0),
+        (150.0, 100.0),
+        (150.0, 50.0),
+        (50.0, 50.0),
+        (50.0, 100.0)
+    ]];
+    assert_eq!(
+        vertices(&union_poly(&square, &overlapping).unwrap()),
+        vec![
+            (150.0, 100.0),
+            (150.0, 50.0),
+            (100.0, 50.0),
+            (100.0, 0.0),
+            (0.0, 0.0),
+            (0.0, 100.0),
+            (150.0, 100.0),
+        ]
+    );
+}

@@ -173,12 +173,30 @@ struct Node<P> {
     /// indices have tied — the fraction must not outrank the second operand,
     /// or two turns sharing one edge come out in the wrong order.
     offset: [f64; 2],
+    /// Whether this node is a *vertex* of each operand, as against a point
+    /// that only lies on its boundary because the other operand touches there.
+    is_vertex: [bool; 2],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 struct Edge {
     start: usize,
     end: usize,
+    /// Which operands' boundaries run along this edge. A stretch the two share
+    /// is carried by both.
+    ///
+    /// Boost walks one operand at a time between turns and copies *that*
+    /// operand's vertices, so a point sitting inside a segment of the operand
+    /// being walked never reaches the output, whoever else has a vertex there.
+    /// Reproducing that needs to know who carries each edge — see
+    /// `drop_points_interior_to_a_walked_segment`.
+    carried_by: [bool; 2],
+}
+
+impl Edge {
+    fn joins(&self, other: &Self) -> bool {
+        self.start == other.start && self.end == other.end
+    }
 }
 
 /// Execute a polygon Boolean operation through a split-edge arrangement.
@@ -285,7 +303,7 @@ where
     );
 
     let sample_distance = (scale * 1e-8).max(snap_tolerance * 32.0);
-    let mut boundary = Vec::new();
+    let mut boundary: Vec<Edge> = Vec::new();
     for candidate in candidates {
         let start = nodes[candidate.start].coordinate;
         let end = nodes[candidate.end].coordinate;
@@ -318,10 +336,18 @@ where
             Edge {
                 start: candidate.end,
                 end: candidate.start,
+                carried_by: candidate.carried_by,
             }
         };
-        if !boundary.contains(&edge) {
-            boundary.push(edge);
+        // The same stretch reaches here once per operand that carries it, so
+        // merge rather than drop the second: who carries an edge is what says
+        // whether a point on it is interior to a walked segment.
+        match boundary.iter_mut().find(|held| held.joins(&edge)) {
+            Some(held) => {
+                held.carried_by[0] |= edge.carried_by[0];
+                held.carried_by[1] |= edge.carried_by[1];
+            }
+            None => boundary.push(edge),
         }
     }
 
@@ -423,8 +449,20 @@ fn append_atomic_edges<P>(
                 nodes[end].arrival[operand] = index;
                 nodes[end].offset[operand] = pair[1].0;
             }
+            if pair[0].0 == 0.0 || pair[0].0 == 1.0 {
+                nodes[start].is_vertex[operand] = true;
+            }
+            if pair[1].0 == 0.0 || pair[1].0 == 1.0 {
+                nodes[end].is_vertex[operand] = true;
+            }
             if start != end {
-                output.push(Edge { start, end });
+                let mut carried_by = [false; 2];
+                carried_by[operand] = true;
+                output.push(Edge {
+                    start,
+                    end,
+                    carried_by,
+                });
             }
         }
     }
@@ -451,6 +489,7 @@ where
         is_turn,
         arrival: [usize::MAX; 2],
         offset: [0.0; 2],
+        is_vertex: [false; 2],
     });
     nodes.len() - 1
 }
@@ -478,11 +517,15 @@ where
         let first = edges[seed].start;
         let mut edge_index = seed;
         let mut node_indices = alloc::vec![first];
+        // `carried[i]` is who carries the edge from `node_indices[i]` to the
+        // node after it, so it always has one entry fewer.
+        let mut carried: alloc::vec::Vec<[bool; 2]> = alloc::vec::Vec::new();
         for _ in 0..=edges.len() {
             debug_assert!(!used[edge_index]);
             used[edge_index] = true;
             let edge = edges[edge_index];
             node_indices.push(edge.end);
+            carried.push(edge.carried_by);
 
             // A node the walk has already stood on closes a ring right here,
             // not only when the walk returns to the seed. Where two lobes of
@@ -496,8 +539,9 @@ where
                 .position(|&index| index == edge.end)
             {
                 let loop_nodes = node_indices.split_off(start);
+                let loop_carried = carried.split_off(start);
                 node_indices.push(edge.end);
-                push_ring(&mut rings, nodes, &loop_nodes, tolerance);
+                push_ring(&mut rings, nodes, &loop_nodes, &loop_carried, tolerance);
             }
 
             if edge.end == first {
@@ -519,6 +563,69 @@ where
         .collect())
 }
 
+/// Remove a point the first operand runs straight past.
+///
+/// This arrangement splits a segment wherever anything touches it, so a vertex
+/// of one operand landing part-way along a segment of the other becomes a
+/// point on the traced ring. Boost's traversal does not work that way: between
+/// two turns it copies the vertices of the single operand it is walking, and a
+/// point that operand has no vertex at is simply passed over.
+///
+/// Along a stretch both operands carry, the operand walked is the first, so
+/// that is the one whose vertices survive. Two guards keep the rule honest:
+/// the point must be collinear with its neighbours, because anywhere the
+/// outline actually turns the point is part of the shape whoever owns it; and
+/// a point the first operand does have a vertex at stays, because Boost would
+/// copy it.
+///
+/// Not every such point is caught. Where the two operands run the same way
+/// along a shared edge, Boost emits one turn for the overlap and puts it at
+/// the far end, so the near end goes too — 12 of 112 shared-edge pairs still
+/// differ on that, and closing them needs `get_turns`' own collinear turn
+/// handling rather than a rule over the arrangement.
+fn drop_points_interior_to_a_walked_segment<P>(
+    nodes: &[Node<P>],
+    cycle: &mut Vec<usize>,
+    carried: &mut Vec<[bool; 2]>,
+) where
+    P: Point + Copy,
+    P::Scalar: Into<f64>,
+{
+    let mut index = 0;
+    while index < cycle.len() && cycle.len() > 3 {
+        let length = cycle.len();
+        let incoming = carried[(index + length - 1) % length];
+        let outgoing = carried[index];
+        let node = &nodes[cycle[index]];
+        // Boost walks one operand at a time between turns and copies *that*
+        // operand's vertices. Along a stretch both operands carry, it walks
+        // the first — so a point the first operand runs straight past, having
+        // no vertex there, never reaches the output however many vertices the
+        // second has at it.
+        let walked_over = incoming[0] && outgoing[0] && !node.is_vertex[0];
+        if !walked_over {
+            index += 1;
+            continue;
+        }
+        let previous = nodes[cycle[(index + length - 1) % length]].coordinate;
+        let here = node.coordinate;
+        let next = nodes[cycle[(index + 1) % length]].coordinate;
+        let side = (here.x - previous.x) * (next.y - previous.y)
+            - (here.y - previous.y) * (next.x - previous.x);
+        if side != 0.0 {
+            index += 1;
+            continue;
+        }
+        // The two edges become one, carried by whoever carried both halves.
+        let merged = [incoming[0] && outgoing[0], incoming[1] && outgoing[1]];
+        cycle.remove(index);
+        carried.remove(index);
+        let previous_edge = (index + cycle.len() - 1) % cycle.len();
+        carried[previous_edge] = merged;
+        index = 0;
+    }
+}
+
 /// Append one traced cycle, dropping it when it encloses no area.
 ///
 /// The cycle starts wherever the traversal happened to seed, which carries no
@@ -532,6 +639,7 @@ fn push_ring<P>(
     rings: &mut Vec<(usize, Ring<P>, bool)>,
     nodes: &[Node<P>],
     node_indices: &[usize],
+    carried: &[[bool; 2]],
     tolerance: f64,
 ) where
     P: Point + Copy,
@@ -547,7 +655,10 @@ fn push_ring<P>(
     }
 
     // The cycle is closed, so its last index repeats its first.
-    let cycle = &node_indices[..node_indices.len() - 1];
+    let mut cycle = node_indices[..node_indices.len() - 1].to_vec();
+    let mut carried = carried.to_vec();
+    drop_points_interior_to_a_walked_segment(nodes, &mut cycle, &mut carried);
+    let cycle = &cycle[..];
     // Boost begins each output ring at the first *turn* along the first
     // operand's boundary — `Node::arrival`, which is that order with Boost's
     // endpoint normalisation applied.
@@ -701,6 +812,7 @@ mod tests {
                 is_turn: false,
                 arrival: [0, 0],
                 offset: [0.0; 2],
+                is_vertex: [true; 2],
             },
             Node {
                 point: P::new(1.0, 0.0),
@@ -708,6 +820,7 @@ mod tests {
                 is_turn: false,
                 arrival: [1, 1],
                 offset: [0.0; 2],
+                is_vertex: [true; 2],
             },
             Node {
                 point: P::new(2.0, 0.0),
@@ -715,12 +828,25 @@ mod tests {
                 is_turn: false,
                 arrival: [2, 2],
                 offset: [0.0; 2],
+                is_vertex: [true; 2],
             },
         ];
         let edges = [
-            Edge { start: 0, end: 1 },
-            Edge { start: 1, end: 2 },
-            Edge { start: 2, end: 0 },
+            Edge {
+                start: 0,
+                end: 1,
+                carried_by: [true; 2],
+            },
+            Edge {
+                start: 1,
+                end: 2,
+                carried_by: [true; 2],
+            },
+            Edge {
+                start: 2,
+                end: 0,
+                carried_by: [true; 2],
+            },
         ];
 
         assert!(trace_rings(&nodes, &edges, 1e-10).unwrap().is_empty());
