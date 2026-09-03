@@ -153,6 +153,17 @@ struct Node<P> {
     /// starts each output ring at a turn, so the tracer needs to know which
     /// nodes are turns; see `push_ring`.
     is_turn: bool,
+    /// Where this node sits along the operands' boundaries, first operand
+    /// first — and, where it lands exactly on a vertex, counted as the *end*
+    /// of the segment arriving there rather than the start of the one leaving.
+    ///
+    /// That normalisation is Boost's, and it is the whole difference between
+    /// the two: `get_turns` attaches an intersection at a segment endpoint to
+    /// the segment it terminates, so a turn on the first operand's *first*
+    /// vertex is the last position on that ring, not the first. Ordering by
+    /// creation instead put it first, and every union of two rings sharing an
+    /// edge came out started at the wrong end. See `push_ring`.
+    arrival: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,16 +260,21 @@ where
 
     let mut nodes = Vec::new();
     let mut candidates = Vec::new();
+    // One counter across both operands, so every position on the first
+    // operand's boundary precedes every position on the second's.
+    let mut arrival = 0;
     append_atomic_edges(
         &mut first_segments,
         &mut nodes,
         &mut candidates,
+        &mut arrival,
         snap_tolerance,
     );
     append_atomic_edges(
         &mut second_segments,
         &mut nodes,
         &mut candidates,
+        &mut arrival,
         snap_tolerance,
     );
 
@@ -380,6 +396,7 @@ fn append_atomic_edges<P>(
     segments: &mut [SourceSegment<P>],
     nodes: &mut Vec<Node<P>>,
     output: &mut Vec<Edge>,
+    arrival: &mut usize,
     tolerance: f64,
 ) where
     P: Point + Copy,
@@ -393,6 +410,13 @@ fn append_atomic_edges<P>(
             debug_assert!((pair[1].0 - pair[0].0).abs() > 1e-12);
             let start = canonical_node(nodes, pair[0].1, pair[0].2, tolerance);
             let end = canonical_node(nodes, pair[1].1, pair[1].2, tolerance);
+            // Only the far end of a split counts as an arrival, which is what
+            // pushes a ring's first vertex to the end of its own ring: it is
+            // reached as the last segment's endpoint, not the first's start.
+            if nodes[end].arrival == usize::MAX {
+                nodes[end].arrival = *arrival;
+                *arrival += 1;
+            }
             if start != end {
                 output.push(Edge { start, end });
             }
@@ -419,6 +443,7 @@ where
         point,
         coordinate,
         is_turn,
+        arrival: usize::MAX,
     });
     nodes.len() - 1
 }
@@ -510,22 +535,30 @@ fn push_ring<P>(
 
     // The cycle is closed, so its last index repeats its first.
     let cycle = &node_indices[..node_indices.len() - 1];
-    // Nodes are numbered in the order the operands were walked, so the
-    // smallest index on the ring is the earliest in source order.
-    let start_at = |turns_only: bool| {
+    // Boost begins each output ring at the first *turn* along the first
+    // operand's boundary — `Node::arrival`, which is that order with Boost's
+    // endpoint normalisation applied.
+    let first_turn_by_arrival = cycle
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|&(_, index)| nodes[index].is_turn)
+        .min_by_key(|&(_, index)| nodes[index].arrival)
+        .map(|(position, _)| position);
+    // A ring with no turn was copied whole from one operand, and keeps that
+    // operand's own starting vertex rather than whichever end of it the
+    // traversal happened to seed from — a hole is walked against its stored
+    // direction, so those differ. That vertex is the one created first, which
+    // is node order, not arrival order.
+    let first_node = || {
         cycle
             .iter()
             .copied()
             .enumerate()
-            .filter(|&(_, index)| !turns_only || nodes[index].is_turn)
             .min_by_key(|&(_, index)| index)
             .map(|(position, _)| position)
     };
-    // A ring with no turn was copied whole from one operand, and keeps that
-    // operand's own starting vertex rather than whichever end of it the
-    // traversal happened to seed from — a hole is walked against its stored
-    // direction, so those differ.
-    let first_turn = start_at(true).or_else(|| start_at(false)).unwrap_or(0);
+    let first_turn = first_turn_by_arrival.or_else(first_node).unwrap_or(0);
 
     let mut points: Vec<P> = cycle[first_turn..]
         .iter()
@@ -638,16 +671,19 @@ mod tests {
                 point: P::new(0.0, 0.0),
                 coordinate: Coordinate { x: 0.0, y: 0.0 },
                 is_turn: false,
+                arrival: 0,
             },
             Node {
                 point: P::new(1.0, 0.0),
                 coordinate: Coordinate { x: 1.0, y: 0.0 },
                 is_turn: false,
+                arrival: 1,
             },
             Node {
                 point: P::new(2.0, 0.0),
                 coordinate: Coordinate { x: 2.0, y: 0.0 },
                 is_turn: false,
+                arrival: 2,
             },
         ];
         let edges = [

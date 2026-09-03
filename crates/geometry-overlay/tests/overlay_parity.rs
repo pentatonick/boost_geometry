@@ -19,7 +19,7 @@ use geometry_overlay::{
     difference, difference_multi, intersection, intersection_multi, sym_difference, union_multi,
     union_poly,
 };
-use geometry_trait::{MultiPolygon as _, Polygon as _};
+use geometry_trait::{MultiPolygon as _, Point as _, Polygon as _, Ring as _};
 
 type P = Point2D<f64, Cartesian>;
 
@@ -243,4 +243,69 @@ fn multi_polygon_operands() {
     close(area(&union_multi(&a, &b).unwrap()), 2.5);
     close(area(&intersection_multi(&a, &b).unwrap()), 0.5);
     close(area(&difference_multi(&a, &b).unwrap()), 1.5);
+}
+
+// ---- Where a union ring starts, when the first operand starts at a turn ----
+//
+// Boost begins each output ring at a turn — the first one along the *first*
+// operand's boundary. Which turn that is depends on a normalisation in
+// `get_turns`: an intersection landing exactly on a vertex is attached to the
+// segment it **terminates**, not the one it begins. So a turn on the first
+// operand's own first vertex is the *last* position on that ring, not the
+// first.
+//
+// Reference values from C++ Boost 1.83 on the same input, through
+// `scripts/geometry-ab/cpp_ops.cpp` in the tilemaker port.
+
+fn vertices(mp: &MultiPolygon<Polygon<P>>) -> Vec<(f64, f64)> {
+    mp.polygons()
+        .next()
+        .expect("one polygon")
+        .exterior()
+        .points()
+        .map(|p| (p.get::<0>(), p.get::<1>()))
+        .collect()
+}
+
+/// A square and a triangle sharing the square's bottom edge. Both ends of that
+/// edge are corners of the union, so nothing is dropped and the only question
+/// is which one the ring starts at.
+///
+/// The square is given starting at `(0, 0)` — itself one of the two turns.
+/// Boost starts at the *other* one, `(10, 0)`, because `(0, 0)` terminates the
+/// square's last segment and so comes last.
+#[test]
+fn a_union_ring_starts_at_the_first_turn_along_the_first_operand() {
+    let square: Polygon<P> = polygon![[
+        (0.0, 0.0),
+        (0.0, 10.0),
+        (10.0, 10.0),
+        (10.0, 0.0),
+        (0.0, 0.0)
+    ]];
+    let triangle: Polygon<P> = polygon![[(0.0, 0.0), (10.0, 0.0), (5.0, -8.0), (0.0, 0.0)]];
+
+    let expected = vec![
+        (10.0, 0.0),
+        (5.0, -8.0),
+        (0.0, 0.0),
+        (0.0, 10.0),
+        (10.0, 10.0),
+        (10.0, 0.0),
+    ];
+    assert_eq!(vertices(&union_poly(&square, &triangle).unwrap()), expected);
+
+    // Rotating the square so it no longer starts at a turn must not move the
+    // answer: the same turn is still the first one along its boundary.
+    let rotated: Polygon<P> = polygon![[
+        (0.0, 10.0),
+        (10.0, 10.0),
+        (10.0, 0.0),
+        (0.0, 0.0),
+        (0.0, 10.0)
+    ]];
+    assert_eq!(
+        vertices(&union_poly(&rotated, &triangle).unwrap()),
+        expected
+    );
 }
