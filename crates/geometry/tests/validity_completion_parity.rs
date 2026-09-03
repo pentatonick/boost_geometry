@@ -127,6 +127,18 @@ fn polygon_detects_disconnected_interior() {
 /// `test/algorithms/is_valid.cpp:929-970` — multi-polygons may touch at an
 /// isolated point or place a member in another member's hole, but filled
 /// interiors may not overlap/share an edge.
+///
+/// Which *failure* they report is not the same for every way of being wrong,
+/// and callers branch on it. Boost 1.83:
+///
+/// ```text
+/// overlapping members     failure=21   boundaries cross
+/// edge-touching members   failure=21   boundaries share a curve
+/// identical members       failure=21
+/// one inside another      failure=40   interiors overlap, boundaries never meet
+/// point-touching members  valid
+/// disjoint members        valid
+/// ```
 #[test]
 fn multipolygon_checks_inter_member_topology() {
     let invalid_member: MultiPolygon<Polygon<P>> = MultiPolygon::from_vec(vec![Polygon::new(
@@ -138,13 +150,24 @@ fn multipolygon_checks_inter_member_topology() {
         MultiPolygon::from_vec(vec![square(0.0, 0.0, 4.0, 4.0), square(2.0, 2.0, 6.0, 6.0)]);
     assert_eq!(
         is_valid(&overlapping),
-        Err(ValidityFailure::IntersectingInteriors)
+        Err(ValidityFailure::SelfIntersection)
     );
 
     let shared_edge =
         MultiPolygon::from_vec(vec![square(0.0, 0.0, 2.0, 2.0), square(2.0, 0.0, 4.0, 2.0)]);
     assert_eq!(
         is_valid(&shared_edge),
+        Err(ValidityFailure::SelfIntersection)
+    );
+
+    // Only genuine nesting reaches `IntersectingInteriors`: the interiors
+    // overlap and the boundaries never meet.
+    let nested = MultiPolygon::from_vec(vec![
+        square(0.0, 0.0, 10.0, 10.0),
+        square(2.0, 2.0, 4.0, 4.0),
+    ]);
+    assert_eq!(
+        is_valid(&nested),
         Err(ValidityFailure::IntersectingInteriors)
     );
 

@@ -396,10 +396,33 @@ where
             for second in (first + 1)..polygons.len() {
                 let matrix = crate::relate::relate(polygons[first], polygons[second])
                     .map_err(|_| ValidityFailure::SelfIntersection)?;
-                if matrix.interior_interior() == crate::relate::Dimension::Area
-                    || matrix.boundary_boundary() == crate::relate::Dimension::Curve
-                {
-                    return Err(ValidityFailure::IntersectingInteriors);
+                let interiors_overlap =
+                    matrix.interior_interior() == crate::relate::Dimension::Area;
+                let boundaries = matrix.boundary_boundary();
+
+                // Boost distinguishes two ways members can be wrong, and
+                // tilemaker's `buildWayGeometry` branches on which:
+                //
+                //   overlapping members     failure=21  boundaries cross
+                //   edge-touching members   failure=21  boundaries share a curve
+                //   identical members       failure=21
+                //   one inside another      failure=40  interiors overlap, boundaries do not meet
+                //   point-touching members  valid
+                //   disjoint members        valid
+                //
+                // So a boundary that meets the other at all — sharing a curve,
+                // or crossing it while the interiors overlap — is
+                // `failure_self_intersections`, and only genuine nesting is
+                // `failure_intersecting_interiors`.
+                if boundaries == crate::relate::Dimension::Curve {
+                    return Err(ValidityFailure::SelfIntersection);
+                }
+                if interiors_overlap {
+                    return Err(if boundaries == crate::relate::Dimension::Empty {
+                        ValidityFailure::IntersectingInteriors
+                    } else {
+                        ValidityFailure::SelfIntersection
+                    });
                 }
             }
         }
