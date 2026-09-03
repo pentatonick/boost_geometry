@@ -25,11 +25,11 @@ use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{MultiPolygon, Polygon};
 use geometry_tag::SameAs;
-use geometry_trait::{PointMut, Polygon as PolygonTrait};
+use geometry_trait::{MultiPolygon as MultiPolygonTrait, PointMut, Polygon as PolygonTrait};
 
 use crate::traverse::TraversalError;
 
-use super::areal::{ArealOp, overlay as areal_overlay};
+use super::areal::{ArealOp, overlay as areal_overlay, overlay_multi as areal_overlay_multi};
 
 /// Failure of a boolean overlay operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,6 +217,88 @@ where
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     areal_overlay(g1, g2, ArealOp::SymDifference)
+}
+
+// ---- multi-polygon operands ------------------------------------------
+//
+// Boost dispatches every areal Boolean through one overlay whatever the
+// operand arity — `bg::intersection(mp, box, out)` and
+// `bg::difference(mp1, mp2, out)` are the same algorithm as the polygon
+// pair. These are that same kernel with both operands' rings, so a caller
+// holding multi-polygons does not have to decompose them and re-combine
+// the pieces itself, which is not the same function.
+
+/// Intersection of two multi-polygons — the region inside **both**.
+///
+/// # Errors
+///
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+pub fn intersection_multi<G1, G2, P>(
+    g1: &G1,
+    g2: &G2,
+) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    G1: MultiPolygonTrait<Point = P>,
+    G2: MultiPolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    areal_overlay_multi(g1, g2, ArealOp::Intersection)
+}
+
+/// Union of two multi-polygons — the region inside **either**.
+///
+/// # Errors
+///
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+pub fn union_multi<G1, G2, P>(g1: &G1, g2: &G2) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    G1: MultiPolygonTrait<Point = P>,
+    G2: MultiPolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    areal_overlay_multi(g1, g2, ArealOp::Union)
+}
+
+/// Difference of two multi-polygons — the region inside `g1` but not `g2`.
+///
+/// # Errors
+///
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+pub fn difference_multi<G1, G2, P>(
+    g1: &G1,
+    g2: &G2,
+) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    G1: MultiPolygonTrait<Point = P>,
+    G2: MultiPolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    areal_overlay_multi(g1, g2, ArealOp::Difference)
+}
+
+/// Symmetric difference of two multi-polygons — inside exactly one of them.
+///
+/// # Errors
+///
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+pub fn sym_difference_multi<G1, G2, P>(
+    g1: &G1,
+    g2: &G2,
+) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    G1: MultiPolygonTrait<Point = P>,
+    G2: MultiPolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    areal_overlay_multi(g1, g2, ArealOp::SymDifference)
 }
 
 #[cfg(test)]

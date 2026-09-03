@@ -15,7 +15,10 @@
 use geometry_algorithm::ring_area;
 use geometry_cs::Cartesian;
 use geometry_model::{MultiPolygon, Point2D, Polygon, polygon};
-use geometry_overlay::{difference, intersection, sym_difference, union_poly};
+use geometry_overlay::{
+    difference, difference_multi, intersection, intersection_multi, sym_difference, union_multi,
+    union_poly,
+};
 use geometry_trait::{MultiPolygon as _, Polygon as _};
 
 type P = Point2D<f64, Cartesian>;
@@ -212,4 +215,32 @@ fn intersection_splits_lobes_meeting_at_a_point() {
     let mut sizes: Vec<usize> = result.polygons().map(|pg| pg.exterior().0.len()).collect();
     sizes.sort_unstable();
     assert_eq!(sizes, [4, 7], "each lobe keeps its own closed ring");
+}
+
+// ---- Multi-polygon operands ------------------------------------------
+
+/// The multi-polygon entry points are the same overlay over both operands'
+/// rings, not a decomposition into per-member pairs. Two disjoint unit
+/// squares against a third that overlaps one of them:
+///
+/// ```text
+/// A = {(0,0)-(1,1), (4,0)-(5,1)}      area 2
+/// B = {(0.5,0)-(1.5,1)}               area 1
+/// A ∪ B  area 2.5   A ∩ B  area 0.5   A − B  area 1.5
+/// ```
+#[test]
+fn multi_polygon_operands() {
+    let a: MultiPolygon<Polygon<P>> =
+        MultiPolygon::from_vec(vec![square(0.0, 0.0, 1.0), square(4.0, 0.0, 1.0)]);
+    let b: MultiPolygon<Polygon<P>> = MultiPolygon::from_vec(vec![polygon![[
+        (0.5, 0.0),
+        (0.5, 1.0),
+        (1.5, 1.0),
+        (1.5, 0.0),
+        (0.5, 0.0)
+    ]]]);
+
+    close(area(&union_multi(&a, &b).unwrap()), 2.5);
+    close(area(&intersection_multi(&a, &b).unwrap()), 0.5);
+    close(area(&difference_multi(&a, &b).unwrap()), 1.5);
 }

@@ -8,4 +8,7 @@
 mod areal;
 mod boolean;
 
-pub use boolean::{OverlayError, difference, intersection, sym_difference, r#union, union_poly};
+pub use boolean::{
+    OverlayError, difference, difference_multi, intersection, intersection_multi, sym_difference,
+    sym_difference_multi, r#union, union_multi, union_poly,
+};

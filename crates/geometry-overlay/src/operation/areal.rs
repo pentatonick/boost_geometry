@@ -20,7 +20,9 @@ use geometry_coords::{
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{MultiPolygon, Polygon, Ring, Segment};
 use geometry_tag::SameAs;
-use geometry_trait::{Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait};
+use geometry_trait::{
+    MultiPolygon as MultiPolygonTrait, Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
+};
 
 use crate::assemble::assemble_multipolygon;
 use crate::operation::OverlayError;
@@ -79,6 +81,20 @@ impl Shape {
         let mut rings = Vec::new();
         rings.push(ring_coordinates(polygon.exterior()));
         rings.extend(polygon.interiors().map(ring_coordinates));
+        Self { rings }
+    }
+
+    fn from_multi_polygon<G, P>(multi_polygon: &G) -> Self
+    where
+        G: MultiPolygonTrait<Point = P>,
+        P: Point,
+        P::Scalar: Into<f64>,
+    {
+        let mut rings = Vec::new();
+        for polygon in multi_polygon.polygons() {
+            rings.push(ring_coordinates(polygon.exterior()));
+            rings.extend(polygon.interiors().map(ring_coordinates));
+        }
         Self { rings }
     }
 
@@ -146,14 +162,58 @@ where
     P::Scalar: CoordinateScalar + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    let first_shape = Shape::from_polygon(first);
-    let second_shape = Shape::from_polygon(second);
-    let scale = coordinate_scale(&first_shape, &second_shape);
+    overlay_arrangement(
+        &Shape::from_polygon(first),
+        &Shape::from_polygon(second),
+        polygon_segments(first),
+        polygon_segments(second),
+        operation,
+    )
+}
+
+/// The same operation over multi-polygons.
+///
+/// Boost dispatches every areal Boolean through one overlay regardless of how
+/// many polygons each operand holds, so this is the same kernel over the union
+/// of every operand's rings rather than a second algorithm. A single polygon
+/// is the one-member case.
+pub(crate) fn overlay_multi<G1, G2, P>(
+    first: &G1,
+    second: &G2,
+    operation: ArealOp,
+) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    G1: MultiPolygonTrait<Point = P>,
+    G2: MultiPolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    overlay_arrangement(
+        &Shape::from_multi_polygon(first),
+        &Shape::from_multi_polygon(second),
+        multi_polygon_segments(first),
+        multi_polygon_segments(second),
+        operation,
+    )
+}
+
+fn overlay_arrangement<P>(
+    first_shape: &Shape,
+    second_shape: &Shape,
+    mut first_segments: Vec<SourceSegment<P>>,
+    mut second_segments: Vec<SourceSegment<P>>,
+    operation: ArealOp,
+) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    let scale = coordinate_scale(first_shape, second_shape);
     let snap_tolerance = scale * 1e-10;
     let parameter_tolerance = 1e-10;
 
-    let mut first_segments = polygon_segments(first);
-    let mut second_segments = polygon_segments(second);
     for first_segment in &mut first_segments {
         for second_segment in &mut second_segments {
             let first_model = Segment::new(first_segment.start, first_segment.end);
@@ -249,6 +309,22 @@ where
         }
     }
     coordinates
+}
+
+fn multi_polygon_segments<G, P>(multi_polygon: &G) -> Vec<SourceSegment<P>>
+where
+    G: MultiPolygonTrait<Point = P>,
+    P: Point + Copy,
+    P::Scalar: Into<f64>,
+{
+    let mut segments = Vec::new();
+    for polygon in multi_polygon.polygons() {
+        append_ring_segments(polygon.exterior(), &mut segments);
+        for ring in polygon.interiors() {
+            append_ring_segments(ring, &mut segments);
+        }
+    }
+    segments
 }
 
 fn polygon_segments<G, P>(polygon: &G) -> Vec<SourceSegment<P>>
