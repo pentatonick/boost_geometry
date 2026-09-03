@@ -140,8 +140,8 @@ pub use buffer::{
 pub use cartesian::{ComparablePythagoras, PointToSegment, Pythagoras};
 pub use centroid::{
     CartesianBoxCentroid, CartesianLinestringCentroid, CartesianMultiPointCentroid,
-    CartesianPolygonCentroid, CartesianRingCentroid, CartesianSegmentCentroid, CentroidStrategy,
-    CentroidStrategyForKind,
+    CartesianMultiPolygonCentroid, CartesianPolygonCentroid, CartesianRingCentroid,
+    CartesianSegmentCentroid, CentroidStrategy, CentroidStrategyForKind,
 };
 pub use closest_points::{CartesianClosestPoints, ClosestPointsStrategy};
 pub use compare::{ALL_DIMENSIONS, EqualTo, Greater, Less, LessExact};
