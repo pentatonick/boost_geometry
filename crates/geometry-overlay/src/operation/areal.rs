@@ -108,7 +108,10 @@ impl Shape {
 struct SourceSegment<P> {
     start: P,
     end: P,
-    splits: Vec<(f64, P)>,
+    /// `(parameter, point, is_turn)`. The two endpoints are not turns; a point
+    /// pushed by the intersection sweep is, including one that lands on an
+    /// endpoint.
+    splits: Vec<(f64, P, bool)>,
 }
 
 impl<P> SourceSegment<P>
@@ -120,27 +123,36 @@ where
         Self {
             start,
             end,
-            splits: alloc::vec![(0.0, start), (1.0, end)],
+            splits: alloc::vec![(0.0, start, false), (1.0, end, false)],
         }
     }
 
     fn push_split(&mut self, point: P, tolerance: f64) {
         let parameter = segment_parameter(&self.start, &self.end, &point);
-        if parameter >= -tolerance
-            && parameter <= 1.0 + tolerance
-            && !self
-                .splits
-                .iter()
-                .any(|(existing, _)| (existing - parameter).abs() <= tolerance)
-        {
-            self.splits.push((parameter.clamp(0.0, 1.0), point));
+        if parameter < -tolerance || parameter > 1.0 + tolerance {
+            return;
         }
+        if let Some(existing) = self
+            .splits
+            .iter_mut()
+            .find(|(at, _, _)| (at - parameter).abs() <= tolerance)
+        {
+            // A crossing that lands on a vertex already split here still makes
+            // that vertex a turn.
+            existing.2 = true;
+            return;
+        }
+        self.splits.push((parameter.clamp(0.0, 1.0), point, true));
     }
 }
 
 struct Node<P> {
     point: P,
     coordinate: Coordinate,
+    /// Set when any split that resolved to this node was a crossing. Boost
+    /// starts each output ring at a turn, so the tracer needs to know which
+    /// nodes are turns; see `push_ring`.
+    is_turn: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -379,8 +391,8 @@ fn append_atomic_edges<P>(
             .sort_by(|left, right| left.0.total_cmp(&right.0));
         for pair in segment.splits.windows(2) {
             debug_assert!((pair[1].0 - pair[0].0).abs() > 1e-12);
-            let start = canonical_node(nodes, pair[0].1, tolerance);
-            let end = canonical_node(nodes, pair[1].1, tolerance);
+            let start = canonical_node(nodes, pair[0].1, pair[0].2, tolerance);
+            let end = canonical_node(nodes, pair[1].1, pair[1].2, tolerance);
             if start != end {
                 output.push(Edge { start, end });
             }
@@ -388,7 +400,7 @@ fn append_atomic_edges<P>(
     }
 }
 
-fn canonical_node<P>(nodes: &mut Vec<Node<P>>, point: P, tolerance: f64) -> usize
+fn canonical_node<P>(nodes: &mut Vec<Node<P>>, point: P, is_turn: bool, tolerance: f64) -> usize
 where
     P: Point + Copy,
     P::Scalar: Into<f64>,
@@ -400,9 +412,14 @@ where
             node.coordinate.y - coordinate.y,
         ) <= tolerance
     }) {
+        nodes[index].is_turn |= is_turn;
         return index;
     }
-    nodes.push(Node { point, coordinate });
+    nodes.push(Node {
+        point,
+        coordinate,
+        is_turn,
+    });
     nodes.len() - 1
 }
 
@@ -416,7 +433,9 @@ where
     P::Scalar: Into<f64>,
 {
     let mut used = alloc::vec![false; edges.len()];
-    let mut rings = Vec::new();
+    // Each ring is kept with the node it starts at, so the whole set can be
+    // put back into source order below.
+    let mut rings: Vec<(usize, Ring<P>)> = Vec::new();
     for seed in 0..edges.len() {
         if used[seed] {
             continue;
@@ -453,12 +472,30 @@ where
         }
         debug_assert_eq!(node_indices.last().copied(), Some(first));
     }
-    Ok(rings)
+
+    // Which ring comes out first is observable — it decides the order of the
+    // polygons in the result — and Boost's is not the order the seeds happened
+    // to fall in. It traces from turns in source order, so ordering the rings
+    // by the node each one starts at reproduces it.
+    rings.sort_by_key(|&(start, _)| start);
+    Ok(rings.into_iter().map(|(_, ring)| ring).collect())
 }
 
 /// Append one traced cycle, dropping it when it encloses no area.
-fn push_ring<P>(rings: &mut Vec<Ring<P>>, nodes: &[Node<P>], node_indices: &[usize], tolerance: f64)
-where
+///
+/// The cycle starts wherever the traversal happened to seed, which carries no
+/// meaning — but which vertex a ring starts at is observable downstream, and
+/// Boost's answer is not arbitrary: it begins each output ring at a *turn*, the
+/// first one in source order. A ring with no turn at all was copied whole from
+/// one operand and keeps that operand's own starting vertex. Reproduced here,
+/// because a consumer that simplifies the ring afterwards will pin its first
+/// vertex and the choice reaches the output.
+fn push_ring<P>(
+    rings: &mut Vec<(usize, Ring<P>)>,
+    nodes: &[Node<P>],
+    node_indices: &[usize],
+    tolerance: f64,
+) where
     P: Point + Copy,
     P::Scalar: Into<f64>,
 {
@@ -467,14 +504,38 @@ where
         let b = nodes[pair[1]].coordinate;
         sum + a.x * b.y - b.x * a.y
     }) * 0.5;
-    if area.abs() > tolerance * tolerance {
-        rings.push(Ring::from_vec(
-            node_indices
-                .iter()
-                .map(|&index| nodes[index].point)
-                .collect(),
-        ));
+    if area.abs() <= tolerance * tolerance {
+        return;
     }
+
+    // The cycle is closed, so its last index repeats its first.
+    let cycle = &node_indices[..node_indices.len() - 1];
+    // Nodes are numbered in the order the operands were walked, so the
+    // smallest index on the ring is the earliest in source order.
+    let start_at = |turns_only: bool| {
+        cycle
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|&(_, index)| !turns_only || nodes[index].is_turn)
+            .min_by_key(|&(_, index)| index)
+            .map(|(position, _)| position)
+    };
+    // A ring with no turn was copied whole from one operand, and keeps that
+    // operand's own starting vertex rather than whichever end of it the
+    // traversal happened to seed from — a hole is walked against its stored
+    // direction, so those differ.
+    let first_turn = start_at(true).or_else(|| start_at(false)).unwrap_or(0);
+
+    let mut points: Vec<P> = cycle[first_turn..]
+        .iter()
+        .chain(&cycle[..first_turn])
+        .map(|&index| nodes[index].point)
+        .collect();
+    if let Some(&first) = points.first() {
+        points.push(first);
+    }
+    rings.push((cycle[first_turn], Ring::from_vec(points)));
 }
 
 fn next_edge<P>(nodes: &[Node<P>], edges: &[Edge], used: &[bool], incoming: Edge) -> Option<usize>
@@ -576,14 +637,17 @@ mod tests {
             Node {
                 point: P::new(0.0, 0.0),
                 coordinate: Coordinate { x: 0.0, y: 0.0 },
+                is_turn: false,
             },
             Node {
                 point: P::new(1.0, 0.0),
                 coordinate: Coordinate { x: 1.0, y: 0.0 },
+                is_turn: false,
             },
             Node {
                 point: P::new(2.0, 0.0),
                 coordinate: Coordinate { x: 2.0, y: 0.0 },
+                is_turn: false,
             },
         ];
         let edges = [
