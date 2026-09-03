@@ -67,9 +67,25 @@ use crate::surface_point::point_on_surface;
 pub fn assemble_multipolygon<P>(rings: Vec<Ring<P>>) -> MultiPolygon<Polygon<P>>
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar,
+    P::Scalar: CoordinateScalar + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
+    assemble_traced(rings.into_iter().map(|ring| (ring, false)).collect())
+}
+
+/// As [`assemble_multipolygon`], but told which rings the traversal assembled
+/// from turns.
+///
+/// Boost cleans exactly those (`traverse_with_operation` calls
+/// `clean_closing_dups_and_spikes` on each ring it traverses) and emits a ring
+/// copied whole from one operand untouched.
+pub(crate) fn assemble_traced<P>(rings: Vec<(Ring<P>, bool)>) -> MultiPolygon<Polygon<P>>
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    let (rings, traced): (Vec<Ring<P>>, Vec<bool>) = rings.into_iter().unzip();
     // Classify each ring by containment depth rather than by signed area:
     // even depths are filled exteriors and odd depths are holes.
     let n = rings.len();
@@ -97,6 +113,9 @@ where
             outer_slot[i] = Some(polygons.len());
             let mut outer = slots[i].take().unwrap();
             orient_ring(&mut outer, true);
+            if traced[i] {
+                clean_closing_dups_and_spikes(&mut outer);
+            }
             polygons.push(Polygon::new(outer));
         }
     }
@@ -110,11 +129,58 @@ where
                 .expect("the immediate parent of an odd-depth ring has even depth");
             let mut hole = slots[i].take().unwrap();
             orient_ring(&mut hole, false);
+            if traced[i] {
+                clean_closing_dups_and_spikes(&mut hole);
+            }
             polygons[slot].inners.push(hole);
         }
     }
 
     MultiPolygon(polygons)
+}
+
+/// Drop the ring's first point while the outline runs straight through it.
+///
+/// C++: `clean_closing_dups_and_spikes`, which `traverse_with_operation`
+/// applies to every ring the traversal produces. Boost starts a ring at a
+/// turn, and a turn is not always a corner — where two operands share a
+/// collinear edge, the outline can pass straight through the very point the
+/// traversal seeded from. Boost erases it, re-closes, and repeats.
+///
+/// This is why Boost's union of two squares sharing an edge has five distinct
+/// vertices where the naive answer has six: the sixth is the start, and it sat
+/// in the middle of a straight side. Note it is only ever the *start* — the
+/// identical straight-through vertex at the far end of the same shared edge
+/// stays.
+///
+/// The test is Boost's `point_is_collinear`, which is the side test alone: a
+/// spike, where the outline doubles back, is collinear too and goes the same
+/// way.
+fn clean_closing_dups_and_spikes<P>(ring: &mut Ring<P>)
+where
+    P: PointTrait + Copy,
+    P::Scalar: Into<f64>,
+{
+    // C++: `minimum_ring_size<closed>`, which is four.
+    const MINIMUM_CLOSED_RING: usize = 4;
+
+    let points = &mut ring.0;
+    while points.len() > MINIMUM_CLOSED_RING {
+        let at = |index: usize| -> (f64, f64) {
+            let point = &points[index];
+            (point.get::<0>().into(), point.get::<1>().into())
+        };
+        let (fx, fy) = at(0);
+        let (sx, sy) = at(1);
+        let (ux, uy) = at(points.len() - 2);
+        let side = (fx - ux) * (sy - uy) - (fy - uy) * (sx - ux);
+        if side != 0.0 {
+            return;
+        }
+        points.remove(0);
+        points.pop();
+        points.push(points[0]);
+    }
 }
 
 fn containment_depth(parents: &[Option<usize>], mut index: usize) -> usize {

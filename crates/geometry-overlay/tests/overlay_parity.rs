@@ -309,3 +309,113 @@ fn a_union_ring_starts_at_the_first_turn_along_the_first_operand() {
         expected
     );
 }
+
+// ---- Unions whose operands share a collinear edge ------------------------
+//
+// Two more pieces of Boost, both taken from its source rather than guessed at:
+//
+//  * `traverse_with_operation` runs `clean_closing_dups_and_spikes` over every
+//    ring it traverses, which erases the ring's first point while the outline
+//    runs straight through it. A ring starts at a turn, and where two operands
+//    share an edge a turn need not be a corner.
+//  * `get_turns` walks the first operand's sections in the outer loop and the
+//    second's in the inner, so two turns on the same stretch of the first
+//    operand are ordered by where they sit on the *second*.
+//
+// Reference values from C++ Boost 1.83 on the same input.
+
+/// Two squares sharing a whole edge. The traversal starts at `(10, 10)` — the
+/// first turn — and that point sits in the middle of the union's straight top
+/// side, so Boost erases it and the ring begins at `(20, 10)`. Note the
+/// identical straight-through point at the *other* end of the shared edge,
+/// `(10, 0)`, survives: only the start is cleaned.
+#[test]
+fn a_shared_edge_loses_the_ring_start_it_ran_straight_through() {
+    let left: Polygon<P> = polygon![[
+        (0.0, 0.0),
+        (0.0, 10.0),
+        (10.0, 10.0),
+        (10.0, 0.0),
+        (0.0, 0.0)
+    ]];
+    let right: Polygon<P> = polygon![[
+        (10.0, 0.0),
+        (10.0, 10.0),
+        (20.0, 10.0),
+        (20.0, 0.0),
+        (10.0, 0.0)
+    ]];
+    assert_eq!(
+        vertices(&union_poly(&left, &right).unwrap()),
+        vec![
+            (20.0, 10.0),
+            (20.0, 0.0),
+            (10.0, 0.0),
+            (0.0, 0.0),
+            (0.0, 10.0),
+            (20.0, 10.0),
+        ]
+    );
+}
+
+/// A square and a rectangle overlapping along part of one side, so both turns
+/// lie on the *same* segment of the first operand. Which of them starts the
+/// ring is then decided by the second operand — and rotating it moves the
+/// answer, which is why the second operand's position has to be part of the
+/// ordering and the fraction along the first must not outrank it.
+#[test]
+fn two_turns_on_one_segment_are_ordered_by_the_second_operand() {
+    let square: Polygon<P> = polygon![[
+        (0.0, 0.0),
+        (0.0, 100.0),
+        (100.0, 100.0),
+        (100.0, 0.0),
+        (0.0, 0.0)
+    ]];
+    // Starting at (100, 30): the second operand's last segment ends there,
+    // which puts (100, 70) ahead of it.
+    let from_bottom: Polygon<P> = polygon![[
+        (100.0, 30.0),
+        (100.0, 70.0),
+        (200.0, 70.0),
+        (200.0, 30.0),
+        (100.0, 30.0)
+    ]];
+    assert_eq!(
+        vertices(&union_poly(&square, &from_bottom).unwrap()),
+        vec![
+            (100.0, 70.0),
+            (200.0, 70.0),
+            (200.0, 30.0),
+            (100.0, 30.0),
+            (100.0, 0.0),
+            (0.0, 0.0),
+            (0.0, 100.0),
+            (100.0, 100.0),
+            (100.0, 70.0),
+        ]
+    );
+
+    // Rotated, (100, 30) now ends an earlier segment and takes the start.
+    let from_top: Polygon<P> = polygon![[
+        (100.0, 70.0),
+        (200.0, 70.0),
+        (200.0, 30.0),
+        (100.0, 30.0),
+        (100.0, 70.0)
+    ]];
+    assert_eq!(
+        vertices(&union_poly(&square, &from_top).unwrap()),
+        vec![
+            (100.0, 30.0),
+            (100.0, 0.0),
+            (0.0, 0.0),
+            (0.0, 100.0),
+            (100.0, 100.0),
+            (100.0, 70.0),
+            (200.0, 70.0),
+            (200.0, 30.0),
+            (100.0, 30.0),
+        ]
+    );
+}

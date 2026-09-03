@@ -24,7 +24,7 @@ use geometry_trait::{
     MultiPolygon as MultiPolygonTrait, Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
 };
 
-use crate::assemble::assemble_multipolygon;
+use crate::assemble::assemble_traced;
 use crate::operation::OverlayError;
 use crate::predicate::segment_intersection::{SegmentIntersection, segment_intersection};
 
@@ -153,17 +153,26 @@ struct Node<P> {
     /// starts each output ring at a turn, so the tracer needs to know which
     /// nodes are turns; see `push_ring`.
     is_turn: bool,
-    /// Where this node sits along the operands' boundaries, first operand
-    /// first — and, where it lands exactly on a vertex, counted as the *end*
-    /// of the segment arriving there rather than the start of the one leaving.
+    /// Where this node sits along **each** operand's boundary — and, where it
+    /// lands exactly on a vertex, counted as the *end* of the segment arriving
+    /// there rather than the start of the one leaving.
     ///
-    /// That normalisation is Boost's, and it is the whole difference between
-    /// the two: `get_turns` attaches an intersection at a segment endpoint to
-    /// the segment it terminates, so a turn on the first operand's *first*
-    /// vertex is the last position on that ring, not the first. Ordering by
-    /// creation instead put it first, and every union of two rings sharing an
-    /// edge came out started at the wrong end. See `push_ring`.
-    arrival: usize,
+    /// That normalisation is Boost's: `get_turns` attaches an intersection at
+    /// a segment endpoint to the segment it terminates, so a turn on an
+    /// operand's *first* vertex is the last position on that ring, not the
+    /// first.
+    ///
+    /// Both entries matter. Boost walks the first operand's sections in the
+    /// outer loop and the second operand's in the inner, so its turns come out
+    /// ordered by the pair, and two turns on the same stretch of the first
+    /// operand are separated by where they sit on the second. `usize::MAX`
+    /// means the operand's boundary does not pass through this node, which is
+    /// true of every vertex that is not a turn.
+    arrival: [usize; 2],
+    /// How far along that segment. It orders two turns only once both segment
+    /// indices have tied — the fraction must not outrank the second operand,
+    /// or two turns sharing one edge come out in the wrong order.
+    offset: [f64; 2],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,21 +269,18 @@ where
 
     let mut nodes = Vec::new();
     let mut candidates = Vec::new();
-    // One counter across both operands, so every position on the first
-    // operand's boundary precedes every position on the second's.
-    let mut arrival = 0;
     append_atomic_edges(
         &mut first_segments,
         &mut nodes,
         &mut candidates,
-        &mut arrival,
+        0,
         snap_tolerance,
     );
     append_atomic_edges(
         &mut second_segments,
         &mut nodes,
         &mut candidates,
-        &mut arrival,
+        1,
         snap_tolerance,
     );
 
@@ -320,7 +326,7 @@ where
     }
 
     let rings = trace_rings(&nodes, &boundary, snap_tolerance)?;
-    Ok(assemble_multipolygon(rings))
+    Ok(assemble_traced(rings))
 }
 
 fn ring_coordinates<R>(ring: &R) -> Vec<Coordinate>
@@ -396,13 +402,13 @@ fn append_atomic_edges<P>(
     segments: &mut [SourceSegment<P>],
     nodes: &mut Vec<Node<P>>,
     output: &mut Vec<Edge>,
-    arrival: &mut usize,
+    operand: usize,
     tolerance: f64,
 ) where
     P: Point + Copy,
     P::Scalar: Into<f64>,
 {
-    for segment in segments {
+    for (index, segment) in segments.iter_mut().enumerate() {
         segment
             .splits
             .sort_by(|left, right| left.0.total_cmp(&right.0));
@@ -413,9 +419,9 @@ fn append_atomic_edges<P>(
             // Only the far end of a split counts as an arrival, which is what
             // pushes a ring's first vertex to the end of its own ring: it is
             // reached as the last segment's endpoint, not the first's start.
-            if nodes[end].arrival == usize::MAX {
-                nodes[end].arrival = *arrival;
-                *arrival += 1;
+            if nodes[end].arrival[operand] == usize::MAX {
+                nodes[end].arrival[operand] = index;
+                nodes[end].offset[operand] = pair[1].0;
             }
             if start != end {
                 output.push(Edge { start, end });
@@ -443,24 +449,28 @@ where
         point,
         coordinate,
         is_turn,
-        arrival: usize::MAX,
+        arrival: [usize::MAX; 2],
+        offset: [0.0; 2],
     });
     nodes.len() - 1
 }
+
+type TracedRing<P> = (Ring<P>, bool);
 
 fn trace_rings<P>(
     nodes: &[Node<P>],
     edges: &[Edge],
     tolerance: f64,
-) -> Result<Vec<Ring<P>>, OverlayError>
+) -> Result<Vec<TracedRing<P>>, OverlayError>
 where
     P: Point + Copy,
     P::Scalar: Into<f64>,
 {
     let mut used = alloc::vec![false; edges.len()];
     // Each ring is kept with the node it starts at, so the whole set can be
-    // put back into source order below.
-    let mut rings: Vec<(usize, Ring<P>)> = Vec::new();
+    // put back into source order below, and with whether the traversal
+    // assembled it from turns rather than copying it whole from one operand.
+    let mut rings: Vec<(usize, Ring<P>, bool)> = Vec::new();
     for seed in 0..edges.len() {
         if used[seed] {
             continue;
@@ -502,8 +512,11 @@ where
     // polygons in the result — and Boost's is not the order the seeds happened
     // to fall in. It traces from turns in source order, so ordering the rings
     // by the node each one starts at reproduces it.
-    rings.sort_by_key(|&(start, _)| start);
-    Ok(rings.into_iter().map(|(_, ring)| ring).collect())
+    rings.sort_by_key(|&(start, _, _)| start);
+    Ok(rings
+        .into_iter()
+        .map(|(_, ring, traced)| (ring, traced))
+        .collect())
 }
 
 /// Append one traced cycle, dropping it when it encloses no area.
@@ -516,7 +529,7 @@ where
 /// because a consumer that simplifies the ring afterwards will pin its first
 /// vertex and the choice reaches the output.
 fn push_ring<P>(
-    rings: &mut Vec<(usize, Ring<P>)>,
+    rings: &mut Vec<(usize, Ring<P>, bool)>,
     nodes: &[Node<P>],
     node_indices: &[usize],
     tolerance: f64,
@@ -538,12 +551,20 @@ fn push_ring<P>(
     // Boost begins each output ring at the first *turn* along the first
     // operand's boundary — `Node::arrival`, which is that order with Boost's
     // endpoint normalisation applied.
+    // Boost walks the first operand's sections in the outer loop and the
+    // second's in the inner, so its turns are ordered by the pair.
     let first_turn_by_arrival = cycle
         .iter()
         .copied()
         .enumerate()
         .filter(|&(_, index)| nodes[index].is_turn)
-        .min_by_key(|&(_, index)| nodes[index].arrival)
+        .min_by(|&(_, left), &(_, right)| {
+            let (a, b) = (&nodes[left], &nodes[right]);
+            a.arrival[0]
+                .cmp(&b.arrival[0])
+                .then(a.arrival[1].cmp(&b.arrival[1]))
+                .then(a.offset[0].total_cmp(&b.offset[0]))
+        })
         .map(|(position, _)| position);
     // A ring with no turn was copied whole from one operand, and keeps that
     // operand's own starting vertex rather than whichever end of it the
@@ -568,7 +589,14 @@ fn push_ring<P>(
     if let Some(&first) = points.first() {
         points.push(first);
     }
-    rings.push((cycle[first_turn], Ring::from_vec(points)));
+    // The ring is cleaned once it is in its final winding, not here: which
+    // vertex `clean_closing_dups_and_spikes` leaves at the front depends on
+    // the direction the ring runs in, and that is decided in `assemble`.
+    rings.push((
+        cycle[first_turn],
+        Ring::from_vec(points),
+        first_turn_by_arrival.is_some(),
+    ));
 }
 
 fn next_edge<P>(nodes: &[Node<P>], edges: &[Edge], used: &[bool], incoming: Edge) -> Option<usize>
@@ -671,19 +699,22 @@ mod tests {
                 point: P::new(0.0, 0.0),
                 coordinate: Coordinate { x: 0.0, y: 0.0 },
                 is_turn: false,
-                arrival: 0,
+                arrival: [0, 0],
+                offset: [0.0; 2],
             },
             Node {
                 point: P::new(1.0, 0.0),
                 coordinate: Coordinate { x: 1.0, y: 0.0 },
                 is_turn: false,
-                arrival: 1,
+                arrival: [1, 1],
+                offset: [0.0; 2],
             },
             Node {
                 point: P::new(2.0, 0.0),
                 coordinate: Coordinate { x: 2.0, y: 0.0 },
                 is_turn: false,
-                arrival: 2,
+                arrival: [2, 2],
+                offset: [0.0; 2],
             },
         ];
         let edges = [
