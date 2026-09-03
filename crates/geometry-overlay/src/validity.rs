@@ -768,11 +768,15 @@ where
 }
 
 /// `true` iff `b` is a spike between `a` and `c`: collinear
-/// (`cross == 0`) and folding back (`dot < 0`). Same 2-D kernel as
-/// `geometry_algorithm::remove_spikes::is_spike_2d` (private there);
-/// duplicated locally rather than widening that crate's public
-/// surface — if a third consumer appears, hoist the predicate into a
-/// shared home per the aggregate-slicing rules.
+/// (`cross == 0`) and folding back (`dot < 0`).
+///
+/// Deliberately **stricter** than
+/// `geometry_algorithm::remove_spikes::is_spike_or_equal_2d`, which also
+/// fires on a zero-length step. `remove_spikes` drops a repeated vertex;
+/// `is_valid` does not reject one — Boost's default policy accepts
+/// duplicates (see [`ValidityOptions::BOOST_DEFAULT`]), and a ring
+/// carrying one is valid until `allow_duplicates` is turned off. The two
+/// predicates answer different questions, so they are not shared.
 fn is_spike_triple<P: Point>(a: &P, b: &P, c: &P) -> bool
 where
     P::Scalar: CoordinateScalar,

@@ -1,11 +1,15 @@
 //! `remove_spikes(&mut g)` — drop collinear-and-reversed vertices.
 //!
 //! Mirrors `boost::geometry::remove_spikes` from
-//! `boost/geometry/algorithms/remove_spikes.hpp`. A spike is a triple
-//! `(a, b, c)` where `(b-a) × (c-b) == 0` (collinear) AND
-//! `(b-a) · (c-b) < 0` (reversed). The middle vertex `b` is removed;
-//! the walk repeats until no spike remains, because collapsing one
-//! spike can create a new one at the now-adjacent pair.
+//! `boost/geometry/algorithms/remove_spikes.hpp`. The predicate is
+//! Boost's `point_is_spike_or_equal`, and the `or_equal` half carries
+//! its weight: a triple `(a, b, c)` qualifies when `(b-a) × (c-b) == 0`
+//! (collinear) and `(b-a) · (c-b) <= 0`, which covers both a reversal
+//! and a zero-length step — that is, a repeated vertex. The middle
+//! vertex `b` is removed; the walk repeats until nothing qualifies,
+//! because collapsing one spike can create a new one at the
+//! now-adjacent pair, and peeling a spike off a ring routinely leaves a
+//! repeated vertex behind.
 //!
 //! Per-kind:
 //! * `Linestring`, `Ring`  → spike-walk the backing `Vec<P>`
@@ -34,9 +38,19 @@ pub trait RemoveSpikes {
     fn remove_spikes(&mut self);
 }
 
-/// True iff `b` is a spike between `a` and `c` (2D cross `== 0` AND
-/// dot `< 0`).
-fn is_spike_2d<P: PointTrait>(a: &P, b: &P, c: &P) -> bool {
+/// True iff `b` is a spike between `a` and `c`, **or** duplicates one of
+/// them: 2D cross `== 0` and dot `<= 0`.
+///
+/// Mirrors `detail::point_is_spike_or_equal`
+/// (`algorithms/detail/point_is_spike_or_equal.hpp`). Requiring `dot < 0`
+/// instead would leave every repeated vertex in place, including the ones
+/// this function creates: removing the apex of `(4,0) (6,0) (4,0)` leaves
+/// `(4,0) (4,0)` adjacent, and Boost collapses that.
+///
+/// `dot <= 0` cannot over-match. Two non-zero vectors that are both
+/// parallel (`cross == 0`) and perpendicular (`dot == 0`) do not exist, so
+/// the equality arm fires only when one of the steps has zero length.
+fn is_spike_or_equal_2d<P: PointTrait>(a: &P, b: &P, c: &P) -> bool {
     let ux = b.get::<0>() - a.get::<0>();
     let uy = b.get::<1>() - a.get::<1>();
     let vx = c.get::<0>() - b.get::<0>();
@@ -44,7 +58,7 @@ fn is_spike_2d<P: PointTrait>(a: &P, b: &P, c: &P) -> bool {
     let cross = ux * vy - uy * vx;
     let dot = ux * vx + uy * vy;
     let zero = <P::Scalar as CoordinateScalar>::ZERO;
-    cross == zero && dot < zero
+    cross == zero && dot <= zero
 }
 
 fn walk_spikes<P: PointTrait>(pts: &mut alloc::vec::Vec<P>) {
@@ -53,7 +67,7 @@ fn walk_spikes<P: PointTrait>(pts: &mut alloc::vec::Vec<P>) {
         changed = false;
         let mut i = 1;
         while i + 1 < pts.len() {
-            if is_spike_2d(&pts[i - 1], &pts[i], &pts[i + 1]) {
+            if is_spike_or_equal_2d(&pts[i - 1], &pts[i], &pts[i + 1]) {
                 pts.remove(i);
                 changed = true;
                 // Do not advance `i`: the new `pts[i]` (was `pts[i+1]`)
@@ -105,12 +119,14 @@ fn walk_ring_spikes<P: PointTrait + Copy>(pts: &mut alloc::vec::Vec<P>, closed: 
     while found {
         found = false;
         // Spike at the first point: (prev = back-1, back, front).
-        while pts.len() >= 3 && is_spike_2d(&pts[pts.len() - 2], &pts[pts.len() - 1], &pts[0]) {
+        while pts.len() >= 3
+            && is_spike_or_equal_2d(&pts[pts.len() - 2], &pts[pts.len() - 1], &pts[0])
+        {
             pts.pop();
             found = true;
         }
         // Spike at the second point: (back, front, front+1).
-        while pts.len() >= 3 && is_spike_2d(&pts[pts.len() - 1], &pts[0], &pts[1]) {
+        while pts.len() >= 3 && is_spike_or_equal_2d(&pts[pts.len() - 1], &pts[0], &pts[1]) {
             pts.remove(0);
             found = true;
         }
@@ -160,8 +176,8 @@ mod tests {
 
     use super::remove_spikes;
     use geometry_cs::Cartesian;
-    use geometry_model::{Point2D, linestring};
-    use geometry_trait::Linestring as _;
+    use geometry_model::{Point2D, Ring, linestring};
+    use geometry_trait::{Linestring as _, Point as _, Ring as _};
 
     type P = Point2D<f64, Cartesian>;
 
@@ -305,5 +321,97 @@ mod tests {
         // Ring stays closed and non-degenerate.
         assert!(r.points().count() >= 4);
         assert_eq!(pts.first(), pts.last(), "ring must remain closed");
+    }
+
+    /// Boost collapses a repeated vertex the same way it collapses a
+    /// spike — `point_is_spike_or_equal` covers both. Expected values from
+    /// `boost::geometry::remove_spikes` on a clockwise `model::polygon`
+    /// (Boost 1.83):
+    ///
+    /// ```text
+    /// consecutive dup  -> (0,0) (0,4) (4,4) (4,0) (0,0)
+    /// dup at start     -> (0,0) (0,4) (4,4) (4,0) (0,0)
+    /// triple dup       -> (0,0) (0,4) (4,4) (4,0) (0,0)
+    /// real spike       -> (0,0) (0,4) (4,4) (4,0) (0,0)
+    /// dup + spike      -> (0,0) (0,4) (4,4) (4,0) (0,0)
+    /// ```
+    ///
+    /// The `real spike` row is the one that shows why: removing the apex
+    /// of `(4,0) (6,0) (4,0)` leaves `(4,0) (4,0)` adjacent, so a
+    /// spike-only predicate makes duplicates out of its own output.
+    #[test]
+    fn repeated_vertices_are_collapsed() {
+        let square = [(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (0.0, 0.0)];
+
+        for (name, input) in [
+            (
+                "consecutive dup",
+                vec![
+                    (0.0, 0.0),
+                    (0.0, 4.0),
+                    (4.0, 4.0),
+                    (4.0, 4.0),
+                    (4.0, 0.0),
+                    (0.0, 0.0),
+                ],
+            ),
+            (
+                "dup at start",
+                vec![
+                    (0.0, 0.0),
+                    (0.0, 0.0),
+                    (0.0, 4.0),
+                    (4.0, 4.0),
+                    (4.0, 0.0),
+                    (0.0, 0.0),
+                ],
+            ),
+            (
+                "triple dup",
+                vec![
+                    (0.0, 0.0),
+                    (0.0, 4.0),
+                    (4.0, 4.0),
+                    (4.0, 4.0),
+                    (4.0, 4.0),
+                    (4.0, 0.0),
+                    (0.0, 0.0),
+                ],
+            ),
+            (
+                "real spike",
+                vec![
+                    (0.0, 0.0),
+                    (0.0, 4.0),
+                    (4.0, 4.0),
+                    (4.0, 0.0),
+                    (6.0, 0.0),
+                    (4.0, 0.0),
+                    (0.0, 0.0),
+                ],
+            ),
+            (
+                "dup + spike",
+                vec![
+                    (0.0, 0.0),
+                    (0.0, 4.0),
+                    (4.0, 4.0),
+                    (4.0, 4.0),
+                    (4.0, 0.0),
+                    (6.0, 0.0),
+                    (4.0, 0.0),
+                    (0.0, 0.0),
+                ],
+            ),
+        ] {
+            let mut ring: Ring<P> =
+                Ring::from_vec(input.iter().map(|&(x, y)| P::new(x, y)).collect());
+            remove_spikes(&mut ring);
+            let pts: Vec<(f64, f64)> = ring
+                .points()
+                .map(|p| (p.get::<0>(), p.get::<1>()))
+                .collect();
+            assert_eq!(pts, square, "{name}");
+        }
     }
 }
