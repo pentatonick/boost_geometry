@@ -170,3 +170,46 @@ fn disjoint_all_four_ops() {
     close(area(&difference(&a, &b).unwrap()), 1.0);
     close(area(&sym_difference(&a, &b).unwrap()), 2.0);
 }
+
+// ---- Result lobes meeting at one point -------------------------------
+
+/// A ring that dips out of the clip box twice and grazes its edge at a
+/// single vertex in between. The intersection is two polygons that touch
+/// at `(5, 0)`; splicing them into one ring through that point would be
+/// an invalid self-touching polygon.
+///
+/// C++ Boost (`boost::geometry::intersection`, 1.83) returns, in order:
+/// `(1.25,0) (1,1) (3,2) (2,6) (4,7) (5,0) (1.25,0)` and
+/// `(5,0) (6,1) (6.5,0) (5,0)`, with `is_valid` true.
+#[test]
+fn intersection_splits_lobes_meeting_at_a_point() {
+    let subject: Polygon<P> = polygon![[
+        (5.0, -1.0),
+        (6.0, -2.0),
+        (2.0, -3.0),
+        (1.0, 1.0),
+        (3.0, 2.0),
+        (2.0, 6.0),
+        (4.0, 7.0),
+        (5.0, 0.0),
+        (6.0, 1.0),
+        (7.0, -1.0),
+        (5.0, -1.0)
+    ]];
+    let clip = square(0.0, 0.0, 10.0);
+
+    let result = intersection(&subject, &clip).unwrap();
+    assert_eq!(
+        result.polygons().count(),
+        2,
+        "the two lobes must stay separate polygons"
+    );
+
+    // 15.375 for the large lobe plus 0.75 for the small one; C++ Boost
+    // reports the same 16.125 for this input.
+    close(area(&result), 16.125);
+
+    let mut sizes: Vec<usize> = result.polygons().map(|pg| pg.exterior().0.len()).collect();
+    sizes.sort_unstable();
+    assert_eq!(sizes, [4, 7], "each lobe keeps its own closed ring");
+}

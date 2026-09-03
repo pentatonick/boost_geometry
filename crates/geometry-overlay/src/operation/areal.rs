@@ -353,27 +353,52 @@ where
             used[edge_index] = true;
             let edge = edges[edge_index];
             node_indices.push(edge.end);
+
+            // A node the walk has already stood on closes a ring right here,
+            // not only when the walk returns to the seed. Where two lobes of
+            // the result meet at a single point, the traversal passes through
+            // that point twice; carrying on to the seed splices the lobes into
+            // one self-touching ring, which is not a valid polygon and is not
+            // what `boost::geometry::intersection` returns. Cut the loop out,
+            // keep the path up to that node, and carry on walking.
+            if let Some(start) = node_indices[..node_indices.len() - 1]
+                .iter()
+                .position(|&index| index == edge.end)
+            {
+                let loop_nodes = node_indices.split_off(start);
+                node_indices.push(edge.end);
+                push_ring(&mut rings, nodes, &loop_nodes, tolerance);
+            }
+
             if edge.end == first {
                 break;
             }
             edge_index = next_edge(nodes, edges, &used, edge).ok_or(OverlayError::Unsupported)?;
         }
         debug_assert_eq!(node_indices.last().copied(), Some(first));
-        let area = node_indices.windows(2).fold(0.0, |sum, pair| {
-            let a = nodes[pair[0]].coordinate;
-            let b = nodes[pair[1]].coordinate;
-            sum + a.x * b.y - b.x * a.y
-        }) * 0.5;
-        if area.abs() > tolerance * tolerance {
-            rings.push(Ring::from_vec(
-                node_indices
-                    .into_iter()
-                    .map(|index| nodes[index].point)
-                    .collect(),
-            ));
-        }
     }
     Ok(rings)
+}
+
+/// Append one traced cycle, dropping it when it encloses no area.
+fn push_ring<P>(rings: &mut Vec<Ring<P>>, nodes: &[Node<P>], node_indices: &[usize], tolerance: f64)
+where
+    P: Point + Copy,
+    P::Scalar: Into<f64>,
+{
+    let area = node_indices.windows(2).fold(0.0, |sum, pair| {
+        let a = nodes[pair[0]].coordinate;
+        let b = nodes[pair[1]].coordinate;
+        sum + a.x * b.y - b.x * a.y
+    }) * 0.5;
+    if area.abs() > tolerance * tolerance {
+        rings.push(Ring::from_vec(
+            node_indices
+                .iter()
+                .map(|&index| nodes[index].point)
+                .collect(),
+        ));
+    }
 }
 
 fn next_edge<P>(nodes: &[Node<P>], edges: &[Edge], used: &[bool], incoming: Edge) -> Option<usize>
