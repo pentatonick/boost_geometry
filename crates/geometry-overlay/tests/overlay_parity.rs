@@ -421,16 +421,11 @@ fn two_turns_on_one_segment_are_ordered_by_the_second_operand() {
 }
 
 /// A square and a rectangle overlapping along part of one side, running the
-/// same way round. The rectangle's corner at `(50, 100)` lands part-way along
-/// the square's top edge, and this arrangement splits there — but Boost walks
-/// the square across it without stopping, because the square has no vertex
-/// there, so the point never reaches the output.
-///
-/// The square's own corner at `(100, 100)` is a different matter: it is a
-/// vertex of the operand being walked, and it survives — until the ring-start
-/// cleaning takes it, which is why the answer begins at `(150, 100)`.
+/// same way round. Both ends of the overlap are turns, and both carry the
+/// outline straight on — so each is appended and then replaced by the next
+/// turn along, which is `append_no_collinear` doing what Boost does.
 #[test]
-fn a_point_the_walked_operand_runs_straight_past_is_not_emitted() {
+fn a_turn_that_carries_the_outline_straight_on_is_replaced() {
     let square: Polygon<P> = polygon![[
         (0.0, 0.0),
         (0.0, 100.0),
@@ -456,5 +451,136 @@ fn a_point_the_walked_operand_runs_straight_past_is_not_emitted() {
             (0.0, 100.0),
             (150.0, 100.0),
         ]
+    );
+}
+
+/// The same shape the other way up: the rectangle straddles the square, and
+/// the overlap runs down one side. `(100, 100)` is the square's own corner and
+/// still goes, because the turn after it — the far end of the overlap — is
+/// collinear with it.
+#[test]
+fn the_walked_operands_own_corner_goes_too_when_a_turn_follows_it_straight() {
+    let square: Polygon<P> = polygon![[
+        (0.0, 0.0),
+        (0.0, 100.0),
+        (100.0, 100.0),
+        (100.0, 0.0),
+        (0.0, 0.0)
+    ]];
+    let straddling: Polygon<P> = polygon![[
+        (0.0, 50.0),
+        (0.0, 150.0),
+        (100.0, 150.0),
+        (100.0, 50.0),
+        (0.0, 50.0)
+    ]];
+    assert_eq!(
+        vertices(&union_poly(&square, &straddling).unwrap()),
+        vec![
+            (0.0, 150.0),
+            (100.0, 150.0),
+            (100.0, 50.0),
+            (100.0, 0.0),
+            (0.0, 0.0),
+            (0.0, 150.0),
+        ]
+    );
+}
+
+/// Two squares meeting at a single corner. Both output rings begin at that
+/// corner, so the node they start at cannot separate them — Boost's `iterate`
+/// tries operation 0 before operation 1 at a turn, which puts the lobe traced
+/// along the *first* operand first.
+#[test]
+fn lobes_meeting_at_a_corner_are_ordered_by_operand() {
+    let lower: Polygon<P> = polygon![[
+        (0.0, 0.0),
+        (0.0, 100.0),
+        (100.0, 100.0),
+        (100.0, 0.0),
+        (0.0, 0.0)
+    ]];
+    let upper: Polygon<P> = polygon![[
+        (100.0, 100.0),
+        (100.0, 200.0),
+        (200.0, 200.0),
+        (200.0, 100.0),
+        (100.0, 100.0)
+    ]];
+    let out = union_poly(&lower, &upper).unwrap();
+    let rings: Vec<Vec<(f64, f64)>> = out
+        .polygons()
+        .map(|pg| {
+            pg.exterior()
+                .points()
+                .map(|p| (p.get::<0>(), p.get::<1>()))
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        rings,
+        vec![
+            vec![
+                (100.0, 100.0),
+                (100.0, 0.0),
+                (0.0, 0.0),
+                (0.0, 100.0),
+                (100.0, 100.0)
+            ],
+            vec![
+                (100.0, 100.0),
+                (100.0, 200.0),
+                (200.0, 200.0),
+                (200.0, 100.0),
+                (100.0, 100.0)
+            ],
+        ]
+    );
+}
+
+/// Two convex polygons crossing twice, where each crossing sits on a
+/// *different* segment of the first operand but both sit in the same monotone
+/// run of it.
+///
+/// `get_turns` partitions each operand into sections — runs of segments
+/// heading the same way in both dimensions — and walks the section pairs, so
+/// two turns in one section of the first operand are ordered by the section of
+/// the second, not by the first's segment index. Ordering by segment alone
+/// starts this ring at the other crossing.
+///
+/// The crossing coordinates are irrational, so the start is checked by
+/// proximity rather than pinned digit for digit.
+#[test]
+fn turns_in_one_section_are_ordered_by_the_second_operands_section() {
+    let nine: Polygon<P> = polygon![[
+        (181.0, 100.0),
+        (157.0, 43.0),
+        (100.0, 19.0),
+        (43.0, 43.0),
+        (19.0, 100.0),
+        (43.0, 157.0),
+        (100.0, 181.0),
+        (157.0, 157.0),
+        (181.0, 100.0)
+    ]];
+    let ten: Polygon<P> = polygon![[
+        (200.0, 4.0),
+        (188.0, -26.0),
+        (160.0, -43.0),
+        (129.0, -37.0),
+        (107.0, -12.0),
+        (107.0, 20.0),
+        (128.0, 45.0),
+        (160.0, 51.0),
+        (188.0, 34.0),
+        (200.0, 4.0)
+    ]];
+    let start = vertices(&union_poly(&nine, &ten).unwrap())[0];
+    // C++ Boost 1.83 begins here; ordering by segment would begin at the other
+    // crossing, near (160.293, 50.822).
+    assert!(
+        (start.0 - 109.530_944_625_407_16).abs() < 1e-9
+            && (start.1 - 23.013_029_315_960_91).abs() < 1e-9,
+        "ring starts at {start:?}"
     );
 }

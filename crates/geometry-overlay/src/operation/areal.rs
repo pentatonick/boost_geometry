@@ -112,6 +112,9 @@ struct SourceSegment<P> {
     /// pushed by the intersection sweep is, including one that lands on an
     /// endpoint.
     splits: Vec<(f64, P, bool)>,
+    /// Which monotone run of its ring this segment belongs to. C++:
+    /// `sectionalize`, whose sections are what `get_turns` iterates over.
+    section: usize,
 }
 
 impl<P> SourceSegment<P>
@@ -119,11 +122,12 @@ where
     P: Point + Copy,
     P::Scalar: Into<f64>,
 {
-    fn new(start: P, end: P) -> Self {
+    fn new(start: P, end: P, section: usize) -> Self {
         Self {
             start,
             end,
             splits: alloc::vec![(0.0, start, false), (1.0, end, false)],
+            section,
         }
     }
 
@@ -169,13 +173,15 @@ struct Node<P> {
     /// means the operand's boundary does not pass through this node, which is
     /// true of every vertex that is not a turn.
     arrival: [usize; 2],
+    /// The section of each operand that reaches this node, which outranks the
+    /// segment: `get_turns` partitions both operands into sections first and
+    /// walks the pairs, so two turns in the same pair of sections keep their
+    /// segment order while turns in different pairs do not.
+    section: [usize; 2],
     /// How far along that segment. It orders two turns only once both segment
     /// indices have tied — the fraction must not outrank the second operand,
     /// or two turns sharing one edge come out in the wrong order.
     offset: [f64; 2],
-    /// Whether this node is a *vertex* of each operand, as against a point
-    /// that only lies on its boundary because the other operand touches there.
-    is_vertex: [bool; 2],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -330,7 +336,14 @@ where
         if left_result == right_result {
             continue;
         }
-        let edge = if left_result {
+        // Oriented so the filled side is on the right, which walks an outer
+        // ring clockwise and a hole counter-clockwise — the directions Boost's
+        // traversal produces, and the ones `append_no_collinear` and
+        // `clean_closing_dups_and_spikes` are written against. Both look at
+        // the point *before* the one they judge, so a ring traced the other
+        // way round drops the vertex at the far end of a straight run instead
+        // of the near one.
+        let edge = if right_result {
             candidate
         } else {
             Edge {
@@ -378,10 +391,11 @@ where
     P::Scalar: Into<f64>,
 {
     let mut segments = Vec::new();
+    let mut sections = Sectionizer::new(0);
     for polygon in multi_polygon.polygons() {
-        append_ring_segments(polygon.exterior(), &mut segments);
+        append_ring_segments(polygon.exterior(), &mut segments, &mut sections);
         for ring in polygon.interiors() {
-            append_ring_segments(ring, &mut segments);
+            append_ring_segments(ring, &mut segments, &mut sections);
         }
     }
     segments
@@ -394,15 +408,82 @@ where
     P::Scalar: Into<f64>,
 {
     let mut segments = Vec::new();
-    append_ring_segments(polygon.exterior(), &mut segments);
+    let mut sections = Sectionizer::new(0);
+    append_ring_segments(polygon.exterior(), &mut segments, &mut sections);
     for ring in polygon.interiors() {
-        append_ring_segments(ring, &mut segments);
+        append_ring_segments(ring, &mut segments, &mut sections);
     }
     segments
 }
 
-fn append_ring_segments<R, P>(ring: &R, output: &mut Vec<SourceSegment<P>>)
-where
+/// C++: `sectionalize`'s cap, "defaults to 10, this seems to give the fastest
+/// results".
+const MAX_SEGMENTS_PER_SECTION: usize = 10;
+
+/// A section is a run of consecutive segments heading the same way in both
+/// dimensions. C++: `sectionalize`, which starts a new one whenever the pair
+/// of signs changes, or the run grows past `max_count`. Sections do not span
+/// rings.
+struct Sectionizer {
+    next: usize,
+    directions: Option<(i8, i8)>,
+    count: usize,
+}
+
+impl Sectionizer {
+    fn new(next: usize) -> Self {
+        Self {
+            next,
+            directions: None,
+            count: 0,
+        }
+    }
+
+    fn start_ring(&mut self) {
+        if self.count > 0 {
+            self.next += 1;
+        }
+        self.directions = None;
+        self.count = 0;
+    }
+
+    fn section_for<P>(&mut self, start: &P, end: &P) -> usize
+    where
+        P: Point,
+        P::Scalar: Into<f64>,
+    {
+        let sign = |a: f64, b: f64| -> i8 {
+            if b > a {
+                1
+            } else if b < a {
+                -1
+            } else {
+                0
+            }
+        };
+        let directions = (
+            sign(start.get::<0>().into(), end.get::<0>().into()),
+            sign(start.get::<1>().into(), end.get::<1>().into()),
+        );
+        if self.count > 0
+            && (Some(directions) != self.directions || self.count > MAX_SEGMENTS_PER_SECTION)
+        {
+            self.next += 1;
+            self.count = 0;
+        }
+        if self.count == 0 {
+            self.directions = Some(directions);
+        }
+        self.count += 1;
+        self.next
+    }
+}
+
+fn append_ring_segments<R, P>(
+    ring: &R,
+    output: &mut Vec<SourceSegment<P>>,
+    sections: &mut Sectionizer,
+) where
     R: RingTrait<Point = P>,
     P: Point + Copy,
     P::Scalar: Into<f64>,
@@ -411,16 +492,17 @@ where
     if points.len() < 2 {
         return;
     }
+    sections.start_ring();
     for pair in points.windows(2) {
         if points_differ(&pair[0], &pair[1]) {
-            output.push(SourceSegment::new(pair[0], pair[1]));
+            let section = sections.section_for(&pair[0], &pair[1]);
+            output.push(SourceSegment::new(pair[0], pair[1], section));
         }
     }
-    if points_differ(points.last().expect("nonempty"), &points[0]) {
-        output.push(SourceSegment::new(
-            *points.last().expect("nonempty"),
-            points[0],
-        ));
+    let last = *points.last().expect("nonempty");
+    if points_differ(&last, &points[0]) {
+        let section = sections.section_for(&last, &points[0]);
+        output.push(SourceSegment::new(last, points[0], section));
     }
 }
 
@@ -435,6 +517,7 @@ fn append_atomic_edges<P>(
     P::Scalar: Into<f64>,
 {
     for (index, segment) in segments.iter_mut().enumerate() {
+        let section = segment.section;
         segment
             .splits
             .sort_by(|left, right| left.0.total_cmp(&right.0));
@@ -448,12 +531,7 @@ fn append_atomic_edges<P>(
             if nodes[end].arrival[operand] == usize::MAX {
                 nodes[end].arrival[operand] = index;
                 nodes[end].offset[operand] = pair[1].0;
-            }
-            if pair[0].0 == 0.0 || pair[0].0 == 1.0 {
-                nodes[start].is_vertex[operand] = true;
-            }
-            if pair[1].0 == 0.0 || pair[1].0 == 1.0 {
-                nodes[end].is_vertex[operand] = true;
+                nodes[end].section[operand] = section;
             }
             if start != end {
                 let mut carried_by = [false; 2];
@@ -488,8 +566,8 @@ where
         coordinate,
         is_turn,
         arrival: [usize::MAX; 2],
+        section: [usize::MAX; 2],
         offset: [0.0; 2],
-        is_vertex: [false; 2],
     });
     nodes.len() - 1
 }
@@ -509,7 +587,7 @@ where
     // Each ring is kept with the node it starts at, so the whole set can be
     // put back into source order below, and with whether the traversal
     // assembled it from turns rather than copying it whole from one operand.
-    let mut rings: Vec<(usize, Ring<P>, bool)> = Vec::new();
+    let mut rings: Vec<(usize, bool, Ring<P>, bool)> = Vec::new();
     for seed in 0..edges.len() {
         if used[seed] {
             continue;
@@ -556,73 +634,46 @@ where
     // polygons in the result — and Boost's is not the order the seeds happened
     // to fall in. It traces from turns in source order, so ordering the rings
     // by the node each one starts at reproduces it.
-    rings.sort_by_key(|&(start, _, _)| start);
+    rings.sort_by_key(|&(start, second_operand, _, _)| (start, second_operand));
     Ok(rings
         .into_iter()
-        .map(|(_, ring, traced)| (ring, traced))
+        .map(|(_, _, ring, traced)| (ring, traced))
         .collect())
 }
 
-/// Remove a point the first operand runs straight past.
+/// Append a turn point, dropping whatever it now runs straight through.
 ///
-/// This arrangement splits a segment wherever anything touches it, so a vertex
-/// of one operand landing part-way along a segment of the other becomes a
-/// point on the traced ring. Boost's traversal does not work that way: between
-/// two turns it copies the vertices of the single operand it is walking, and a
-/// point that operand has no vertex at is simply passed over.
+/// C++: `append_no_collinear`. Once the point is on, any point before it that
+/// the new one continues the line of is redundant and comes off — repeatedly,
+/// because removing one can leave the next in the same position.
 ///
-/// Along a stretch both operands carry, the operand walked is the first, so
-/// that is the one whose vertices survive. Two guards keep the rule honest:
-/// the point must be collinear with its neighbours, because anywhere the
-/// outline actually turns the point is part of the shape whoever owns it; and
-/// a point the first operand does have a vertex at stays, because Boost would
-/// copy it.
-///
-/// Not every such point is caught. Where the two operands run the same way
-/// along a shared edge, Boost emits one turn for the overlap and puts it at
-/// the far end, so the near end goes too — 12 of 112 shared-edge pairs still
-/// differ on that, and closing them needs `get_turns`' own collinear turn
-/// handling rather than a rule over the arrangement.
-fn drop_points_interior_to_a_walked_segment<P>(
-    nodes: &[Node<P>],
-    cycle: &mut Vec<usize>,
-    carried: &mut Vec<[bool; 2]>,
-) where
+/// Boost applies this to turn points only. The ring vertices copied between
+/// two turns go on through `append_no_dups_or_spikes`, which takes out
+/// duplicates and spikes but leaves a vertex that merely continues straight,
+/// so an operand's own collinear vertex survives while a turn's does not.
+fn append_no_collinear<P>(points: &mut Vec<P>, point: P)
+where
     P: Point + Copy,
     P::Scalar: Into<f64>,
 {
-    let mut index = 0;
-    while index < cycle.len() && cycle.len() > 3 {
-        let length = cycle.len();
-        let incoming = carried[(index + length - 1) % length];
-        let outgoing = carried[index];
-        let node = &nodes[cycle[index]];
-        // Boost walks one operand at a time between turns and copies *that*
-        // operand's vertices. Along a stretch both operands carry, it walks
-        // the first — so a point the first operand runs straight past, having
-        // no vertex there, never reaches the output however many vertices the
-        // second has at it.
-        let walked_over = incoming[0] && outgoing[0] && !node.is_vertex[0];
-        if !walked_over {
-            index += 1;
-            continue;
+    let at = |p: &P| (p.get::<0>().into(), p.get::<1>().into());
+    let (x, y) = at(&point);
+    if points.len() == 1 {
+        let (fx, fy) = at(&points[0]);
+        if fx == x && fy == y {
+            return;
         }
-        let previous = nodes[cycle[(index + length - 1) % length]].coordinate;
-        let here = node.coordinate;
-        let next = nodes[cycle[(index + 1) % length]].coordinate;
-        let side = (here.x - previous.x) * (next.y - previous.y)
-            - (here.y - previous.y) * (next.x - previous.x);
-        if side != 0.0 {
-            index += 1;
-            continue;
+    }
+    points.push(point);
+    while points.len() >= 3 {
+        let (ax, ay) = at(&points[points.len() - 3]);
+        let (bx, by) = at(&points[points.len() - 2]);
+        if (bx - ax) * (y - ay) - (by - ay) * (x - ax) != 0.0 {
+            return;
         }
-        // The two edges become one, carried by whoever carried both halves.
-        let merged = [incoming[0] && outgoing[0], incoming[1] && outgoing[1]];
-        cycle.remove(index);
-        carried.remove(index);
-        let previous_edge = (index + cycle.len() - 1) % cycle.len();
-        carried[previous_edge] = merged;
-        index = 0;
+        let last = points.pop().expect("just pushed");
+        points.pop();
+        points.push(last);
     }
 }
 
@@ -636,7 +687,7 @@ fn drop_points_interior_to_a_walked_segment<P>(
 /// because a consumer that simplifies the ring afterwards will pin its first
 /// vertex and the choice reaches the output.
 fn push_ring<P>(
-    rings: &mut Vec<(usize, Ring<P>, bool)>,
+    rings: &mut Vec<(usize, bool, Ring<P>, bool)>,
     nodes: &[Node<P>],
     node_indices: &[usize],
     carried: &[[bool; 2]],
@@ -655,10 +706,7 @@ fn push_ring<P>(
     }
 
     // The cycle is closed, so its last index repeats its first.
-    let mut cycle = node_indices[..node_indices.len() - 1].to_vec();
-    let mut carried = carried.to_vec();
-    drop_points_interior_to_a_walked_segment(nodes, &mut cycle, &mut carried);
-    let cycle = &cycle[..];
+    let cycle = &node_indices[..node_indices.len() - 1];
     // Boost begins each output ring at the first *turn* along the first
     // operand's boundary — `Node::arrival`, which is that order with Boost's
     // endpoint normalisation applied.
@@ -671,8 +719,10 @@ fn push_ring<P>(
         .filter(|&(_, index)| nodes[index].is_turn)
         .min_by(|&(_, left), &(_, right)| {
             let (a, b) = (&nodes[left], &nodes[right]);
-            a.arrival[0]
-                .cmp(&b.arrival[0])
+            a.section[0]
+                .cmp(&b.section[0])
+                .then(a.section[1].cmp(&b.section[1]))
+                .then(a.arrival[0].cmp(&b.arrival[0]))
                 .then(a.arrival[1].cmp(&b.arrival[1]))
                 .then(a.offset[0].total_cmp(&b.offset[0]))
         })
@@ -692,19 +742,43 @@ fn push_ring<P>(
     };
     let first_turn = first_turn_by_arrival.or_else(first_node).unwrap_or(0);
 
-    let mut points: Vec<P> = cycle[first_turn..]
-        .iter()
-        .chain(&cycle[..first_turn])
-        .map(|&index| nodes[index].point)
-        .collect();
+    // C++: the traversal appends a *turn* point with `append_no_collinear` and
+    // the ring vertices between turns with `copy_segments`, which does not
+    // check for collinearity. So a turn that carries the outline straight on
+    // replaces the point before it, and a vertex of the operand being walked
+    // never does.
+    //
+    // This is what keeps the other operand's corner out of the result where
+    // the two run along the same edge: the traversal reaches that corner as a
+    // turn, appends it, and then the next turn — the far end of the shared
+    // stretch — is collinear with it and takes its place.
+    let mut points: Vec<P> = Vec::with_capacity(cycle.len() + 1);
+    for &index in cycle[first_turn..].iter().chain(&cycle[..first_turn]) {
+        let node = &nodes[index];
+        if !node.is_turn {
+            points.push(node.point);
+            continue;
+        }
+        append_no_collinear(&mut points, node.point);
+    }
+    // The traversal closes a ring by arriving back at the turn it started
+    // from, and that arrival is an append like any other — which is exactly
+    // where the point before it goes, when the start carries the outline
+    // straight on through it.
     if let Some(&first) = points.first() {
-        points.push(first);
+        append_no_collinear(&mut points, first);
     }
     // The ring is cleaned once it is in its final winding, not here: which
     // vertex `clean_closing_dups_and_spikes` leaves at the front depends on
     // the direction the ring runs in, and that is decided in `assemble`.
+    // Two rings can begin at the same node — where the result touches itself
+    // at a point, both lobes start there. Boost separates them by operand:
+    // `iterate` tries operation 0 before operation 1 at a turn, so the lobe
+    // traced along the first operand is emitted first.
+    let leaves_along_first_operand = carried.get(first_turn).is_some_and(|edge| edge[0]);
     rings.push((
         cycle[first_turn],
+        !leaves_along_first_operand,
         Ring::from_vec(points),
         first_turn_by_arrival.is_some(),
     ));
@@ -811,24 +885,24 @@ mod tests {
                 coordinate: Coordinate { x: 0.0, y: 0.0 },
                 is_turn: false,
                 arrival: [0, 0],
+                section: [0, 0],
                 offset: [0.0; 2],
-                is_vertex: [true; 2],
             },
             Node {
                 point: P::new(1.0, 0.0),
                 coordinate: Coordinate { x: 1.0, y: 0.0 },
                 is_turn: false,
                 arrival: [1, 1],
+                section: [1, 1],
                 offset: [0.0; 2],
-                is_vertex: [true; 2],
             },
             Node {
                 point: P::new(2.0, 0.0),
                 coordinate: Coordinate { x: 2.0, y: 0.0 },
                 is_turn: false,
                 arrival: [2, 2],
+                section: [2, 2],
                 offset: [0.0; 2],
-                is_vertex: [true; 2],
             },
         ];
         let edges = [
