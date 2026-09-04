@@ -36,6 +36,7 @@ pub mod buffer;
 pub mod line_intersection;
 pub mod merge;
 pub mod operation;
+mod piece_collection;
 pub mod predicate;
 pub mod relate;
 pub mod surface_point;
