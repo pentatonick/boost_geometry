@@ -674,3 +674,26 @@ fn difference_pieces_come_out_in_the_order_their_turns_were_collected() {
         corner[0]
     );
 }
+
+/// A polygon whose ring runs straight through its last vertex into its first,
+/// differenced against something that does not touch it.
+///
+/// C++: nothing traverses this ring — no turn lands on it, so `add_rings`
+/// copies it out of its operand with `convert_ring`, which appends nothing and
+/// drops nothing. Closing it the way the traversal closes a *traced* ring puts
+/// the last vertex through `append_no_collinear`, which sees the straight run
+/// into the first vertex and takes it off.
+///
+/// This is what reached tilemaker: the dissolve it uses to repair a polygon
+/// finishes with `difference(outers, inners)`, and a repaired piece that
+/// nothing else touches came back a vertex short.
+#[test]
+fn an_untouched_ring_keeps_the_vertex_it_runs_straight_through() {
+    let sliver: Polygon<P> = polygon![[(3.0, 3.0), (2.0, 4.0), (3.0, 5.0), (3.0, 4.0), (3.0, 3.0)]];
+    let elsewhere = square(20.0, 20.0, 4.0);
+    let kept = vertices(&difference(&sliver, &elsewhere).unwrap());
+    assert_eq!(
+        kept,
+        vec![(3.0, 3.0), (2.0, 4.0), (3.0, 5.0), (3.0, 4.0), (3.0, 3.0)]
+    );
+}

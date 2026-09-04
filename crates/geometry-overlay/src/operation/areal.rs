@@ -831,8 +831,17 @@ fn push_ring<P>(
     // from, and that arrival is an append like any other — which is exactly
     // where the point before it goes, when the start carries the outline
     // straight on through it.
+    //
+    // Only a *traced* ring closes that way. One with no turn on it was never
+    // traversed at all: `add_rings` copies it out of its operand through
+    // `convert_ring`, which appends nothing and drops nothing, so its last
+    // vertex stays even where it continues the line straight into the first.
     if let Some(&first) = points.first() {
-        append_no_collinear(&mut points, first);
+        if first_turn_by_arrival.is_some() {
+            append_no_collinear(&mut points, first);
+        } else {
+            points.push(first);
+        }
     }
     // The ring is cleaned once it is in its final winding, not here: which
     // vertex `clean_closing_dups_and_spikes` leaves at the front depends on
