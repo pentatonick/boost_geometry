@@ -22,8 +22,10 @@
 //! Boost's
 //! `side_by_triangle` additionally treats any coincident pair among the
 //! three points as collinear
-//! (`side_by_triangle.hpp:159-164`); this predicate does the same,
-//! because a zero-length base line has no well-defined side.
+//! (`side_by_triangle.hpp:150-164`); this predicate does the same, and
+//! coincident means Boost's `math::equals` — a relative epsilon — not bitwise
+//! equality, because a zero-length base line has no well-defined side and a
+//! base line a few last bits long has none worth trusting.
 
 use geometry_coords::{CoordinateScalar, precise_math};
 use geometry_trait::Point;
@@ -90,6 +92,18 @@ where
     let qy = q.get::<1>();
     let rx = r.get::<0>();
     let ry = r.get::<1>();
+
+    // C++: `side_by_triangle` opens by calling the three points collinear if
+    // any two of them are `equals_point_point` — which is `math::equals` per
+    // coordinate, a *relative* epsilon (`side_by_triangle.hpp:150-164`). Two
+    // points a few last bits apart at a large coordinate are the same point to
+    // Boost, and the determinant below never gets to disagree.
+    let coincident = |ax: P::Scalar, ay: P::Scalar, bx: P::Scalar, by: P::Scalar| {
+        ax.tolerant_eq(bx) && ay.tolerant_eq(by)
+    };
+    if coincident(px, py, qx, qy) || coincident(px, py, rx, ry) || coincident(qx, qy, rx, ry) {
+        return Sign::Collinear;
+    }
 
     // Signed area of (p, q, r). Boost's `side_by_triangle::side_value`
     // computes the identical determinant

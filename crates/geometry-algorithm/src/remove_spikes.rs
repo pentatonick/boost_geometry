@@ -58,7 +58,21 @@ fn is_spike_or_equal_2d<P: PointTrait>(a: &P, b: &P, c: &P) -> bool {
     let cross = ux * vy - uy * vx;
     let dot = ux * vx + uy * vy;
     let zero = <P::Scalar as CoordinateScalar>::ZERO;
-    cross == zero && dot <= zero
+    // The collinearity half is Boost's `side_by_triangle`, which calls three
+    // points collinear whenever any *two* of them are equal by `math::equals`
+    // — a relative epsilon — before it looks at any determinant
+    // (`side_by_triangle.hpp:150-164`). A hairline whose two ends are a few
+    // last bits apart at a large coordinate is a spike to Boost and a genuine
+    // sliver to an exact cross product, which is how one survived into a tile
+    // that the reference drew as nothing.
+    let same = |ax: P::Scalar, ay: P::Scalar, bx: P::Scalar, by: P::Scalar| {
+        ax.tolerant_eq(bx) && ay.tolerant_eq(by)
+    };
+    let collinear = cross == zero
+        || same(a.get::<0>(), a.get::<1>(), b.get::<0>(), b.get::<1>())
+        || same(a.get::<0>(), a.get::<1>(), c.get::<0>(), c.get::<1>())
+        || same(b.get::<0>(), b.get::<1>(), c.get::<0>(), c.get::<1>());
+    collinear && dot <= zero
 }
 
 fn walk_spikes<P: PointTrait>(pts: &mut alloc::vec::Vec<P>) {
@@ -180,6 +194,49 @@ mod tests {
     use geometry_trait::{Linestring as _, Point as _, Ring as _};
 
     type P = Point2D<f64, Cartesian>;
+
+    fn spike_ring(points: &[(f64, f64)]) -> Ring<P> {
+        let mut ring = Ring::new();
+        for &(x, y) in points {
+            ring.push(P::new(x, y));
+        }
+        ring
+    }
+
+    /// A hairline whose two ends are four last bits apart at a coordinate of
+    /// 3540, which is inside one epsilon of it.
+    ///
+    /// C++: `side_by_triangle` calls three points collinear when any two of
+    /// them are `math::equals` — a *relative* epsilon — before it computes any
+    /// determinant, so Boost sees a spike here and collapses the ring to a
+    /// single repeated point. An exact cross product sees a sliver with real
+    /// area and keeps it, which is how one survived into a monaco tile the
+    /// reference drew as nothing.
+    #[test]
+    fn a_hairline_within_an_epsilon_is_a_spike() {
+        let mut ring = spike_ring(&[
+            (3_539.999_999_999_999_5, 482.199_999_999_999_76),
+            (3540.0, 482.199_999_999_999_8),
+            (3540.0, 479.0),
+            (3_539.999_999_999_999_5, 482.199_999_999_999_76),
+        ]);
+        remove_spikes(&mut ring);
+        assert_eq!(ring.0.len(), 2, "{:?}", ring.0);
+    }
+
+    /// The same ring with its two ends far enough apart to be two points,
+    /// where the sliver has real area and stays.
+    #[test]
+    fn a_sliver_wider_than_an_epsilon_is_kept() {
+        let mut ring = spike_ring(&[
+            (3_539.999_999_9, 482.199_999_9),
+            (3540.0, 482.2),
+            (3540.0, 479.0),
+            (3_539.999_999_9, 482.199_999_9),
+        ]);
+        remove_spikes(&mut ring);
+        assert_eq!(ring.0.len(), 4, "{:?}", ring.0);
+    }
 
     #[test]
     fn out_and_back_spur_is_removed() {
