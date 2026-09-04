@@ -27,6 +27,7 @@ use geometry_trait::{
 
 use crate::assemble::assemble_traced;
 use crate::operation::OverlayError;
+use crate::operation::section_partition::{Bounds, VisitRank};
 use crate::predicate::segment_intersection::{SegmentIntersection, segment_intersection};
 
 /// Boolean truth table applied to the two polygon interiors.
@@ -191,6 +192,10 @@ struct Node<P> {
     /// walks the pairs, so two turns in the same pair of sections keep their
     /// segment order while turns in different pairs do not.
     section: [usize; 2],
+    /// Where that pair of sections falls in the order `partition` visits them
+    /// — the whole of a turn's position in `m_turns`, above its segments.
+    /// `usize::MAX` until the arrangement knows both operands.
+    pair_rank: usize,
     /// How far along that segment. It orders two turns only once both segment
     /// indices have tied — the fraction must not outrank the second operand,
     /// or two turns sharing one edge come out in the wrong order.
@@ -210,6 +215,11 @@ struct Edge {
     /// Reproducing that needs to know who carries each edge — see
     /// `drop_points_interior_to_a_walked_segment`.
     carried_by: [bool; 2],
+    /// Which section of each operand runs along it, `usize::MAX` for an
+    /// operand that does not. Sections never span a ring, so the lowest one on
+    /// a cycle names the ring the cycle came out of — which is the whole of
+    /// `ring_identifier` for a ring nothing crossed.
+    section: [usize; 2],
 }
 
 impl Edge {
@@ -220,13 +230,14 @@ impl Edge {
 
 /// Where a turn sits in `get_turns`' collection order.
 ///
-/// C++: `get_turns` walks the first operand's sections in the outer loop and
-/// the second operand's in the inner, and inside a pair of sections the
-/// segments in order — so a turn's place in `m_turns` is that nesting, and
-/// `traverse` starts its rings in `m_turns` order.
+/// C++: `partition` decides which pair of sections is looked at when, and
+/// inside a pair `get_turns_in_sections` walks the first section's segments
+/// outer and the second's inner — so a turn's place in `m_turns` is the pair's
+/// rank and then that nesting, and `traverse` starts its rings in `m_turns`
+/// order.
 #[derive(Clone, Copy)]
 struct TurnOrder {
-    sections: [usize; 2],
+    pair_rank: usize,
     arrivals: [usize; 2],
     offset: f64,
 }
@@ -234,15 +245,15 @@ struct TurnOrder {
 impl TurnOrder {
     fn of<P>(node: &Node<P>) -> Self {
         Self {
-            sections: node.section,
+            pair_rank: node.pair_rank,
             arrivals: node.arrival,
             offset: node.offset[0],
         }
     }
 
     fn compare(&self, other: &Self) -> Ordering {
-        self.sections
-            .cmp(&other.sections)
+        self.pair_rank
+            .cmp(&other.pair_rank)
             .then_with(|| self.arrivals.cmp(&other.arrivals))
             .then_with(|| self.offset.total_cmp(&other.offset))
     }
@@ -251,12 +262,15 @@ impl TurnOrder {
 /// Where a finished ring falls in the output.
 ///
 /// C++: `add_rings` walks the selected rings in `ring_identifier` order. A
-/// ring copied whole from an operand carries that operand's own identifier, so
-/// every one of those precedes the traversed rings; a traversed ring is
+/// ring copied whole from an operand carries that operand's own identifier —
+/// source, then position within it — so every one of those precedes the
+/// traversed rings and they keep the operand's own order; a traversed ring is
 /// identified by when `traverse` started it, which is where `get_turns` put
 /// the turn it started from.
 struct RingStart {
     traversed: bool,
+    source: usize,
+    ring: usize,
     turn: TurnOrder,
     second_operand: bool,
     node: usize,
@@ -264,11 +278,20 @@ struct RingStart {
 
 impl RingStart {
     fn compare(&self, other: &Self) -> Ordering {
-        self.traversed
-            .cmp(&other.traversed)
-            .then_with(|| self.turn.compare(&other.turn))
-            .then_with(|| self.second_operand.cmp(&other.second_operand))
-            .then_with(|| self.node.cmp(&other.node))
+        self.traversed.cmp(&other.traversed).then_with(|| {
+            if self.traversed {
+                self.turn
+                    .compare(&other.turn)
+                    .then_with(|| self.second_operand.cmp(&other.second_operand))
+                    .then_with(|| self.node.cmp(&other.node))
+            } else {
+                // Untouched rings are ordered by their identifier alone, which
+                // has nothing to do with where a turn fell.
+                self.source
+                    .cmp(&other.source)
+                    .then_with(|| self.ring.cmp(&other.ring))
+            }
+        })
     }
 }
 
@@ -375,6 +398,16 @@ where
         snap_tolerance,
     );
 
+    // C++: `partition` is handed the two section lists, and the order it
+    // visits their pairs in is the order the turns end up in.
+    let ranks = VisitRank::of(
+        &section_bounds(&first_segments),
+        &section_bounds(&second_segments),
+    );
+    for node in &mut nodes {
+        node.pair_rank = ranks.rank(node.section[0], node.section[1]);
+    }
+
     let sample_distance = (scale * 1e-8).max(snap_tolerance * 32.0);
     let mut boundary: Vec<Edge> = Vec::new();
     for candidate in candidates {
@@ -417,6 +450,7 @@ where
                 start: candidate.end,
                 end: candidate.start,
                 carried_by: candidate.carried_by,
+                section: candidate.section,
             }
         };
         // The same stretch reaches here once per operand that carries it, so
@@ -426,6 +460,8 @@ where
             Some(held) => {
                 held.carried_by[0] |= edge.carried_by[0];
                 held.carried_by[1] |= edge.carried_by[1];
+                held.section[0] = held.section[0].min(edge.section[0]);
+                held.section[1] = held.section[1].min(edge.section[1]);
             }
             None => boundary.push(edge),
         }
@@ -481,6 +517,34 @@ where
         append_ring_segments(ring, &mut segments, &mut sections, backwards);
     }
     segments
+}
+
+/// The box of every section, in section order.
+///
+/// C++: each `section` carries the `bounding_box` `sectionalize` expanded over
+/// its segments, and that box is the whole of what `partition` reasons about.
+fn section_bounds<P>(segments: &[SourceSegment<P>]) -> Vec<Bounds>
+where
+    P: Point + Copy,
+    P::Scalar: Into<f64>,
+{
+    let mut bounds: Vec<Bounds> = Vec::new();
+    for segment in segments {
+        let box_ = Bounds::around(
+            [
+                segment.start.get::<0>().into(),
+                segment.start.get::<1>().into(),
+            ],
+            [segment.end.get::<0>().into(), segment.end.get::<1>().into()],
+        );
+        match bounds.get_mut(segment.section) {
+            Some(held) => held.expand(&box_),
+            // Sections are numbered from zero and in order, so a segment
+            // either extends the section being built or opens the next one.
+            None => bounds.push(box_),
+        }
+    }
+    bounds
 }
 
 /// C++: `sectionalize`'s cap, "defaults to 10, this seems to give the fastest
@@ -610,10 +674,13 @@ fn append_atomic_edges<P>(
             if start != end {
                 let mut carried_by = [false; 2];
                 carried_by[operand] = true;
+                let mut sections = [usize::MAX; 2];
+                sections[operand] = section;
                 output.push(Edge {
                     start,
                     end,
                     carried_by,
+                    section: sections,
                 });
             }
         }
@@ -641,6 +708,7 @@ where
         is_turn,
         arrival: [usize::MAX; 2],
         section: [usize::MAX; 2],
+        pair_rank: usize::MAX,
         offset: [0.0; 2],
     });
     nodes.len() - 1
@@ -668,15 +736,15 @@ where
         let first = edges[seed].start;
         let mut edge_index = seed;
         let mut node_indices = alloc::vec![first];
-        // `carried[i]` is who carries the edge from `node_indices[i]` to the
-        // node after it, so it always has one entry fewer.
-        let mut carried: alloc::vec::Vec<[bool; 2]> = alloc::vec::Vec::new();
+        // `along[i]` is the edge from `node_indices[i]` to the node after it,
+        // so it always has one entry fewer.
+        let mut along: alloc::vec::Vec<Edge> = alloc::vec::Vec::new();
         for _ in 0..=edges.len() {
             debug_assert!(!used[edge_index]);
             used[edge_index] = true;
             let edge = edges[edge_index];
             node_indices.push(edge.end);
-            carried.push(edge.carried_by);
+            along.push(edge);
 
             // A node the walk has already stood on closes a ring right here,
             // not only when the walk returns to the seed. Where two lobes of
@@ -690,9 +758,9 @@ where
                 .position(|&index| index == edge.end)
             {
                 let loop_nodes = node_indices.split_off(start);
-                let loop_carried = carried.split_off(start);
+                let loop_along = along.split_off(start);
                 node_indices.push(edge.end);
-                push_ring(&mut rings, nodes, &loop_nodes, &loop_carried, tolerance);
+                push_ring(&mut rings, nodes, &loop_nodes, &loop_along, tolerance);
             }
 
             if edge.end == first {
@@ -762,7 +830,7 @@ fn push_ring<P>(
     rings: &mut Vec<(RingStart, Ring<P>)>,
     nodes: &[Node<P>],
     node_indices: &[usize],
-    carried: &[[bool; 2]],
+    along: &[Edge],
     tolerance: f64,
 ) where
     P: Point + Copy,
@@ -850,10 +918,24 @@ fn push_ring<P>(
     // at a point, both lobes start there. Boost separates them by operand:
     // `iterate` tries operation 0 before operation 1 at a turn, so the lobe
     // traced along the first operand is emitted first.
-    let leaves_along_first_operand = carried.get(first_turn).is_some_and(|edge| edge[0]);
+    let leaves_along_first_operand = along.get(first_turn).is_some_and(|edge| edge.carried_by[0]);
+    // C++: a ring no turn lands on is emitted by `add_rings` under its own
+    // `ring_identifier` — source first, then where it sits in that operand.
+    // Its vertices say nothing about which: this arrangement gives two rings
+    // that meet at a point the same node, so the lowest node on a cycle can
+    // belong to a different ring altogether. The lowest section does not,
+    // because a section never spans a ring.
+    let source = usize::from(!along.iter().all(|edge| edge.carried_by[0]));
+    let ring = along
+        .iter()
+        .map(|edge| edge.section[source])
+        .min()
+        .unwrap_or(usize::MAX);
     rings.push((
         RingStart {
             traversed: first_turn_by_arrival.is_some(),
+            source,
+            ring,
             turn: TurnOrder::of(&nodes[cycle[first_turn]]),
             second_operand: !leaves_along_first_operand,
             node: cycle[first_turn],
@@ -964,6 +1046,7 @@ mod tests {
                 is_turn: false,
                 arrival: [0, 0],
                 section: [0, 0],
+                pair_rank: 0,
                 offset: [0.0; 2],
             },
             Node {
@@ -972,6 +1055,7 @@ mod tests {
                 is_turn: false,
                 arrival: [1, 1],
                 section: [1, 1],
+                pair_rank: 1,
                 offset: [0.0; 2],
             },
             Node {
@@ -980,6 +1064,7 @@ mod tests {
                 is_turn: false,
                 arrival: [2, 2],
                 section: [2, 2],
+                pair_rank: 2,
                 offset: [0.0; 2],
             },
         ];
@@ -988,16 +1073,19 @@ mod tests {
                 start: 0,
                 end: 1,
                 carried_by: [true; 2],
+                section: [0; 2],
             },
             Edge {
                 start: 1,
                 end: 2,
                 carried_by: [true; 2],
+                section: [0; 2],
             },
             Edge {
                 start: 2,
                 end: 0,
                 carried_by: [true; 2],
+                section: [0; 2],
             },
         ];
 

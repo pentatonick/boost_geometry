@@ -697,3 +697,63 @@ fn an_untouched_ring_keeps_the_vertex_it_runs_straight_through() {
         vec![(3.0, 3.0), (2.0, 4.0), (3.0, 5.0), (3.0, 4.0), (3.0, 3.0)]
     );
 }
+
+/// Three separate pieces, one of which a hole cuts into, and two of which no
+/// turn lands on at all — with the third sharing a vertex with one of them.
+///
+/// C++: `add_rings` emits the untouched rings first, under their own
+/// `ring_identifier`, so they keep the operand's order; the traversed one
+/// follows. The shared vertex is what makes this bite: an arrangement that
+/// merges coincident points gives the second and third pieces a node in
+/// common, so ordering the untouched rings by any vertex puts them the wrong
+/// way round. Only the ring each cycle came out of says which is which.
+///
+/// This is the shape the vendored dissolve hands to `difference` after it has
+/// split a self-intersecting ring, which is where tilemaker met it.
+#[test]
+fn untouched_pieces_keep_their_operands_order() {
+    let pieces: MultiPolygon<Polygon<P>> = MultiPolygon(vec![
+        polygon![[
+            (3139.0, 3263.0),
+            (3104.0, 3325.0),
+            (3_103.231_759_656_652_2, 3_336.523_605_150_214_7),
+            (3139.0, 3263.0)
+        ]],
+        polygon![[
+            (3103.0, 3344.0),
+            (3099.0, 3363.0),
+            (3103.0, 3346.0),
+            (3103.0, 3344.0)
+        ]],
+        polygon![[
+            (3139.0, 3263.0),
+            (3165.0, 3210.0),
+            (3162.0, 3216.0),
+            (3139.0, 3263.0)
+        ]],
+    ]);
+    let bite: MultiPolygon<Polygon<P>> = MultiPolygon(vec![polygon![[
+        (3_103.231_759_656_652_2, 3_336.523_605_150_214_7),
+        (3103.0, 3337.0),
+        (3103.0, 3340.0),
+        (3_103.231_759_656_652_2, 3_336.523_605_150_214_7)
+    ]]]);
+    let result = difference_multi(&pieces, &bite).unwrap();
+    let starts: Vec<(f64, f64)> = result
+        .polygons()
+        .map(|pg| {
+            let first = pg.exterior().points().next().expect("a ring");
+            (first.get::<0>(), first.get::<1>())
+        })
+        .collect();
+    // C++ Boost 1.83: the two untouched pieces in operand order, then the one
+    // the bite ran through.
+    assert_eq!(
+        starts,
+        vec![
+            (3103.0, 3344.0),
+            (3139.0, 3263.0),
+            (3_103.231_759_656_652_2, 3_336.523_605_150_214_7)
+        ]
+    );
+}
