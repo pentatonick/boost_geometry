@@ -12,6 +12,7 @@
 )]
 
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 
 use geometry_coords::{
     CoordinateScalar,
@@ -45,6 +46,18 @@ impl ArealOp {
             Self::Difference => first && !second,
             Self::SymDifference => first != second,
         }
+    }
+
+    /// Whether the second operand's rings are walked backwards.
+    ///
+    /// C++: `difference` dispatches the overlay with `Reverse2 = true`, so
+    /// `sectionalize` reads that operand through a reversed view and every
+    /// section and segment index it hands to `get_turns` counts from the other
+    /// end of the ring. That is what orders the turns, so it decides which one
+    /// a result ring starts at. Nothing else here depends on the direction:
+    /// the arrangement reorients each edge by which side the result lies on.
+    fn walks_second_operand_backwards(self) -> bool {
+        matches!(self, Self::Difference)
     }
 }
 
@@ -205,6 +218,60 @@ impl Edge {
     }
 }
 
+/// Where a turn sits in `get_turns`' collection order.
+///
+/// C++: `get_turns` walks the first operand's sections in the outer loop and
+/// the second operand's in the inner, and inside a pair of sections the
+/// segments in order — so a turn's place in `m_turns` is that nesting, and
+/// `traverse` starts its rings in `m_turns` order.
+#[derive(Clone, Copy)]
+struct TurnOrder {
+    sections: [usize; 2],
+    arrivals: [usize; 2],
+    offset: f64,
+}
+
+impl TurnOrder {
+    fn of<P>(node: &Node<P>) -> Self {
+        Self {
+            sections: node.section,
+            arrivals: node.arrival,
+            offset: node.offset[0],
+        }
+    }
+
+    fn compare(&self, other: &Self) -> Ordering {
+        self.sections
+            .cmp(&other.sections)
+            .then_with(|| self.arrivals.cmp(&other.arrivals))
+            .then_with(|| self.offset.total_cmp(&other.offset))
+    }
+}
+
+/// Where a finished ring falls in the output.
+///
+/// C++: `add_rings` walks the selected rings in `ring_identifier` order. A
+/// ring copied whole from an operand carries that operand's own identifier, so
+/// every one of those precedes the traversed rings; a traversed ring is
+/// identified by when `traverse` started it, which is where `get_turns` put
+/// the turn it started from.
+struct RingStart {
+    traversed: bool,
+    turn: TurnOrder,
+    second_operand: bool,
+    node: usize,
+}
+
+impl RingStart {
+    fn compare(&self, other: &Self) -> Ordering {
+        self.traversed
+            .cmp(&other.traversed)
+            .then_with(|| self.turn.compare(&other.turn))
+            .then_with(|| self.second_operand.cmp(&other.second_operand))
+            .then_with(|| self.node.cmp(&other.node))
+    }
+}
+
 /// Execute a polygon Boolean operation through a split-edge arrangement.
 pub(crate) fn overlay<G1, G2, P>(
     first: &G1,
@@ -221,8 +288,8 @@ where
     overlay_arrangement(
         &Shape::from_polygon(first),
         &Shape::from_polygon(second),
-        polygon_segments(first),
-        polygon_segments(second),
+        polygon_segments(first, false),
+        polygon_segments(second, operation.walks_second_operand_backwards()),
         operation,
     )
 }
@@ -248,8 +315,8 @@ where
     overlay_arrangement(
         &Shape::from_multi_polygon(first),
         &Shape::from_multi_polygon(second),
-        multi_polygon_segments(first),
-        multi_polygon_segments(second),
+        multi_polygon_segments(first, false),
+        multi_polygon_segments(second, operation.walks_second_operand_backwards()),
         operation,
     )
 }
@@ -384,7 +451,7 @@ where
     coordinates
 }
 
-fn multi_polygon_segments<G, P>(multi_polygon: &G) -> Vec<SourceSegment<P>>
+fn multi_polygon_segments<G, P>(multi_polygon: &G, backwards: bool) -> Vec<SourceSegment<P>>
 where
     G: MultiPolygonTrait<Point = P>,
     P: Point + Copy,
@@ -393,15 +460,15 @@ where
     let mut segments = Vec::new();
     let mut sections = Sectionizer::new(0);
     for polygon in multi_polygon.polygons() {
-        append_ring_segments(polygon.exterior(), &mut segments, &mut sections);
+        append_ring_segments(polygon.exterior(), &mut segments, &mut sections, backwards);
         for ring in polygon.interiors() {
-            append_ring_segments(ring, &mut segments, &mut sections);
+            append_ring_segments(ring, &mut segments, &mut sections, backwards);
         }
     }
     segments
 }
 
-fn polygon_segments<G, P>(polygon: &G) -> Vec<SourceSegment<P>>
+fn polygon_segments<G, P>(polygon: &G, backwards: bool) -> Vec<SourceSegment<P>>
 where
     G: PolygonTrait<Point = P>,
     P: Point + Copy,
@@ -409,9 +476,9 @@ where
 {
     let mut segments = Vec::new();
     let mut sections = Sectionizer::new(0);
-    append_ring_segments(polygon.exterior(), &mut segments, &mut sections);
+    append_ring_segments(polygon.exterior(), &mut segments, &mut sections, backwards);
     for ring in polygon.interiors() {
-        append_ring_segments(ring, &mut segments, &mut sections);
+        append_ring_segments(ring, &mut segments, &mut sections, backwards);
     }
     segments
 }
@@ -483,12 +550,19 @@ fn append_ring_segments<R, P>(
     ring: &R,
     output: &mut Vec<SourceSegment<P>>,
     sections: &mut Sectionizer,
+    backwards: bool,
 ) where
     R: RingTrait<Point = P>,
     P: Point + Copy,
     P::Scalar: Into<f64>,
 {
-    let points: Vec<P> = ring.points().copied().collect();
+    let mut points: Vec<P> = ring.points().copied().collect();
+    if backwards {
+        // C++: `reversible_view`, which reverses the closed ring — so a ring
+        // that stores its closing point still starts and ends on it, and one
+        // that does not still closes back to its own first vertex.
+        points.reverse();
+    }
     if points.len() < 2 {
         return;
     }
@@ -584,10 +658,9 @@ where
     P::Scalar: Into<f64>,
 {
     let mut used = alloc::vec![false; edges.len()];
-    // Each ring is kept with the node it starts at, so the whole set can be
-    // put back into source order below, and with whether the traversal
-    // assembled it from turns rather than copying it whole from one operand.
-    let mut rings: Vec<(usize, bool, Ring<P>, bool)> = Vec::new();
+    // Each ring is kept with where it starts, so the whole set can be put back
+    // into source order below.
+    let mut rings: Vec<(RingStart, Ring<P>)> = Vec::new();
     for seed in 0..edges.len() {
         if used[seed] {
             continue;
@@ -632,12 +705,11 @@ where
 
     // Which ring comes out first is observable — it decides the order of the
     // polygons in the result — and Boost's is not the order the seeds happened
-    // to fall in. It traces from turns in source order, so ordering the rings
-    // by the node each one starts at reproduces it.
-    rings.sort_by_key(|&(start, second_operand, _, _)| (start, second_operand));
+    // to fall in.
+    rings.sort_by(|(left, _), (right, _)| left.compare(right));
     Ok(rings
         .into_iter()
-        .map(|(_, _, ring, traced)| (ring, traced))
+        .map(|(start, ring)| (ring, start.traversed))
         .collect())
 }
 
@@ -687,7 +759,7 @@ where
 /// because a consumer that simplifies the ring afterwards will pin its first
 /// vertex and the choice reaches the output.
 fn push_ring<P>(
-    rings: &mut Vec<(usize, bool, Ring<P>, bool)>,
+    rings: &mut Vec<(RingStart, Ring<P>)>,
     nodes: &[Node<P>],
     node_indices: &[usize],
     carried: &[[bool; 2]],
@@ -718,13 +790,7 @@ fn push_ring<P>(
         .enumerate()
         .filter(|&(_, index)| nodes[index].is_turn)
         .min_by(|&(_, left), &(_, right)| {
-            let (a, b) = (&nodes[left], &nodes[right]);
-            a.section[0]
-                .cmp(&b.section[0])
-                .then(a.section[1].cmp(&b.section[1]))
-                .then(a.arrival[0].cmp(&b.arrival[0]))
-                .then(a.arrival[1].cmp(&b.arrival[1]))
-                .then(a.offset[0].total_cmp(&b.offset[0]))
+            TurnOrder::of(&nodes[left]).compare(&TurnOrder::of(&nodes[right]))
         })
         .map(|(position, _)| position);
     // A ring with no turn was copied whole from one operand, and keeps that
@@ -777,10 +843,13 @@ fn push_ring<P>(
     // traced along the first operand is emitted first.
     let leaves_along_first_operand = carried.get(first_turn).is_some_and(|edge| edge[0]);
     rings.push((
-        cycle[first_turn],
-        !leaves_along_first_operand,
+        RingStart {
+            traversed: first_turn_by_arrival.is_some(),
+            turn: TurnOrder::of(&nodes[cycle[first_turn]]),
+            second_operand: !leaves_along_first_operand,
+            node: cycle[first_turn],
+        },
         Ring::from_vec(points),
-        first_turn_by_arrival.is_some(),
     ));
 }
 

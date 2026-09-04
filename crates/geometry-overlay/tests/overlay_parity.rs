@@ -584,3 +584,93 @@ fn turns_in_one_section_are_ordered_by_the_second_operands_section() {
         "ring starts at {start:?}"
     );
 }
+
+/// A pentagon with a smaller polygon cutting a bite out of one of its edges,
+/// where both ends of the bite land on the *same* segment of the pentagon.
+///
+/// C++: `difference` dispatches the overlay with `Reverse2 = true`, so
+/// `sectionalize` reads the second operand backwards and the two turns come
+/// out in the opposite order from the one their stored segments give. They tie
+/// on everything the first operand can say, so that reversal is the whole
+/// decision: read forwards, the ring starts at the other end of the bite.
+#[test]
+fn a_difference_reads_the_second_operand_backwards() {
+    let pentagon: Polygon<P> = polygon![[
+        (182.0, 100.0),
+        (125.0, 23.0),
+        (34.0, 52.0),
+        (34.0, 148.0),
+        (125.0, 177.0),
+        (182.0, 100.0)
+    ]];
+    let bite: Polygon<P> = polygon![[
+        (135.0, 192.0),
+        (105.0, 153.0),
+        (60.0, 168.0),
+        (60.0, 216.0),
+        (105.0, 231.0),
+        (135.0, 192.0)
+    ]];
+    let start = vertices(&difference(&pentagon, &bite).unwrap())[0];
+    // C++ Boost 1.83 begins here; reading the second operand forwards would
+    // begin at the other end of the bite, near (122.962, 176.351).
+    assert!(
+        (start.0 - 77.966_292_134_831_46).abs() < 1e-9
+            && (start.1 - 162.011_235_955_056_18).abs() < 1e-9,
+        "ring starts at {start:?}"
+    );
+}
+
+/// The same pentagon against a nonagon that clips three separate pieces off
+/// it, so the result is three polygons and their order is what is under test.
+///
+/// C++: `add_rings` emits the traversed rings in the order `traverse` started
+/// them, which is where `get_turns` put each one's starting turn — not the
+/// order the rings happened to be traced in. Two of these three start in the
+/// same section of the first operand and are separated only by the second
+/// operand's segment, so ordering by anything else swaps them.
+#[test]
+fn difference_pieces_come_out_in_the_order_their_turns_were_collected() {
+    let pentagon: Polygon<P> = polygon![[
+        (182.0, 100.0),
+        (125.0, 23.0),
+        (34.0, 52.0),
+        (34.0, 148.0),
+        (125.0, 177.0),
+        (182.0, 100.0)
+    ]];
+    let nonagon: Polygon<P> = polygon![[
+        (161.0, 91.0),
+        (145.0, 49.0),
+        (106.0, 27.0),
+        (63.0, 34.0),
+        (33.0, 69.0),
+        (33.0, 113.0),
+        (62.0, 148.0),
+        (106.0, 155.0),
+        (145.0, 133.0),
+        (161.0, 91.0)
+    ]];
+    let pieces = difference(&pentagon, &nonagon).unwrap();
+    let sizes: Vec<usize> = pieces
+        .polygons()
+        .map(|pg| pg.exterior().points().count())
+        .collect();
+    // C++ Boost 1.83: the corner by (125, 23) first, then the body, then the
+    // sliver by (34, 52). Tracing order alone puts the body first.
+    assert_eq!(sizes, vec![4, 10, 4], "piece order");
+    let corner: Vec<(f64, f64)> = pieces
+        .polygons()
+        .next()
+        .expect("three pieces")
+        .exterior()
+        .points()
+        .map(|p| (p.get::<0>(), p.get::<1>()))
+        .collect();
+    assert!(
+        (corner[0].0 - 143.706_689_536_878_23).abs() < 1e-9
+            && (corner[0].1 - 48.270_440_251_572_325).abs() < 1e-9,
+        "first piece starts at {:?}",
+        corner[0]
+    );
+}
