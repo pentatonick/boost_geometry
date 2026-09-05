@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/geometry-overlay-v0.0.8...geometry-overlay-v0.0.9) - 2026-09-05
+
+### Added
+
+- *(buffer)* a zero-width buffer of a polygon, which is not a no-op
+- *(overlay)* multi-polygon operands for the Boolean operations
+
+### Fixed
+
+- *(overlay)* order the result rings the way `add_rings` does
+- *(coords)* two points within an epsilon are one point
+- *(overlay)* a ring no turn lands on keeps every vertex it has
+- *(overlay)* read the second operand backwards for a difference
+- *(overlay)* append a turn the way the traversal does, and order turns by section
+- *(overlay)* do not emit a point the walked operand runs straight past
+- *(overlay)* clean the traversed ring, and order turns by both operands
+- *(overlay)* attach a turn to the segment it terminates
+- *(overlay)* emit rings, and their vertices, in Boost's order
+- *(predicate)* compute a segment crossing parametrically, not by determinant
+- *(overlay)* a hole sharing an edge with the exterior is a self-intersection
+- *(overlay)* distinguish the two ways multi-polygon members can be wrong
+- *(algorithm)* collapse repeated vertices in remove_spikes
+- *(overlay)* report wrong orientation before self-intersection
+- *(overlay)* split result lobes that meet at a single point
+
 ## [0.0.8](https://github.com/pentatonick/boost_geometry/compare/geometry-overlay-v0.0.7...geometry-overlay-v0.0.8) - 2026-07-15
 
 ### Added

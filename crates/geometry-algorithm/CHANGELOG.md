@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/geometry-algorithm-v0.0.8...geometry-algorithm-v0.0.9) - 2026-09-05
+
+### Fixed
+
+- *(coords)* two points within an epsilon are one point
+- *(algorithm)* collapse repeated vertices in remove_spikes
+
 ## [0.0.8](https://github.com/pentatonick/boost_geometry/compare/geometry-algorithm-v0.0.7...geometry-algorithm-v0.0.8) - 2026-07-15
 
 ### Added

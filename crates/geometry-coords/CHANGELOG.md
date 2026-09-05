@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/geometry-coords-v0.0.8...geometry-coords-v0.0.9) - 2026-09-05
+
+### Fixed
+
+- *(coords)* two points within an epsilon are one point
+
 ## [0.0.8](https://github.com/pentatonick/boost_geometry/compare/geometry-coords-v0.0.7...geometry-coords-v0.0.8) - 2026-07-15
 
 ### Added
