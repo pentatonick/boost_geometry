@@ -370,7 +370,7 @@ plus a `_with` companion that takes an explicit strategy.
 | `within_dyn` | ✅ | [→](https://docs.rs/boost_geometry/latest/boost_geometry/algorithm/fn.within_dyn.html) |
 | **Boolean operations** — Overlay and offset of areal geometries |||
 | `buffer` / `buffer_convex_polygon` / `buffer_point` / `buffer_with` / `buffer_with_strategy` | ✅ | [→](https://docs.rs/boost_geometry/latest/boost_geometry/overlay/fn.buffer.html) |
-| `difference` / `intersection` / `sym_difference` / `union` / `union_poly` | ✅ | [→](https://docs.rs/boost_geometry/latest/boost_geometry/overlay/fn.difference.html) |
+| `difference` / `difference_multi` / `intersection` / `intersection_multi` / `sym_difference` / `sym_difference_multi` / `union` / `union_multi` / `union_poly` | ✅ | [→](https://docs.rs/boost_geometry/latest/boost_geometry/overlay/fn.difference.html) |
 | `line_intersection` | ✅ | [→](https://docs.rs/boost_geometry/latest/boost_geometry/overlay/fn.line_intersection.html) |
 | `point_on_surface` | ✅ | [→](https://docs.rs/boost_geometry/latest/boost_geometry/overlay/fn.point_on_surface.html) |
 | **Construction & transformation** — Derive a new geometry from an existing one |||
