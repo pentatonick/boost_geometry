@@ -86,11 +86,13 @@ fn valid_and_invalid_polygons() {
     let good: Polygon<P> = square(0.0, 0.0, 3.0);
     assert!(is_valid_polygon(&good).is_ok());
 
-    // A self-intersecting "bow-tie" exterior.
+    // A self-intersecting "bow-tie" exterior. Its lobes cancel, so its
+    // signed area is zero and Boost 1.83 reports the orientation failure
+    // rather than the crossing — orientation is checked first.
     let bowtie: Polygon<P> = polygon![[(0.0, 0.0), (2.0, 2.0), (2.0, 0.0), (0.0, 2.0), (0.0, 0.0)]];
     assert_eq!(
         is_valid_polygon(&bowtie),
-        Err(ValidityFailure::SelfIntersection)
+        Err(ValidityFailure::WrongOrientation)
     );
 }
 

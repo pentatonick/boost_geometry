@@ -338,6 +338,37 @@ where
     )
 }
 
+/// A polygon buffered at a distance of zero.
+///
+/// C++: `buffer_inserter` builds an offsetted ring per input ring and then
+/// finds the turns between them, discards those inside the original, and
+/// traverses what is left. Where the offsetted rings do not meet each other
+/// there are no turns, nothing is discarded and nothing is traversed, and the
+/// rings themselves are the answer — which is the case
+/// `repair_one_polygon` needs and the case this arm answers.
+///
+/// A ring that does meet itself needs `check_turn_in_original` and the buffer
+/// traversal, which are not ported; that asks for something this arm cannot
+/// answer, and it says so rather than guessing.
+fn zero_width_polygon_buffer<G>(
+    polygon: &G,
+) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError>
+where
+    G: PolygonTrait,
+    G::Point: PointMut + Default + Copy,
+    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+{
+    use crate::piece_collection::{ZeroWidthOutcome, zero_width_outcome, zero_width_rings};
+
+    let rings = zero_width_rings(polygon);
+    match zero_width_outcome(&rings) {
+        ZeroWidthOutcome::RingsStand => Ok(MultiPolygon(
+            rings.into_iter().map(Polygon::new).collect::<Vec<_>>(),
+        )),
+        ZeroWidthOutcome::NeedsTraversal => Err(OverlayError::Unsupported),
+    }
+}
+
 /// Implements the point arm selected by `buffer_all` at
 /// `algorithms/detail/buffer/interface.hpp:269-273`.
 impl<G> BufferStrategy<G, CartesianBuffer> for PointBuffer
@@ -390,8 +421,15 @@ where
         let BufferDistanceStrategy::Symmetric(distance) = settings.distance else {
             return Err(OverlayError::Unsupported);
         };
-        if !distance.is_finite() || distance == 0.0 {
+        if !distance.is_finite() {
             return Err(OverlayError::Unsupported);
+        }
+        if distance == 0.0 {
+            // C++: a zero-width buffer is not a no-op and not a special case
+            // either — `buffer_inserter` runs its whole pipeline, and every
+            // side simply offsets onto itself. It is what `repair_one_polygon`
+            // falls back on, so it has to answer.
+            return zero_width_polygon_buffer(polygon);
         }
         let Some(outer) = offset_ring(polygon.exterior(), distance, settings.join, true) else {
             return Ok(MultiPolygon(alloc::vec![]));

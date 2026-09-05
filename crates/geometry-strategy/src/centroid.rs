@@ -31,11 +31,13 @@
 
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
-use geometry_tag::{BoxTag, LinestringTag, MultiPointTag, PolygonTag, RingTag, SameAs, SegmentTag};
+use geometry_tag::{
+    BoxTag, LinestringTag, MultiPointTag, MultiPolygonTag, PolygonTag, RingTag, SameAs, SegmentTag,
+};
 use geometry_trait::{
     Box as BoxTrait, Geometry, Linestring as LinestringTrait, MultiPoint as MultiPointTrait,
-    Point as PointTrait, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
-    Segment as SegmentTrait, box_max, box_min, segment_end, segment_start,
+    MultiPolygon as MultiPolygonTrait, Point as PointTrait, PointMut, Polygon as PolygonTrait,
+    Ring as RingTrait, Segment as SegmentTrait, box_max, box_min, segment_end, segment_start,
 };
 
 use crate::area::{AreaStrategy, ShoelaceArea};
@@ -82,6 +84,14 @@ pub struct CartesianRingCentroid;
 /// performs the hole correction.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CartesianPolygonCentroid;
+
+/// Cartesian centroid for a [`geometry_trait::MultiPolygon`] — one
+/// Bashein–Detmer accumulator over every ring of every member.
+///
+/// Mirrors the multi-polygon arm of
+/// `boost/geometry/algorithms/centroid.hpp`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CartesianMultiPolygonCentroid;
 
 /// Cartesian centroid for a [`geometry_trait::Linestring`] — length-weighted midpoint of
 /// each segment, summed and divided by total length.
@@ -260,16 +270,15 @@ where
 
     fn centroid(&self, pg: &G) -> G::Point {
         let zero = <G::Point as PointTrait>::Scalar::ZERO;
-        let mut sum_area = zero;
+        let mut sum_a2 = zero;
         let mut sum_x = zero;
         let mut sum_y = zero;
 
         let mut fold_ring = |ring: &G::Ring| {
-            let area = ShoelaceArea.area(ring);
-            let c = CartesianRingCentroid.centroid(ring);
-            sum_area = sum_area + area;
-            sum_x = sum_x + area * c.get::<0>();
-            sum_y = sum_y + area * c.get::<1>();
+            let (a2, x, y) = bashein_detmer_sums(ring);
+            sum_a2 = sum_a2 + a2;
+            sum_x = sum_x + x;
+            sum_y = sum_y + y;
         };
 
         fold_ring(pg.exterior());
@@ -277,10 +286,55 @@ where
             fold_ring(inner);
         }
 
-        if sum_area == zero {
+        if sum_a2 == zero {
             return pg.exterior().points().next().copied().unwrap_or_default();
         }
-        point_2d::<G::Point>(sum_x / sum_area, sum_y / sum_area)
+        let a3 = three::<<G::Point as PointTrait>::Scalar>() * sum_a2;
+        point_2d::<G::Point>(sum_x / a3, sum_y / a3)
+    }
+}
+
+// ---- MultiPolygon ----------------------------------------------------
+//
+// Mirrors the multi-polygon arm of `algorithms/centroid.hpp`, which runs
+// one `centroid_multi` state over every ring of every member and divides
+// once. Same reason the polygon arm accumulates rather than combining
+// per-part centroids: a member with zero area drops out of an
+// area-weighted combine but still contributes to the running numerator,
+// and Boost keeps that contribution.
+
+impl<G> CentroidStrategy<G> for CartesianMultiPolygonCentroid
+where
+    G: MultiPolygonTrait,
+    G::Point: PointTrait + PointMut + Default + Copy,
+    <<G::Point as PointTrait>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    type Output = G::Point;
+
+    fn centroid(&self, mp: &G) -> G::Point {
+        let zero = <G::Point as PointTrait>::Scalar::ZERO;
+        let mut sum_a2 = zero;
+        let mut sum_x = zero;
+        let mut sum_y = zero;
+        let mut first_point = None;
+
+        for polygon in mp.polygons() {
+            if first_point.is_none() {
+                first_point = polygon.exterior().points().next().copied();
+            }
+            for ring in core::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+                let (a2, x, y) = bashein_detmer_sums(ring);
+                sum_a2 = sum_a2 + a2;
+                sum_x = sum_x + x;
+                sum_y = sum_y + y;
+            }
+        }
+
+        if sum_a2 == zero {
+            return first_point.unwrap_or_default();
+        }
+        let a3 = three::<<G::Point as PointTrait>::Scalar>() * sum_a2;
+        point_2d::<G::Point>(sum_x / a3, sum_y / a3)
     }
 }
 
@@ -459,6 +513,10 @@ impl CentroidStrategyForKind for RingTag {
     type S = CartesianRingCentroid;
 }
 
+impl CentroidStrategyForKind for MultiPolygonTag {
+    type S = CartesianMultiPolygonCentroid;
+}
+
 impl CentroidStrategyForKind for PolygonTag {
     type S = CartesianPolygonCentroid;
 }
@@ -491,11 +549,13 @@ mod tests {
 
     use super::{
         CartesianBoxCentroid, CartesianLinestringCentroid, CartesianMultiPointCentroid,
-        CartesianPolygonCentroid, CartesianRingCentroid, CartesianSegmentCentroid,
-        CentroidStrategy,
+        CartesianMultiPolygonCentroid, CartesianPolygonCentroid, CartesianRingCentroid,
+        CartesianSegmentCentroid, CentroidStrategy,
     };
     use geometry_cs::Cartesian;
-    use geometry_model::{Box, MultiPoint, Point2D, Polygon, Ring, Segment, linestring, polygon};
+    use geometry_model::{
+        Box, MultiPoint, MultiPolygon, Point2D, Polygon, Ring, Segment, linestring, polygon,
+    };
     use geometry_trait::Point as _;
 
     type Pt = Point2D<f64, Cartesian>;
@@ -663,5 +723,60 @@ mod tests {
             MultiPoint::from_vec(vec![Pt::new(0., 0.), Pt::new(2., 0.), Pt::new(0., 2.)]);
         let c = CartesianMultiPointCentroid.centroid(&mp);
         assert!(close_pt(&c, 2.0 / 3.0, 2.0 / 3.0, 1e-9));
+    }
+
+    /// A part with zero area still contributes to the running numerator.
+    ///
+    /// Combining per-part centroids weighted by area drops it — its weight is
+    /// zero — and lands somewhere else. Boost 1.83 on a clockwise
+    /// `model::polygon` / `model::multi_polygon`:
+    ///
+    /// ```text
+    /// bowtie exterior + hole  -> (10.6667, 11)  area=-4
+    /// zero-area MP            -> (0, 0)         area=0
+    /// mixed MP                -> (11.3333, 11)  area=4
+    /// ```
+    #[test]
+    fn a_zero_area_part_still_moves_the_centroid() {
+        // Exterior is a bow-tie: zero area, non-zero numerator.
+        let bowtie_with_hole: Polygon<Pt> = polygon![
+            [(0.0, 0.0), (2.0, 2.0), (2.0, 0.0), (0.0, 2.0), (0.0, 0.0)],
+            [
+                (10.0, 10.0),
+                (12.0, 10.0),
+                (12.0, 12.0),
+                (10.0, 12.0),
+                (10.0, 10.0)
+            ]
+        ];
+        let c = CartesianPolygonCentroid.centroid(&bowtie_with_hole);
+        assert!(close_pt(&c, 32.0 / 3.0, 11.0, 1e-9), "{c:?}");
+
+        let bowtie: Polygon<Pt> =
+            polygon![[(0.0, 0.0), (2.0, 2.0), (2.0, 0.0), (0.0, 2.0), (0.0, 0.0)]];
+        let other_bowtie: Polygon<Pt> = polygon![[
+            (10.0, 10.0),
+            (12.0, 12.0),
+            (12.0, 10.0),
+            (10.0, 12.0),
+            (10.0, 10.0)
+        ]];
+        let square: Polygon<Pt> = polygon![[
+            (10.0, 10.0),
+            (10.0, 12.0),
+            (12.0, 12.0),
+            (12.0, 10.0),
+            (10.0, 10.0)
+        ]];
+
+        // Every member degenerate: the first vertex of the first member.
+        let all_degenerate = MultiPolygon(vec![bowtie.clone(), other_bowtie]);
+        let c = CartesianMultiPolygonCentroid.centroid(&all_degenerate);
+        assert!(close_pt(&c, 0.0, 0.0, 1e-9), "{c:?}");
+
+        // One degenerate member beside a real one: it still pulls the result.
+        let mixed = MultiPolygon(vec![bowtie, square]);
+        let c = CartesianMultiPolygonCentroid.centroid(&mixed);
+        assert!(close_pt(&c, 34.0 / 3.0, 11.0, 1e-9), "{c:?}");
     }
 }

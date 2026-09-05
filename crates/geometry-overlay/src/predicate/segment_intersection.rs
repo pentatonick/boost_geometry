@@ -201,12 +201,25 @@ where
     let x4 = p4.get::<0>();
     let y4 = p4.get::<1>();
 
-    // Standard two-line determinant solution.
+    // The parametric solution, not the two-line determinant one.
+    //
+    // Both are the same point in exact arithmetic. The determinant form builds
+    // `x1*y2 - y1*x2`, a product of *absolute* coordinates, and then subtracts
+    // two such products that are nearly equal; the answer it is looking for is
+    // the small residue. On geographic input that residue is the whole result:
+    // a polygon spanning 1e-4 degrees at longitude 7.4, latitude 48.7 forms
+    // terms around 362 and asks for a difference ten orders of magnitude below
+    // them, so the crossing lands off the line it is supposed to be on. Split
+    // edges then fail to meet at a shared node and the arrangement cannot be
+    // traced.
+    //
+    // The parametric form touches only coordinate *differences*, which are the
+    // size of the geometry rather than of its position, and anchors the result
+    // on `p1` so it stays on segment `a`.
     let denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
-    let a = x1 * y2 - y1 * x2;
-    let b = x3 * y4 - y3 * x4;
-    let px = (a * (x3 - x4) - (x1 - x2) * b) / denom;
-    let py = (a * (y3 - y4) - (y1 - y2) * b) / denom;
+    let t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+    let px = x1 + t * (x2 - x1);
+    let py = y1 + t * (y2 - y1);
     make_point::<P>(px, py)
 }
 
@@ -298,6 +311,7 @@ mod tests {
     use super::{SegmentIntersection, segment_intersection};
     use geometry_cs::Cartesian;
     use geometry_model::{Point2D, Segment};
+    use geometry_trait::Point as _;
 
     type P = Point2D<f64, Cartesian>;
     type Seg = Segment<P>;
@@ -396,6 +410,53 @@ mod tests {
         assert_eq!(
             segment_intersection::<Seg, P>(&a, &b),
             SegmentIntersection::Single(P::new(2.0, 2.0))
+        );
+    }
+
+    /// The crossing has to lie *on* both segments, at the magnitudes
+    /// geographic data actually uses.
+    ///
+    /// This one is taken from a tilemaker run: a building clipped to a tile
+    /// edge at longitude 7.4, latitude 48.7, spanning about 1e-4 degrees. The
+    /// clip edge is horizontal, so the answer's y must equal the edge's y
+    /// exactly. The determinant form misses it by 9.24e-14 — its terms are
+    /// products of absolute coordinates around 362 and the residue it wants is
+    /// ten orders of magnitude smaller. Split edges then stop meeting at a
+    /// shared node and the arrangement cannot be traced.
+    #[test]
+    fn crossing_lies_on_the_segments_at_geographic_magnitude() {
+        let edge_y = 48.735_571_3;
+        let sloped = Segment::new(
+            P::new(7.426_430_5, 48.735_655_4),
+            P::new(7.426_393_8, 48.735_566_8),
+        );
+        let clip_edge = Segment::new(P::new(7.382_592_8, edge_y), P::new(7.426_977_5, edge_y));
+
+        let SegmentIntersection::Single(crossing) = segment_intersection(&sloped, &clip_edge)
+        else {
+            panic!("the segments cross");
+        };
+        // Exact equality on purpose: the edge is horizontal, so the crossing's
+        // y is one of the inputs and no arithmetic should alter it.
+        #[expect(
+            clippy::float_cmp,
+            reason = "the crossing's y must reproduce the horizontal edge's y bit for bit"
+        )]
+        {
+            assert_eq!(
+                crossing.get::<1>(),
+                edge_y,
+                "the crossing must sit exactly on the horizontal edge"
+            );
+        }
+
+        // And on the sloped segment, to the last bits its own span allows.
+        let (x1, y1) = (7.426_430_5_f64, 48.735_655_4_f64);
+        let (x2, y2) = (7.426_393_8_f64, 48.735_566_8_f64);
+        let side = (x2 - x1) * (crossing.get::<1>() - y1) - (y2 - y1) * (crossing.get::<0>() - x1);
+        assert!(
+            side.abs() < 1e-19,
+            "the crossing must sit on the sloped segment, off by {side:e}"
         );
     }
 }

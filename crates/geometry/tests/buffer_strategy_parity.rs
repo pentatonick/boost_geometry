@@ -286,6 +286,10 @@ fn polygon_buffer_handles_offset_topology_collapse() {
 /// `test/algorithms/buffer/buffer_with_strategies.cpp:88-106` — inapplicable
 /// distance strategies and degenerate inputs are rejected consistently.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one contract per geometry kind, read as a table"
+)]
 fn public_buffer_error_and_empty_contract_is_consistent_across_kinds() {
     let asymmetric = BufferSettings {
         distance: BufferDistanceStrategy::Asymmetric {
@@ -324,7 +328,20 @@ fn public_buffer_error_and_empty_contract_is_consistent_across_kinds() {
         buffer_with(&polygon, not_finite),
         Err(OverlayError::Unsupported)
     );
-    assert_eq!(buffer_with(&polygon, zero), Err(OverlayError::Unsupported));
+    // A zero-width buffer of a polygon is not an error and not a no-op: C++
+    // runs the whole `buffer_inserter` pipeline, every side offsets onto
+    // itself, and this square comes back unchanged. It is what
+    // `repair_one_polygon` falls back on when the dissolve gives up.
+    assert_eq!(
+        buffer_with(&polygon, zero),
+        Ok(MultiPolygon(vec![polygon![[
+            (0.0, 0.0),
+            (0.0, 2.0),
+            (2.0, 2.0),
+            (2.0, 0.0),
+            (0.0, 0.0)
+        ]]]))
+    );
 
     assert!(
         buffer_convex_polygon(&polygon, 0.0, JoinStrategy::Miter)

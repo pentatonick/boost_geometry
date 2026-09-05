@@ -425,4 +425,11 @@ impl<I: RationalInteger> CoordinateScalar for Rational<I> {
             self
         }
     }
+
+    /// Exact, like Boost's `math::equals` for any non-floating-point type:
+    /// a rational carries no rounding error for the epsilon to absorb.
+    #[inline]
+    fn tolerant_eq(self, other: Self) -> bool {
+        self == other
+    }
 }

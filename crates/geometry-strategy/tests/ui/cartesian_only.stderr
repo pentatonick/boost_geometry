@@ -9,7 +9,7 @@ error[E0277]: coordinate-system family mismatch: `GeographicFamily` is not the s
    = help: the trait `geometry_tag::same_as::SameAs<CartesianFamily>` is not implemented for `GeographicFamily`
    = note: if `GeographicFamily` is `GeographicFamily` or `SphericalFamily`, you probably picked a Cartesian-only strategy (e.g. `Pythagoras`) by accident — wrap your point in `geometry_adapt::WithCs<_, Geographic<Degree>>` / `WithCs<_, Spherical<Degree>>` or pick a CS-appropriate strategy (`Haversine`, `Andoyer`, `Vincenty`)
    = note: see the silent-Cartesian discussion in the rust-port proposal §3.7 and §8
-help: the trait `DistanceStrategy<P1, P2>` is implemented for `Pythagoras`
+help: the trait `DistanceStrategy<P1, P2>` is conditionally implemented for `Pythagoras`
   --> src/cartesian/distance_pythagoras.rs
    |
    | / impl<P1, P2> DistanceStrategy<P1, P2> for Pythagoras
@@ -17,6 +17,7 @@ help: the trait `DistanceStrategy<P1, P2>` is implemented for `Pythagoras`
    | |     P1: Point,
    | |     P2: Point<Scalar = P1::Scalar>,
    | |     <P1::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+   | |                                           ----------------------- unsatisfied requirement introduced here: `<<WithCs<Adapt<[f64; 2]>, Geographic<Degree>> as geometry_trait::point::Point>::Cs as CoordinateSystem>::Family: geometry_tag::same_as::SameAs<CartesianFamily>`
    | |     <P2::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
    | |__________________________________________________________________^
    = note: required for `Pythagoras` to implement `DistanceStrategy<WithCs<Adapt<[f64; 2]>, Geographic<Degree>>, _>`

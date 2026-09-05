@@ -128,7 +128,6 @@ type PointOutput<P> = <Rhumb as DestinationStrategy<P>>::Output;
 mod tests {
     use geometry_cs::{Degree, Spherical};
     use geometry_model::{Linestring, Point2D};
-    use geometry_trait::Point as _;
 
     use super::*;
 

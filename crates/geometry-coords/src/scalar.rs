@@ -58,6 +58,21 @@ pub trait CoordinateScalar:
     /// (`boost/geometry/util/math.hpp`).
     #[must_use]
     fn abs(self) -> Self;
+
+    /// Equality the way the kernel means it.
+    ///
+    /// Counterpart to `boost::geometry::math::equals`
+    /// (`boost/geometry/util/math.hpp`) under `equals_default_policy`:
+    /// exact for an integer, and for a float, equal when the difference is
+    /// within one epsilon of the larger magnitude — or of `1`, so that two
+    /// values near zero still have to agree to an absolute epsilon.
+    ///
+    /// This is not a convenience. Boost's side predicate calls three points
+    /// collinear when any *two* of them are equal by this rule, so a pair a
+    /// few last bits apart at a large coordinate is coincident to the whole
+    /// kernel, and every predicate built on the side test follows.
+    #[must_use]
+    fn tolerant_eq(self, other: Self) -> bool;
 }
 
 macro_rules! impl_scalar_float {
@@ -69,6 +84,21 @@ macro_rules! impl_scalar_float {
             fn sqrt(self) -> Self { crate::math::sqrt(self) }
             #[inline]
             fn abs(self)  -> Self { crate::math::abs(self) }
+            #[inline]
+            fn tolerant_eq(self, other: Self) -> bool {
+                if self == other {
+                    return true;
+                }
+                if !self.is_finite() || !other.is_finite() {
+                    return false;
+                }
+                // C++: `greatest(abs(a), abs(b), T(1))`, the factor
+                // `equals_default_policy` supplies.
+                let factor = crate::math::abs(self)
+                    .max(crate::math::abs(other))
+                    .max(1.0);
+                crate::math::abs(self - other) <= <$t>::EPSILON * factor
+            }
         }
     )* };
 }
@@ -94,6 +124,8 @@ macro_rules! impl_scalar_int {
             }
             #[inline]
             fn abs(self) -> Self { <$t>::abs(self) }
+            #[inline]
+            fn tolerant_eq(self, other: Self) -> bool { self == other }
         }
     )* };
 }

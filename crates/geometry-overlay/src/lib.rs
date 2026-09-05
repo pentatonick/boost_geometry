@@ -36,6 +36,7 @@ pub mod buffer;
 pub mod line_intersection;
 pub mod merge;
 pub mod operation;
+mod piece_collection;
 pub mod predicate;
 pub mod relate;
 pub mod surface_point;
@@ -54,7 +55,10 @@ pub use line_intersection::{LineIntersection, line_intersection};
 // feature-group: Mutation & assembly
 pub use merge::{merge_elements, merge_multipolygon, merge_polygons, stitch_triangles};
 // feature-group: Boolean operations
-pub use operation::{OverlayError, difference, intersection, sym_difference, r#union, union_poly};
+pub use operation::{
+    OverlayError, difference, difference_multi, intersection, intersection_multi, sym_difference,
+    sym_difference_multi, r#union, union_multi, union_poly,
+};
 // feature-group: Spatial predicates
 pub use relate::{
     De9im, Dimension, RelateError, contains_properly, crosses, overlaps, relate as relate_matrix,
