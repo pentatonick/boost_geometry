@@ -342,6 +342,17 @@ fn public_buffer_error_and_empty_contract_is_consistent_across_kinds() {
             (0.0, 0.0)
         ]]]))
     );
+    // Where the offsetted rings *do* meet each other, what survives rests on
+    // `check_turn_in_original` and the buffer traversal, neither of which is
+    // ported. This bow tie's ring crosses itself, so the zero-width arm says so
+    // rather than handing back an answer it cannot stand behind — the same
+    // contract every other unported case gets.
+    let self_crossing: Polygon<P> =
+        polygon![[(0.0, 0.0), (2.0, 2.0), (2.0, 0.0), (0.0, 2.0), (0.0, 0.0)]];
+    assert_eq!(
+        buffer_with(&self_crossing, zero),
+        Err(OverlayError::Unsupported)
+    );
 
     assert!(
         buffer_convex_polygon(&polygon, 0.0, JoinStrategy::Miter)

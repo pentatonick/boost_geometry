@@ -355,6 +355,217 @@ mod tests {
         ));
     }
 
+    /// The same ring, listed from its concave corner instead of a convex one.
+    ///
+    /// C++ emits the join **between** two sides, so the corner the ring is
+    /// listed from has no side before it — its join is the closing one
+    /// `buffer_inserter_ring::iterate` adds once the sides are done, and it
+    /// lands at the end of the offsetted ring rather than in the middle. The
+    /// corner is tripled either way: once by the ring's own first point, twice
+    /// by the pair of `buffered_concave` pieces the closing join contributes.
+    ///
+    /// Skipping that closing join is not a cosmetic loss. It is the difference
+    /// between a ring of nine points and one of seven, and the piece count is
+    /// what the rest of the pipeline indexes by.
+    #[test]
+    fn a_concave_corner_listed_first_is_tripled_by_the_closing_join() {
+        let polygon = Polygon::new(ring(&[
+            (3063.0, 2666.0),
+            (2953.0, 2536.0),
+            (2965.0, 2762.0),
+            (3023.0, 2920.0),
+            (3074.0, 2999.0),
+            (3186.0, 2762.0),
+            (3063.0, 2666.0),
+        ]));
+        let rings = zero_width_rings(&polygon);
+        assert_eq!(rings.len(), 1);
+        assert_eq!(
+            points_of(&rings[0]),
+            vec![
+                (3063.0, 2666.0),
+                (2953.0, 2536.0),
+                (2965.0, 2762.0),
+                (3023.0, 2920.0),
+                (3074.0, 2999.0),
+                (3186.0, 2762.0),
+                (3063.0, 2666.0),
+                (3063.0, 2666.0),
+                (3063.0, 2666.0),
+            ]
+        );
+        assert!(matches!(
+            zero_width_outcome(&rings),
+            ZeroWidthOutcome::RingsStand
+        ));
+    }
+
+    /// A corner whose three points are collinear adds nothing.
+    ///
+    /// `get_join_type` cannot read a side from a zero turn, so C++ falls back
+    /// on `same_direction`: the third point either carries on past the corner —
+    /// two consecutive sides with nothing between them, `join_continue` — or
+    /// turns back along the side it came in on, which is an end cap a closed
+    /// ring never asks for. Neither generates a piece, so the vertex on this
+    /// ring's first edge survives exactly once and the ring comes back
+    /// unaltered. Treating a zero turn as concave instead would triple it.
+    #[test]
+    fn a_corner_that_carries_straight_on_adds_no_join() {
+        let listed = [
+            (0.0, 0.0),
+            (0.0, 5.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 0.0),
+            (0.0, 0.0),
+        ];
+        let polygon = Polygon::new(ring(&listed));
+        let rings = zero_width_rings(&polygon);
+        assert_eq!(rings.len(), 1);
+        assert_eq!(
+            points_of(&rings[0]),
+            listed.to_vec(),
+            "a clockwise ring is all convex corners, and (0,5) carries straight on"
+        );
+    }
+
+    /// A corner that turns back on itself is the other collinear case.
+    ///
+    /// The needle's tip has the side arriving and the side leaving running
+    /// along the same line in opposite directions — `same_direction` is false,
+    /// so C++ reaches `join_spike`, which is an end-cap strategy a closed ring
+    /// has no cap to apply. Nothing is added at the tip.
+    ///
+    /// Both **feet** of the needle are a different matter: leaving the bottom
+    /// edge and rejoining it are each a left turn on a clockwise ring, so both
+    /// are reflex and both are tripled. That asymmetry — nothing at the tip,
+    /// two joins at the feet — is what separates the turn-back case from the
+    /// carry-straight-on case above, where the collinear corner is also silent
+    /// but its neighbours are convex.
+    #[test]
+    fn a_corner_that_turns_back_adds_no_join_but_its_feet_do() {
+        let polygon = Polygon::new(ring(&[
+            (0.0, 0.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 0.0),
+            (5.0, 0.0),
+            (5.0, -5.0),
+            (5.0, 0.0),
+            (0.0, 0.0),
+        ]));
+        let rings = zero_width_rings(&polygon);
+        assert_eq!(rings.len(), 1);
+        assert_eq!(
+            points_of(&rings[0]),
+            vec![
+                (0.0, 0.0),
+                (0.0, 10.0),
+                (10.0, 10.0),
+                (10.0, 0.0),
+                (5.0, 0.0),
+                (5.0, 0.0),
+                (5.0, 0.0),
+                (5.0, -5.0),
+                (5.0, 0.0),
+                (5.0, 0.0),
+                (5.0, 0.0),
+                (0.0, 0.0),
+            ],
+            "the tip adds nothing; both feet of the needle are reflex"
+        );
+    }
+
+    /// An exterior and a hole are two offsetted rings, and each is judged
+    /// against the winding it is stored with.
+    ///
+    /// `correct` stores an interior ring the other way round from its
+    /// exterior, and `closed_clockwise_view` does not undo that — it keys on
+    /// the ring *type*, not on how the ring is wound. So the same square shape
+    /// is all convex corners as an exterior and all reflex ones as a hole:
+    /// five points out for the outer, and thirteen for the inner, where each of
+    /// the four corners is tripled and the closing join accounts for the last.
+    ///
+    /// This is also the only shape here with two rings to compare, so it is
+    /// what puts `get_piece_turns` across a ring boundary. The neighbour skip
+    /// applies within one ring only; two rings that never touch have no turn
+    /// between them however close they run, and the pair stands.
+    #[test]
+    fn an_exterior_and_its_hole_are_judged_by_their_own_windings() {
+        let polygon = Polygon::with_inners(
+            ring(&[
+                (0.0, 0.0),
+                (0.0, 20.0),
+                (20.0, 20.0),
+                (20.0, 0.0),
+                (0.0, 0.0),
+            ]),
+            vec![ring(&[
+                (5.0, 5.0),
+                (15.0, 5.0),
+                (15.0, 15.0),
+                (5.0, 15.0),
+                (5.0, 5.0),
+            ])],
+        );
+        let rings = zero_width_rings(&polygon);
+        assert_eq!(rings.len(), 2);
+        assert_eq!(
+            points_of(&rings[0]),
+            vec![
+                (0.0, 0.0),
+                (0.0, 20.0),
+                (20.0, 20.0),
+                (20.0, 0.0),
+                (0.0, 0.0)
+            ],
+            "the exterior's corners are all convex, so none adds a join"
+        );
+        assert_eq!(
+            points_of(&rings[1]).len(),
+            13,
+            "the hole's four corners are all reflex, so each is tripled"
+        );
+        assert!(matches!(
+            zero_width_outcome(&rings),
+            ZeroWidthOutcome::RingsStand
+        ));
+    }
+
+    /// A hole that reaches out and touches its exterior is declined.
+    ///
+    /// The two offsetted rings now meet, so `discard_rings` would drop them
+    /// both and what comes out is whatever the buffer traversal makes of the
+    /// turn — which is the part that is not ported. Deciding it needs the
+    /// winding strategy's verdict on a turn point, so this says so rather than
+    /// guessing. Contrast the ring above, where the same two rings stand
+    /// because nothing between them met.
+    #[test]
+    fn a_hole_touching_its_exterior_is_declined() {
+        let polygon = Polygon::with_inners(
+            ring(&[
+                (0.0, 0.0),
+                (0.0, 20.0),
+                (20.0, 20.0),
+                (20.0, 0.0),
+                (0.0, 0.0),
+            ]),
+            vec![ring(&[
+                (0.0, 5.0),
+                (15.0, 5.0),
+                (15.0, 15.0),
+                (0.0, 15.0),
+                (0.0, 5.0),
+            ])],
+        );
+        let rings = zero_width_rings(&polygon);
+        assert_eq!(rings.len(), 2);
+        assert!(matches!(
+            zero_width_outcome(&rings),
+            ZeroWidthOutcome::NeedsTraversal
+        ));
+    }
+
     /// A ring that crosses itself needs the turns, the check against the
     /// original and the traversal, none of which is ported.
     #[test]
