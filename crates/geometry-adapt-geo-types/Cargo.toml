@@ -1,6 +1,6 @@
 [package]
 name = "geometry-adapt-geo-types"
-version                = "0.0.8"
+version                = "0.0.9"
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
@@ -12,10 +12,10 @@ readme = "README.md"
 
 [dependencies]
 geometry-tag    = { version = "0.0.7", path = "../geometry-tag" }
-geometry-coords = { version = "0.0.8", path = "../geometry-coords" }
-geometry-cs     = { version = "0.0.8", path = "../geometry-cs" }
-geometry-trait  = { version = "0.0.8", path = "../geometry-trait" }
-geometry-model  = { version = "0.0.8", path = "../geometry-model" }
+geometry-coords = { version = "0.0.9", path = "../geometry-coords" }
+geometry-cs     = { version = "0.0.9", path = "../geometry-cs" }
+geometry-trait  = { version = "0.0.9", path = "../geometry-trait" }
+geometry-model  = { version = "0.0.9", path = "../geometry-model" }
 geo-types       = "0.7"
 
 [dev-dependencies]

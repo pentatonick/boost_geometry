@@ -1,6 +1,6 @@
 [package]
 name = "geometry-model"
-version                = "0.0.8"
+version                = "0.0.9"
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
@@ -22,9 +22,9 @@ serde = ["dep:serde"]
 
 [dependencies]
 geometry-tag    = { version = "0.0.7", path = "../geometry-tag" }
-geometry-coords = { version = "0.0.8", path = "../geometry-coords", default-features = false }
-geometry-cs     = { version = "0.0.8", path = "../geometry-cs",     default-features = false }
-geometry-trait  = { version = "0.0.8", path = "../geometry-trait",  default-features = false }
+geometry-coords = { version = "0.0.9", path = "../geometry-coords", default-features = false }
+geometry-cs     = { version = "0.0.9", path = "../geometry-cs",     default-features = false }
+geometry-trait  = { version = "0.0.9", path = "../geometry-trait",  default-features = false }
 serde           = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
 
 [dev-dependencies]
