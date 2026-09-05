@@ -417,8 +417,8 @@ where
         let length = hypot(delta.0, delta.1);
         debug_assert!(length > snap_tolerance);
         let midpoint = Coordinate {
-            x: (start.x + end.x) * 0.5,
-            y: (start.y + end.y) * 0.5,
+            x: f64::midpoint(start.x, end.x),
+            y: f64::midpoint(start.y, end.y),
         };
         let offset = sample_distance.min(length * 1e-4);
         let normal = (-delta.1 / length * offset, delta.0 / length * offset);

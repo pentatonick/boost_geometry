@@ -882,7 +882,7 @@ where
                 let sample = interpolate(
                     first_segment.0,
                     first_segment.1,
-                    (interval[0] + interval[1]) * 0.5,
+                    f64::midpoint(interval[0], interval[1]),
                 );
                 let location = xy_location_linestring(sample, second);
                 matrix.m[feature::INTERIOR][location.index()] = Dimension::Curve;
@@ -896,7 +896,7 @@ where
                 let sample = interpolate(
                     second_segment.0,
                     second_segment.1,
-                    (interval[0] + interval[1]) * 0.5,
+                    f64::midpoint(interval[0], interval[1]),
                 );
                 let location = xy_location_linestring(sample, first);
                 matrix.m[location.index()][feature::INTERIOR] = Dimension::Curve;
@@ -1450,7 +1450,11 @@ fn record_segment_cells(
     let parameters = segment_parameters(segment, all_segments, &second.points);
     for interval in parameters.windows(2) {
         debug_assert!(interval[1] - interval[0] > f64::EPSILON);
-        let midpoint = interpolate(segment.0, segment.1, (interval[0] + interval[1]) * 0.5);
+        let midpoint = interpolate(
+            segment.0,
+            segment.1,
+            f64::midpoint(interval[0], interval[1]),
+        );
         let first_location = topology_location(first, midpoint);
         let second_location = topology_location(second, midpoint);
         debug_assert_ne!(first_location, Location::Exterior);
@@ -1534,7 +1538,11 @@ fn relate_topologies(first: &Topology, second: &Topology) -> Result<De9im, Overl
     for &segment in &second_segments {
         for interval in segment_parameters(segment, &all_segments, &first.points).windows(2) {
             debug_assert!(interval[1] - interval[0] > f64::EPSILON);
-            let midpoint = interpolate(segment.0, segment.1, (interval[0] + interval[1]) * 0.5);
+            let midpoint = interpolate(
+                segment.0,
+                segment.1,
+                f64::midpoint(interval[0], interval[1]),
+            );
             let first_location = topology_location(first, midpoint);
             let second_location = topology_location(second, midpoint);
             debug_assert_ne!(second_location, Location::Exterior);

@@ -192,7 +192,6 @@ fn reflect_latitude(latitude: f64) -> f64 {
 mod tests {
     use geometry_cs::{Degree, Spherical};
     use geometry_model::{Linestring, Point2D};
-    use geometry_trait::Point as _;
 
     use super::*;
 

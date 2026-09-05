@@ -149,8 +149,8 @@ impl Bounds {
     #[must_use]
     pub fn center(&self) -> [f64; 2] {
         [
-            (self.min[0] + self.max[0]) * 0.5,
-            (self.min[1] + self.max[1]) * 0.5,
+            f64::midpoint(self.min[0], self.max[0]),
+            f64::midpoint(self.min[1], self.max[1]),
         ]
     }
 }
