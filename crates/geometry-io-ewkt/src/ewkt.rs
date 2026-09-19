@@ -399,11 +399,12 @@ where
 #[cfg(test)]
 mod tests {
     use alloc::format;
+    use alloc::string::String;
 
     use geometry_cs::Cartesian;
     use geometry_model::{Linestring, Point2D};
 
-    use super::{Ewkt, to_ewkt};
+    use super::{Ewkt, to_ewkt, write_ewkt};
     use crate::srid::Srid;
 
     /// The point every writer row is written from.
@@ -436,6 +437,58 @@ mod tests {
             to_ewkt(&empty, Some(Srid::new(4326))),
             "SRID=4326;LINESTRING EMPTY"
         );
+    }
+
+    /// A sink that accepts `budget` bytes and then refuses everything.
+    struct Sink {
+        budget: usize,
+        written: String,
+    }
+
+    impl core::fmt::Write for Sink {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            if s.len() > self.budget {
+                return Err(core::fmt::Error);
+            }
+            self.budget -= s.len();
+            self.written.push_str(s);
+            Ok(())
+        }
+    }
+
+    /// `write_ewkt` streams into a caller's sink, so a sink that fails must
+    /// surface as an error rather than a silently truncated geometry. Both
+    /// halves of the write can fail independently: the `SRID=` prefix this
+    /// crate emits, and the WKT body the inner writer emits. A zero budget
+    /// fails the prefix; a budget that covers only the prefix gets past it
+    /// and fails inside the body.
+    #[test]
+    fn a_failing_sink_is_reported_from_either_half() {
+        let mut refuses_the_prefix = Sink {
+            budget: 0,
+            written: String::new(),
+        };
+        assert!(write_ewkt(&point(), Some(Srid::new(4326)), &mut refuses_the_prefix).is_err());
+        assert_eq!(refuses_the_prefix.written, "");
+
+        let mut refuses_the_body = Sink {
+            budget: "SRID=4326;".len(),
+            written: String::new(),
+        };
+        assert!(write_ewkt(&point(), Some(Srid::new(4326)), &mut refuses_the_body).is_err());
+        assert_eq!(refuses_the_body.written, "SRID=4326;");
+    }
+
+    /// With no SRID there is no prefix to write, so the sink sees only the
+    /// body and a generous budget succeeds.
+    #[test]
+    fn a_sink_with_room_receives_the_whole_geometry() {
+        let mut sink = Sink {
+            budget: 64,
+            written: String::new(),
+        };
+        write_ewkt(&point(), None, &mut sink).unwrap();
+        assert_eq!(sink.written, "POINT(1 2)");
     }
 
     #[test]

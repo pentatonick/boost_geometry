@@ -284,4 +284,15 @@ mod tests {
     fn vertical_tab_is_not_skipped() {
         assert_eq!(scan("\x0bSRID=1;POINT(1 2)"), Ok(unclaimed()));
     }
+
+    /// The leading scan decodes a non-ASCII byte to a `char` only to ask
+    /// whether it is whitespace. A non-ASCII character that is *not*
+    /// whitespace must stop the scan rather than be stepped over, so the
+    /// prefix behind it is never reached and nothing is claimed — the
+    /// counterpart to `non_ascii_whitespace_is_skipped`.
+    #[test]
+    fn non_ascii_non_whitespace_is_not_skipped() {
+        assert_eq!(scan("\u{e9}SRID=4326;POINT(1 2)"), Ok(unclaimed()));
+        assert_eq!(scan("\u{4e2d}SRID=4326;POINT(1 2)"), Ok(unclaimed()));
+    }
 }

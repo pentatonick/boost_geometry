@@ -836,26 +836,28 @@ mod tests {
     /// the form the writer emits, so the two stay symmetric.
     #[test]
     fn multi_members_may_be_empty() {
-        let g = from_wkt("MULTIPOLYGON(EMPTY)").unwrap();
-        let DynGeometry::MultiPolygon(mp) = g else {
-            panic!("expected a multipolygon")
-        };
-        assert_eq!(mp.0.len(), 1);
-        assert_eq!(mp.0[0].exterior().points().count(), 0);
+        assert_eq!(
+            from_wkt("MULTIPOLYGON(EMPTY)").unwrap(),
+            DynGeometry::MultiPolygon(MultiPolygon::from_vec(vec![Polygon::new(Ring::new())]))
+        );
 
-        let g = from_wkt("MULTILINESTRING(EMPTY)").unwrap();
-        let DynGeometry::MultiLineString(ml) = g else {
-            panic!("expected a multilinestring")
-        };
-        assert_eq!(ml.0.len(), 1);
-        assert_eq!(ml.0[0].0.len(), 0);
+        assert_eq!(
+            from_wkt("MULTILINESTRING(EMPTY)").unwrap(),
+            DynGeometry::MultiLineString(MultiLinestring::from_vec(vec![Linestring::from_vec(
+                Vec::new()
+            )]))
+        );
 
-        let g = from_wkt("MULTILINESTRING(EMPTY,(0 0,1 1),EMPTY)").unwrap();
-        let DynGeometry::MultiLineString(ml) = g else {
-            panic!("expected a multilinestring")
-        };
-        assert_eq!(ml.0.len(), 3);
-        assert_eq!(ml.0[1].0.len(), 2);
+        // An empty member holds its place: the populated member stays in
+        // the middle rather than being compacted to the front.
+        assert_eq!(
+            from_wkt("MULTILINESTRING(EMPTY,(0 0,1 1),EMPTY)").unwrap(),
+            DynGeometry::MultiLineString(MultiLinestring::from_vec(vec![
+                Linestring::from_vec(Vec::new()),
+                Linestring::from_vec(vec![Pt::new(0.0, 0.0), Pt::new(1.0, 1.0)]),
+                Linestring::from_vec(Vec::new()),
+            ]))
+        );
     }
 
     /// An overflowing coordinate literal is an error, not an infinity.
