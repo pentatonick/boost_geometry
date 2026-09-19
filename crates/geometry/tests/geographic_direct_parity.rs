@@ -89,3 +89,35 @@ fn thomas_direct_covers_reflections_meridians_poles_and_first_order() {
     assert!(default.second_order);
     assert_eq!(default.spheroid, Spheroid::WGS84);
 }
+
+/// `formulas/thomas_direct.hpp` — a due-south course spelled as `-π`
+/// keeps the sign of its reverse azimuth (Boost 1.83: lon2 = 10°,
+/// lat2 = 10.962936519310402°, reverse azimuth = −180°), and `+π`
+/// reaches the same latitude with a `+180°` reverse azimuth.
+#[test]
+fn thomas_direct_negative_pi_azimuth_is_due_south() {
+    let minus =
+        ThomasDirect::WGS84.apply(10.0 * D2R, 20.0 * D2R, 1_000_000.0, -core::f64::consts::PI);
+    let plus =
+        ThomasDirect::WGS84.apply(10.0 * D2R, 20.0 * D2R, 1_000_000.0, core::f64::consts::PI);
+    assert!(
+        (minus.lon2 * R2D - 10.0).abs() < 1e-9,
+        "lon2 {}",
+        minus.lon2 * R2D
+    );
+    assert!(
+        (minus.lat2 * R2D - 10.962_936_519_310_402).abs() < 1e-9,
+        "lat2 {}",
+        minus.lat2 * R2D
+    );
+    assert!(
+        (minus.reverse_azimuth * R2D + 180.0).abs() < 1e-9,
+        "reverse azimuth {}",
+        minus.reverse_azimuth * R2D
+    );
+    assert!((minus.lat2 - plus.lat2).abs() < 1e-12);
+    assert!((plus.reverse_azimuth * R2D - 180.0).abs() < 1e-9);
+    let vincenty =
+        VincentyDirect::WGS84.apply(10.0 * D2R, 20.0 * D2R, 1_000_000.0, -core::f64::consts::PI);
+    assert!((minus.lat2 - vincenty.lat2).abs() * R2D < 1e-6);
+}

@@ -36,7 +36,7 @@ use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_tag::{PointTag, PolygonTag, SameAs, SegmentTag};
 use geometry_trait::{
     Point as PointTrait, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
-    Segment as SegmentTrait, segment_end, segment_start,
+    Segment as SegmentTrait, fold_dims, ordinate, segment_end, segment_start,
 };
 
 /// A strategy for "do these two geometries describe the same point
@@ -108,8 +108,7 @@ where
     fn equals(&self, a: &A, b: &B) -> bool {
         let (a1, a2) = (segment_start(a), segment_end(a));
         let (b1, b2) = (segment_start(b), segment_end(b));
-        (point_eq_2d(&a1, &b1) && point_eq_2d(&a2, &b2))
-            || (point_eq_2d(&a1, &b2) && point_eq_2d(&a2, &b1))
+        (point_eq(&a1, &b1) && point_eq(&a2, &b2)) || (point_eq(&a1, &b2) && point_eq(&a2, &b1))
     }
 }
 
@@ -189,21 +188,47 @@ extern crate alloc;
 
 // ---- Kernels ---------------------------------------------------------
 
+/// Do two points coincide in every dimension of `a`?
 #[inline]
-fn point_eq_2d<Pa, Pb>(a: &Pa, b: &Pb) -> bool
+fn point_eq<Pa, Pb>(a: &Pa, b: &Pb) -> bool
 where
     Pa: PointTrait,
     Pb: PointTrait<Scalar = Pa::Scalar>,
 {
-    a.get::<0>() == b.get::<0>() && a.get::<1>() == b.get::<1>()
+    fold_dims(true, a, |equal, a, d| {
+        equal && ordinate(a, d) == ordinate(b, d)
+    })
 }
 
-/// Are two rings equal as closed loops? Equal distinct-vertex sequence
-/// up to rotation and reversal (free starting vertex, free direction).
-/// This is the v1 vertex-sequence simplification of Boost's topological
-/// `equals::ring_or_polygon::apply`
-/// (`algorithms/detail/equals/implementation.hpp:120-160`): a ring with
-/// a redundant collinear vertex will *not* match one without it.
+/// Is `curr` a redundant vertex — a repeat of `prev`, or a point lying
+/// strictly between `prev` and `next` on one straight edge? Planar test
+/// on the first two ordinates, since rings are areal.
+#[inline]
+fn redundant_vertex<P: PointTrait>(prev: &P, curr: &P, next: &P) -> bool {
+    if point_eq(curr, prev) {
+        return true;
+    }
+    let zero = P::Scalar::ZERO;
+    let (ax, ay) = (
+        curr.get::<0>() - prev.get::<0>(),
+        curr.get::<1>() - prev.get::<1>(),
+    );
+    let (bx, by) = (
+        next.get::<0>() - curr.get::<0>(),
+        next.get::<1>() - curr.get::<1>(),
+    );
+    let cross = ax * by - ay * bx;
+    let dot = ax * bx + ay * by;
+    cross == zero && dot > zero
+}
+
+/// Are two rings equal as closed loops? Equal vertex sequence up to
+/// rotation and reversal (free starting vertex, free direction) once
+/// repeated vertices and vertices lying inside a straight edge are
+/// dropped, so two rings describing the same region compare equal
+/// whatever redundant vertices either carries. This is the vertex-level
+/// counterpart of Boost's topological `equals::ring_or_polygon::apply`
+/// (`algorithms/detail/equals/implementation.hpp:120-160`).
 fn rings_equal<Ra, Rb>(a: &Ra, b: &Rb) -> bool
 where
     Ra: RingTrait,
@@ -232,16 +257,33 @@ where
     false
 }
 
-/// Strip the trailing closing vertex from a closed ring so the
-/// rotation search compares only the distinct loop vertices.
+/// Strip the trailing closing vertex from a closed ring, then every
+/// redundant vertex (see [`redundant_vertex`]), so the rotation search
+/// compares only the vertices that shape the loop.
 fn normalise_ring<R>(r: &R) -> alloc::vec::Vec<&R::Point>
 where
     R: RingTrait,
     R::Point: PointTrait,
 {
     let mut pts: alloc::vec::Vec<&R::Point> = r.points().collect();
-    if pts.len() >= 2 && point_eq_2d(pts[0], pts[pts.len() - 1]) {
+    if pts.len() >= 2 && point_eq(pts[0], pts[pts.len() - 1]) {
         pts.pop();
+    }
+    // Removing one vertex can make its neighbour redundant in turn, so
+    // sweep until a full pass removes nothing.
+    let mut removed = true;
+    while removed && pts.len() >= 3 {
+        removed = false;
+        let mut i = 0;
+        while pts.len() >= 3 && i < pts.len() {
+            let n = pts.len();
+            if redundant_vertex(pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]) {
+                pts.remove(i);
+                removed = true;
+            } else {
+                i += 1;
+            }
+        }
     }
     pts
 }
@@ -260,7 +302,7 @@ where
         } else {
             (start + i) % n
         };
-        if !point_eq_2d(*ai, b[j]) {
+        if !point_eq(*ai, b[j]) {
             return false;
         }
     }
@@ -346,5 +388,55 @@ mod tests {
             &pt(1.0, 1.0),
             &pt(2.0, 2.0)
         ));
+    }
+
+    /// Point, segment, and ring equality compare every dimension, not
+    /// just the first two.
+    #[test]
+    fn three_dimensional_geometries_differing_in_z_are_not_equal() {
+        use geometry_model::Point3D;
+        type P3 = Point3D<f64, Cartesian>;
+        let a = Segment::new(P3::new(0.0, 0.0, 0.0), P3::new(1.0, 1.0, 0.0));
+        let b = Segment::new(P3::new(0.0, 0.0, 5.0), P3::new(1.0, 1.0, 5.0));
+        assert!(!EqPointPoint.equals(&P3::new(0.0, 0.0, 0.0), &P3::new(0.0, 0.0, 5.0)));
+        assert!(!EqSegmentSegment.equals(&a, &b));
+        assert!(EqSegmentSegment.equals(&a, &a));
+    }
+
+    /// Boost's areal `equals` is topological: a vertex lying inside a
+    /// straight edge, or a repeated vertex, does not change the point set.
+    #[test]
+    fn rings_with_redundant_vertices_describe_the_same_region() {
+        let a: Polygon<P> = polygon![[(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (0.0, 0.0)]];
+        let b: Polygon<P> = polygon![[
+            (0.0, 0.0),
+            (0.0, 4.0),
+            (2.0, 4.0),
+            (4.0, 4.0),
+            (4.0, 0.0),
+            (0.0, 0.0)
+        ]];
+        let c: Polygon<P> = polygon![[
+            (0.0, 0.0),
+            (0.0, 0.0),
+            (0.0, 4.0),
+            (4.0, 4.0),
+            (4.0, 4.0),
+            (4.0, 0.0),
+            (0.0, 0.0)
+        ]];
+        assert!(EqPolygonPolygon.equals(&a, &b));
+        assert!(EqPolygonPolygon.equals(&b, &a));
+        assert!(EqPolygonPolygon.equals(&a, &c));
+        // A vertex that bends the boundary is not redundant.
+        let notch: Polygon<P> = polygon![[
+            (0.0, 0.0),
+            (0.0, 4.0),
+            (2.0, 3.0),
+            (4.0, 4.0),
+            (4.0, 0.0),
+            (0.0, 0.0)
+        ]];
+        assert!(!EqPolygonPolygon.equals(&a, &notch));
     }
 }

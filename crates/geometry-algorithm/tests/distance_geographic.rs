@@ -16,15 +16,13 @@
 //! a research-grade benchmark:
 //!
 //! * Andoyer normal cases → `0.01 km` (matches `andoyer.cpp`).
-//! * Andoyer antipodal equatorial → uses the equatorial half-
-//!   circumference (`π · a ≈ 20_037.508 km`) as the expected value,
-//!   *not* Boost's `20_003.9 km`. Boost's strategy ladder
-//!   (`strategies/geographic/distance.hpp:91-112`) routes equatorial-
-//!   antipodal inputs through `formula::meridian_inverse` before
-//!   falling back to `andoyer_inverse`; the T43 implementation is
-//!   `andoyer_inverse` alone, which (correctly for that formula)
-//!   reports the equatorial half-circumference. The meridian /
-//!   nearly-antipodal fallback ladder is outside the scope of M5.
+//! * Andoyer antipodal equatorial → Boost's `20_003.9 km`: the strategy
+//!   ladder (`strategies/geographic/distance.hpp:91-112`) routes
+//!   equatorial-antipodal inputs through `formula::meridian_inverse`
+//!   before falling back to `andoyer_inverse`, and the port's strategy
+//!   does the same, so the expected value is the route over a pole
+//!   (twice the quarter meridian) rather than the raw formula's
+//!   equatorial half-circumference.
 //! * Vincenty normal cases → `0.01 m` matches `vincenty.cpp` for the
 //!   strict-meridian / equator pairs.
 //! * Vincenty `(4, 52) → (3, 40)` is loosened to `~13 m` (Boost's own
@@ -35,7 +33,7 @@
 use geometry_adapt::{Adapt, WithCs};
 use geometry_algorithm::distance_with;
 use geometry_cs::{Degree, Geographic, Spheroid};
-use geometry_strategy::geographic::{Andoyer, Vincenty};
+use geometry_strategy::geographic::{Andoyer, Meridian, Vincenty};
 
 type GeographicPoint = WithCs<Adapt<[f64; 2]>, Geographic<Degree>>;
 
@@ -50,11 +48,11 @@ const GDA: Spheroid = Spheroid {
     flattening: 1.0 / 298.257_222_10,
 };
 
-/// WGS84 equatorial half-circumference `π · a` — the value
-/// `formula::andoyer_inverse` reports for an equatorial-antipodal pair
-/// (see the docs at the top of this file for the meridian-fallback
-/// rationale). `π · 6_378_137 m ≈ 20_037_508.343 m`.
-const ANDOYER_EQUATORIAL_HALF: f64 = core::f64::consts::PI * 6_378_137.0;
+/// WGS84 route over a pole — twice the quarter meridian
+/// (`2 · Meridian::WGS84.quarter_length()`, pinned below in
+/// `andoyer_table`) — the value the meridian shortcut reports for an
+/// antipodal pair. `≈ 20_003_931.459 m`.
+const ANDOYER_POLAR_ROUTE: f64 = 20_003_931.458_625_447;
 
 struct Case {
     name: &'static str,
@@ -105,16 +103,15 @@ const ANDOYER_CASES: &[Case] = &[
         tolerance_metres: 10.0,
     },
     // andoyer.cpp:243-246 — four antipodal equatorial pairs.
-    // Expected is the equatorial half-circumference (see file-level
-    // docs); tolerance is 1 km against that value, comfortably wider
-    // than the rounding floor of `formula::andoyer_inverse` itself.
+    // Expected is the route over a pole (see file-level docs);
+    // tolerance is 1 km, as in Boost's own check.
     Case {
         name: "antipodal equator (0,0) to (180,0)",
         lon1: 0.0,
         lat1: 0.0,
         lon2: 180.0,
         lat2: 0.0,
-        expected_metres: ANDOYER_EQUATORIAL_HALF,
+        expected_metres: ANDOYER_POLAR_ROUTE,
         tolerance_metres: 1_000.0,
     },
     Case {
@@ -123,7 +120,7 @@ const ANDOYER_CASES: &[Case] = &[
         lat1: 0.0,
         lon2: -180.0,
         lat2: 0.0,
-        expected_metres: ANDOYER_EQUATORIAL_HALF,
+        expected_metres: ANDOYER_POLAR_ROUTE,
         tolerance_metres: 1_000.0,
     },
     Case {
@@ -132,7 +129,7 @@ const ANDOYER_CASES: &[Case] = &[
         lat1: 0.0,
         lon2: 90.0,
         lat2: 0.0,
-        expected_metres: ANDOYER_EQUATORIAL_HALF,
+        expected_metres: ANDOYER_POLAR_ROUTE,
         tolerance_metres: 1_000.0,
     },
     Case {
@@ -141,7 +138,7 @@ const ANDOYER_CASES: &[Case] = &[
         lat1: 0.0,
         lon2: -90.0,
         lat2: 0.0,
-        expected_metres: ANDOYER_EQUATORIAL_HALF,
+        expected_metres: ANDOYER_POLAR_ROUTE,
         tolerance_metres: 1_000.0,
     },
 ];
@@ -243,6 +240,7 @@ fn vincenty_uses_wgs84(case: &Case) -> bool {
 
 #[test]
 fn andoyer_table() {
+    assert!((ANDOYER_POLAR_ROUTE - 2.0 * Meridian::WGS84.quarter_length()).abs() < 1e-6);
     let strategy = Andoyer::WGS84;
     for case in ANDOYER_CASES {
         let p1 = deg(case.lon1, case.lat1);

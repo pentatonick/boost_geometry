@@ -39,6 +39,8 @@ use geometry_trait::Point;
 use crate::distance::{DefaultDistance, DistanceStrategy};
 
 #[cfg(feature = "std")]
+use crate::geographic::Meridian;
+#[cfg(feature = "std")]
 use crate::geographic::spheroid_calc::SpheroidCalc;
 #[cfg(feature = "std")]
 use crate::normalise::{HasAngularUnits, lonlat_radians};
@@ -151,6 +153,20 @@ where
             return 0.0;
         }
 
+        // Boost's `strategy::distance::geographic` runs
+        // `formula::meridian_inverse` before the general formula
+        // (`strategies/geographic/distance.hpp:91-112`): endpoints on one
+        // meridian, or on opposite meridians with the route over a pole,
+        // take the exact meridian-arc distance — the antipodal region
+        // where the general formula is least trustworthy.
+        let meridian = Meridian {
+            spheroid: self.spheroid,
+        }
+        .inverse(lon1, lat1, lon2, lat2);
+        if meridian.meridian {
+            return meridian.distance;
+        }
+
         let dlon = lon2 - lon1;
         let cos_dlon = dlon.cos();
         let sin_lat1 = lat1.sin();
@@ -228,6 +244,7 @@ mod tests {
 
     use super::Andoyer;
     use crate::distance::DistanceStrategy;
+    use crate::geographic::Meridian;
     use geometry_adapt::{Adapt, WithCs};
     use geometry_cs::{Degree, Geographic};
 
@@ -264,32 +281,26 @@ mod tests {
     }
 
     /// `test/strategies/andoyer.cpp:243-246` — four antipodal
-    /// equatorial pairs.
-    ///
-    /// **Divergence from Boost's expected `20_003.9 km`:** the Boost
-    /// test value is produced by the *strategy*
-    /// `strategy::distance::geographic<andoyer>` at
-    /// `strategies/geographic/distance.hpp:91-112`, which first runs
-    /// `formula::meridian_inverse` and only falls back to
-    /// `andoyer_inverse` for non-meridian pairs. For the four
-    /// equatorial-antipodal cases here `|Δlon| == 180°` triggers the
-    /// meridian shortcut. T43's scope is `andoyer_inverse` itself —
-    /// the meridian / nearly-antipodal fallback ladder is M5 (T46) —
-    /// so we feed the inputs directly through `andoyer_inverse`,
-    /// which (correctly) reports the equatorial circumference / 2 ≈
-    /// `20_037.5 km`. Tolerance is 1 km against that value.
+    /// equatorial pairs expect `20_003.9 km`: the strategy
+    /// `strategy::distance::geographic<andoyer>`
+    /// (`strategies/geographic/distance.hpp:91-112`) runs
+    /// `formula::meridian_inverse` first, and `|Δlon| == 180°` routes
+    /// these pairs over a pole — twice the quarter meridian — instead of
+    /// the raw formula's half equatorial circumference (`20_037.5 km`),
+    /// which is longer than that known path. Tolerance is 1 km.
     #[test]
     fn antipodal_equatorial() {
-        // 2π · a / 2 for WGS84 ≈ 20_037.508 km.
-        let expected_km = core::f64::consts::PI * 6_378_137.0 / 1000.0;
+        let expected_km = 2.0 * Meridian::WGS84.quarter_length() / 1000.0;
+        assert!((expected_km - 20_003.931).abs() < 0.01);
         for (a, b) in [
             (deg(0.0, 0.0), deg(180.0, 0.0)),
             (deg(0.0, 0.0), deg(-180.0, 0.0)),
             (deg(-90.0, 0.0), deg(90.0, 0.0)),
             (deg(90.0, 0.0), deg(-90.0, 0.0)),
+            (deg(10.0, 20.0), deg(-170.0, -20.0)),
         ] {
             let d = Andoyer::WGS84.distance(&a, &b);
-            assert!((d / 1000.0 - expected_km).abs() < 1.0);
+            assert!((d / 1000.0 - expected_km).abs() < 1.0, "{d}");
         }
     }
 

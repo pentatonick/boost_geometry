@@ -27,7 +27,7 @@ use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{Linestring, Point as ModelPoint, Segment};
 use geometry_tag::SameAs;
-use geometry_trait::{Linestring as LinestringTrait, Point, PointMut};
+use geometry_trait::{Linestring as LinestringTrait, Point, PointMut, fold_dims, ordinate};
 
 /// A strategy for the pair of nearest points on `(A, B)`.
 ///
@@ -180,9 +180,13 @@ where
     P: Point<Scalar = f64> + PointMut + Default,
 {
     // Crossing segments share a point — the closest pair is that point
-    // on both. Compute it directly from the line-line intersection.
-    if let Some(pt) = segment_intersection(a0, a1, b0, b1) {
-        return (copy_point(&pt), pt);
+    // on both. Compute it directly from the line-line intersection. The
+    // crossing test is planar, so it only applies to 2-D points; higher
+    // dimensions fall through to the endpoint projections.
+    if P::DIM == 2 {
+        if let Some(pt) = segment_intersection(a0, a1, b0, b1) {
+            return (copy_point(&pt), pt);
+        }
     }
 
     // Otherwise the minimum is one of the four endpoint projections.
@@ -230,22 +234,23 @@ where
     }
 }
 
-/// Compute `(dot(p − a, b − a), dot(b − a, b − a))` over 2D.
+/// Compute `(dot(p − a, b − a), dot(b − a, b − a))` over every dimension.
 #[inline]
 fn dots<P: Point<Scalar = f64>>(p: &P, a: &P, b: &P) -> (f64, f64) {
-    let apx = p.get::<0>() - a.get::<0>();
-    let apy = p.get::<1>() - a.get::<1>();
-    let abx = b.get::<0>() - a.get::<0>();
-    let aby = b.get::<1>() - a.get::<1>();
-    (apx * abx + apy * aby, abx * abx + aby * aby)
+    fold_dims((0.0, 0.0), p, |(ap_ab, ab_ab), p, d| {
+        let ap = ordinate(p, d) - ordinate(a, d);
+        let ab = ordinate(b, d) - ordinate(a, d);
+        (ap_ab + ap * ab, ab_ab + ab * ab)
+    })
 }
 
-/// Squared 2D distance between two points.
+/// Squared distance between two points over every dimension.
 #[inline]
 fn squared_distance<P: Point<Scalar = f64>>(a: &P, b: &P) -> f64 {
-    let dx = a.get::<0>() - b.get::<0>();
-    let dy = a.get::<1>() - b.get::<1>();
-    dx * dx + dy * dy
+    fold_dims(0.0, a, |sum, a, d| {
+        let delta = ordinate(a, d) - ordinate(b, d);
+        sum + delta * delta
+    })
 }
 
 /// Linear per-dimension blend `out[D] = a[D] + t·(b[D] − a[D])`.
@@ -358,5 +363,21 @@ mod tests {
         assert!((ca.get::<0>() - 1.0).abs() < 1e-12);
         assert!((ca.get::<1>() - 1.0).abs() < 1e-12);
         assert!(Pythagoras.distance(&ca, &cb) < 1e-12);
+    }
+
+    /// The point ↔ segment pair walks every dimension: a point on a
+    /// vertical 3-D segment is its own foot, and the pair's distance
+    /// agrees with `PointToSegment`, which already folds all dimensions.
+    #[test]
+    fn three_dimensional_point_on_vertical_segment_is_its_own_foot() {
+        use geometry_model::Point3D;
+        type P3 = Point3D<f64, Cartesian>;
+        let p = P3::new(0., 0., 5.);
+        let s = Segment::new(P3::new(0., 0., 0.), P3::new(0., 0., 10.));
+        let (a, b) = CartesianClosestPoints.closest_points(&p, &s);
+        assert_eq!((a.get::<0>(), a.get::<1>(), a.get::<2>()), (0., 0., 5.));
+        assert_eq!((b.get::<0>(), b.get::<1>(), b.get::<2>()), (0., 0., 5.));
+        let via_distance = crate::PointToSegment::<Pythagoras>::default().distance(&p, &s);
+        assert!((Pythagoras.distance(&a, &b) - via_distance).abs() < 1e-12);
     }
 }

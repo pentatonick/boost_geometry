@@ -40,6 +40,15 @@ use crate::distance::DistanceStrategy;
 ///
 /// Mirrors `boost::geometry::strategy::distance::projected_point` from
 /// `boost/geometry/strategies/cartesian/distance_projected_point.hpp`.
+///
+/// # Panics
+///
+/// The projection parameter `t` needs exact division. Boost computes it
+/// in `promote_floating_point<Scalar>`; this port computes in the point's
+/// own scalar, so an integer scalar — whose division truncates `t` to
+/// `0` or `1` and snaps every foot onto an endpoint — is refused with a
+/// panic rather than answering with a wrong distance. Promote integer
+/// coordinates to a floating scalar first.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PointToSegment<PP = Pythagoras>(pub PP);
 
@@ -99,6 +108,14 @@ where
     if denominator <= P::Scalar::ZERO {
         return start;
     }
+
+    // `1 / 2 · 2 == 1` holds for floating and rational scalars and fails
+    // for integers, whose truncating division would misplace the foot.
+    let two = P::Scalar::ONE + P::Scalar::ONE;
+    assert!(
+        P::Scalar::ONE / two * two == P::Scalar::ONE,
+        "PointToSegment needs a scalar with exact division; promote integer coordinates to a floating type first"
+    );
 
     let t = numerator / denominator;
 
@@ -414,5 +431,17 @@ mod tests {
         let p = P5::default();
         assert!(std::panic::catch_unwind(|| dots(&p, &p, &p)).is_err());
         assert!(std::panic::catch_unwind(|| assemble_foot(&p, &p, 0.5)).is_err());
+    }
+
+    /// An integer scalar cannot carry the projection parameter (its
+    /// division truncates `t` and snaps every foot to an endpoint), so the
+    /// strategy refuses it rather than returning the distance to a vertex.
+    #[test]
+    #[should_panic(expected = "exact division")]
+    fn integer_scalars_are_refused_rather_than_snapped_to_an_endpoint() {
+        type IP = Point2D<i32, Cartesian>;
+        let p = IP::new(5, 7);
+        let s = Segment::new(IP::new(0, 0), IP::new(10, 0));
+        let _ = PointToSegment::<ComparablePythagoras>::default().distance(&p, &s);
     }
 }

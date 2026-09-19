@@ -47,6 +47,8 @@ use geometry_trait::Point;
 use crate::distance::DistanceStrategy;
 
 #[cfg(feature = "std")]
+use crate::geographic::Meridian;
+#[cfg(feature = "std")]
 use crate::geographic::spheroid_calc::SpheroidCalc;
 #[cfg(feature = "std")]
 use crate::normalise::{HasAngularUnits, lonlat_radians};
@@ -163,6 +165,20 @@ where
         // short-circuit at `formulas/vincenty_inverse.hpp:76-79`.
         if lon1 == lon2 && lat1 == lat2 {
             return 0.0;
+        }
+
+        // Boost's `strategy::distance::geographic` runs
+        // `formula::meridian_inverse` before the general formula
+        // (`strategies/geographic/distance.hpp:91-112`): endpoints on one
+        // meridian, or on opposite meridians with the route over a pole,
+        // take the exact meridian-arc distance — the antipodal region
+        // where the general formula is least trustworthy.
+        let meridian = Meridian {
+            spheroid: self.spheroid,
+        }
+        .inverse(lon1, lat1, lon2, lat2);
+        if meridian.meridian {
+            return meridian.distance;
         }
 
         let pi = core::f64::consts::PI;
@@ -498,5 +514,18 @@ mod tests {
     fn readonly_witness_computes_distance() {
         let d = _accepts_readonly_point(&Vincenty::WGS84, &deg(4.0, 52.0), &deg(3.0, 40.0));
         assert!(d > 1_000_000.0, "≈1336 km, got {d}");
+    }
+
+    /// Exact antipodes lie on opposite meridians, so the meridian check
+    /// routes them over a pole (twice the quarter meridian) instead of
+    /// letting the λ iteration stop at `|λ| ≥ π` with `b·π`.
+    #[test]
+    fn antipodal_equatorial_is_the_polar_route() {
+        let polar_route = 2.0 * crate::geographic::Meridian::WGS84.quarter_length();
+        let d = Vincenty::WGS84.distance(&deg(0.0, 0.0), &deg(180.0, 0.0));
+        assert!(
+            (d - polar_route).abs() < 1.0,
+            "Vincenty returned {d} m, polar geodesic is {polar_route} m"
+        );
     }
 }

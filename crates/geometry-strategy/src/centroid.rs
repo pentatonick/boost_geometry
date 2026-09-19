@@ -37,7 +37,8 @@ use geometry_tag::{
 use geometry_trait::{
     Box as BoxTrait, Geometry, Linestring as LinestringTrait, MultiPoint as MultiPointTrait,
     MultiPolygon as MultiPolygonTrait, Point as PointTrait, PointMut, Polygon as PolygonTrait,
-    Ring as RingTrait, Segment as SegmentTrait, box_max, box_min, segment_end, segment_start,
+    Ring as RingTrait, Segment as SegmentTrait, box_max, box_min, fold_dims, ordinate, segment_end,
+    segment_start, set_ordinate,
 };
 
 use crate::area::{AreaStrategy, ShoelaceArea};
@@ -438,17 +439,24 @@ where
     fn centroid(&self, mp: &G) -> G::ItemPoint {
         let zero = <G::ItemPoint as PointTrait>::Scalar::ZERO;
         let mut count = zero;
-        let mut sum_x = zero;
-        let mut sum_y = zero;
+        // Per-dimension sums live in a point so every dimension of the
+        // mean is covered, not just the first two.
+        let mut sums = G::ItemPoint::default();
         for p in mp.points() {
-            sum_x = sum_x + p.get::<0>();
-            sum_y = sum_y + p.get::<1>();
+            let so_far = sums;
+            fold_dims((), p, |(), p, d| {
+                set_ordinate(&mut sums, d, ordinate(&so_far, d) + ordinate(p, d));
+            });
             count = count + <G::ItemPoint as PointTrait>::Scalar::ONE;
         }
         if count == zero {
             return G::ItemPoint::default();
         }
-        point_2d::<G::ItemPoint>(sum_x / count, sum_y / count)
+        let mut mean = G::ItemPoint::default();
+        fold_dims((), &sums, |(), sums, d| {
+            set_ordinate(&mut mean, d, ordinate(sums, d) / count);
+        });
+        mean
     }
 }
 
@@ -778,5 +786,23 @@ mod tests {
         let mixed = MultiPolygon(vec![bowtie, square]);
         let c = CartesianMultiPolygonCentroid.centroid(&mixed);
         assert!(close_pt(&c, 34.0 / 3.0, 11.0, 1e-9), "{c:?}");
+    }
+
+    /// The pointlike arm averages *per dimension*: a 3-D multi-point's
+    /// centroid carries the mean `z`.
+    #[test]
+    fn multipoint_mean_covers_the_third_dimension() {
+        use geometry_model::Point3D;
+        type P3 = Point3D<f64, Cartesian>;
+        let mp: MultiPoint<P3> =
+            MultiPoint::from_vec(vec![P3::new(0., 0., 10.), P3::new(2., 2., 12.)]);
+        let c = CartesianMultiPointCentroid.centroid(&mp);
+        assert!((c.get::<0>() - 1.0).abs() < 1e-12);
+        assert!((c.get::<1>() - 1.0).abs() < 1e-12);
+        assert!(
+            (c.get::<2>() - 11.0).abs() < 1e-12,
+            "z mean should be 11, got {}",
+            c.get::<2>()
+        );
     }
 }
