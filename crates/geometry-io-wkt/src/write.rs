@@ -45,6 +45,10 @@ const POINT_CAPACITY: usize = 16;
 
 /// Serialise a geometry to a canonical WKT [`String`].
 ///
+/// The output re-parses through [`from_wkt`](crate::from_wkt) for every
+/// geometry whose coordinates are finite; a non-finite coordinate is
+/// outside the WKT grammar and outside this crate's domain.
+///
 /// A thin wrapper over [`write_wkt`] that owns the output buffer. The
 /// canonical spacing and number format are: uppercase keyword, no space
 /// before `(`, coordinates separated by a single space, points by a
@@ -170,7 +174,20 @@ where
 /// trailing `.0`, everything else uses Rust's shortest round-tripping
 /// representation. Keeps `POINT(10 10)` free of `.0` noise while still
 /// round-tripping fractional coordinates exactly.
+///
+/// # Non-finite coordinates
+///
+/// WKT has no spelling for an infinity or a NaN, so a non-finite
+/// coordinate is outside this crate's domain and its output does not
+/// re-parse. The reader cannot produce one (see
+/// [`WktError::InvalidNumber`](crate::WktError::InvalidNumber)), so reaching here non-finite means a
+/// caller built the geometry that way directly; the debug assertion
+/// surfaces that in tests rather than letting it reach a file.
 fn write_scalar<W: core::fmt::Write + ?Sized>(out: &mut W, v: f64) -> core::fmt::Result {
+    debug_assert!(
+        v.is_finite(),
+        "WKT cannot represent a non-finite coordinate: {v}"
+    );
     if v == 0.0 {
         return out.write_char('0');
     }
@@ -458,6 +475,15 @@ where
             if i > 0 {
                 out.write_char(',')?;
             }
+            // A member with no vertices is spelled `EMPTY`, not `()`:
+            // `<multilinestring text>` is a list of `<linestring text>`,
+            // and that production admits `<empty set>` in its own right
+            // (OGC SFA-1 06-103r4 §7.2.2). Emitting `()` produces a
+            // string this crate's own reader rejects.
+            if ls.points().next().is_none() {
+                out.write_str("EMPTY")?;
+                continue;
+            }
             out.write_char('(')?;
             write_point_seq(out, ls.points())?;
             out.write_char(')')?;
@@ -487,6 +513,13 @@ where
         for (i, pg) in self.polygons().enumerate() {
             if i > 0 {
                 out.write_char(',')?;
+            }
+            // Same rule as `MULTILINESTRING`: `<multipolygon text>` is a
+            // list of `<polygon text>`, which admits `<empty set>`. A
+            // member with no exterior vertices is `EMPTY`, not `(())`.
+            if pg.exterior().points().next().is_none() {
+                out.write_str("EMPTY")?;
+                continue;
             }
             write_polygon_rings(out, pg)?;
         }
@@ -637,6 +670,11 @@ mod tests {
         assert_eq!(to_wkt(&p), "POINT(1.5 -2.25)");
     }
 
+    /// Non-finite values are deliberately absent from this list. WKT has
+    /// no spelling for an infinity or a NaN, so they are outside the
+    /// crate's domain and `write_scalar`'s debug assertion now rejects
+    /// them; pinning their formatting here would assert a guarantee the
+    /// writer no longer makes.
     #[test]
     fn scalar_format_stays_compatible_with_rust_display() {
         for value in [
@@ -648,9 +686,6 @@ mod tests {
             1.234_567_890_123_456_7e100,
             f64::MIN_POSITIVE,
             f64::MAX,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-            f64::NAN,
         ] {
             let point = Pt::new(value, value);
             let expected = if value == 0.0 {
@@ -754,6 +789,59 @@ mod tests {
             to_wkt(&DynGeometry::<f64, Cartesian>::GeometryCollection(vec![])),
             "GEOMETRYCOLLECTION EMPTY"
         );
+    }
+
+    /// An *empty member* of a multi-geometry is spelled `EMPTY` too.
+    /// `<multipolygon text>` is a list of `<polygon text>` and
+    /// `<multilinestring text>` a list of `<linestring text>`, both of
+    /// which admit `<empty set>` (OGC SFA-1 06-103r4 §7.2.2). The
+    /// degenerate `(())` / `()` spellings this once emitted are not
+    /// grammar and do not re-parse.
+    #[test]
+    fn empty_multi_members_use_the_empty_keyword() {
+        use geometry_model::{MultiLinestring, MultiPolygon, Polygon, Ring};
+        let empty_polygon = Polygon::<Pt>::new(Ring::from_vec(vec![]));
+        assert_eq!(
+            to_wkt(&MultiPolygon(vec![empty_polygon.clone()])),
+            "MULTIPOLYGON(EMPTY)"
+        );
+        let filled = Polygon::<Pt>::new(Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(1.0, 0.0),
+            Pt::new(1.0, 1.0),
+            Pt::new(0.0, 0.0),
+        ]));
+        assert_eq!(
+            to_wkt(&MultiPolygon(vec![empty_polygon, filled])),
+            "MULTIPOLYGON(EMPTY,((0 0,1 0,1 1,0 0)))"
+        );
+        assert_eq!(
+            to_wkt(&MultiLinestring(vec![Linestring::<Pt>(vec![])])),
+            "MULTILINESTRING(EMPTY)"
+        );
+        assert_eq!(
+            to_wkt(&MultiLinestring(vec![
+                Linestring::<Pt>(vec![]),
+                Linestring(vec![Pt::new(0.0, 0.0), Pt::new(1.0, 1.0)]),
+            ])),
+            "MULTILINESTRING(EMPTY,(0 0,1 1))"
+        );
+    }
+
+    /// Every spelling the writer produces for an empty member is one the
+    /// reader accepts — the property that `(())` violated.
+    #[test]
+    fn empty_multi_members_round_trip() {
+        use geometry_model::{MultiLinestring, MultiPolygon, Polygon, Ring};
+        let mp = MultiPolygon(vec![Polygon::<Pt>::new(Ring::from_vec(vec![]))]);
+        let written = to_wkt(&mp);
+        assert_eq!(to_wkt(&crate::from_wkt(&written).unwrap()), written);
+        let ml = MultiLinestring(vec![
+            Linestring::<Pt>(vec![]),
+            Linestring(vec![Pt::new(0.0, 0.0), Pt::new(1.0, 1.0)]),
+        ]);
+        let written = to_wkt(&ml);
+        assert_eq!(to_wkt(&crate::from_wkt(&written).unwrap()), written);
     }
 
     /// A bare, non-empty `Ring` serialises as a single-ring polygon

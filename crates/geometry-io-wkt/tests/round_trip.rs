@@ -227,10 +227,10 @@ fn public_writer_covers_rings_scalars_and_every_dynamic_kind() {
         to_wkt(&Pt::new(-1.0e20, 1.0e-20)),
         "POINT(-100000000000000000000 0.00000000000000000001)"
     );
-    assert_eq!(
-        to_wkt(&Pt::new(f64::INFINITY, f64::NEG_INFINITY)),
-        "POINT(inf -inf)"
-    );
+    // This once pinned `POINT(inf -inf)`. That string does not re-parse
+    // — WKT has no spelling for an infinity — so non-finite coordinates
+    // are now outside the crate's domain, guarded by a debug assertion in
+    // the writer and unreachable from the reader.
 
     let polygon = Polygon::new(ring.clone());
     let all = Dyn::GeometryCollection(vec![

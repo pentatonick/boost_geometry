@@ -10,10 +10,14 @@
 //! values. Third, parity with `geometry-io-wkt`: a prefix-less input must
 //! travel through this crate exactly as it travels through that one.
 //!
-//! The round-trip invariant is not claimed for every accepted input,
-//! because two WKT asymmetries are inherited: `MULTIPOLYGON(EMPTY)` is
-//! written back as `MULTIPOLYGON((()))` and `POINT(1e999 1)` as
-//! `POINT(inf 1)`, neither of which re-parses. Both are excluded.
+//! The round-trip invariant once carried two carve-outs inherited from
+//! `geometry-io-wkt`: `MULTIPOLYGON(EMPTY)` was written back as
+//! `MULTIPOLYGON((()))`, and `POINT(1e999 1)` parsed to an infinity and
+//! was written back as `POINT(inf 1)`. Neither re-parsed. Both are fixed
+//! in that crate — the empty member now writes as `EMPTY`, and an
+//! overflowing literal is rejected outright — so no input this crate
+//! accepts is excluded from the invariant. The parity lists below cover
+//! both.
 
 use geometry_cs::Cartesian;
 use geometry_io_ewkt::{
@@ -244,7 +248,7 @@ fn prefix_error_rows_through_from_ewkt() {
 }
 
 /// Prefix-less inputs the WKT crate accepts.
-const PARITY_ACCEPTED: [&str; 9] = [
+const PARITY_ACCEPTED: [&str; 11] = [
     "POINT(1 2)",
     "POINT (10 10)",
     "LINESTRING(1 2,3 4)",
@@ -253,13 +257,15 @@ const PARITY_ACCEPTED: [&str; 9] = [
     "MULTIPOINT(1 2,3 4)",
     "MULTILINESTRING((1 2,3 4))",
     "MULTIPOLYGON(((0 0,4 0,4 4,0 4,0 0)))",
+    "MULTIPOLYGON(EMPTY,((0 0,4 0,4 4,0 4,0 0)))",
+    "MULTILINESTRING(EMPTY,(1 2,3 4))",
     "GEOMETRYCOLLECTION(POINT(1 2))",
 ];
 
 /// Prefix-less inputs the WKT crate rejects, none carrying a
 /// glued-suffix run and none whose leading letter run uppercases to
 /// `SRID` — the two cases the parity clause excludes.
-const PARITY_REJECTED: [&str; 7] = [
+const PARITY_REJECTED: [&str; 8] = [
     "POINT(1 2)$",
     "POINT(1 2) trailing",
     "CIRCULARSTRING(1 2,3 4,5 6)",
@@ -267,6 +273,7 @@ const PARITY_REJECTED: [&str; 7] = [
     "POINT",
     "POINT(1 2",
     "POINT(a b)",
+    "POINT(1e999 1)",
 ];
 
 #[test]
