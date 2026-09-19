@@ -46,6 +46,7 @@ use geometry_cs::{
 };
 use geometry_model::{
     Box as ModelBox, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D, Polygon, Ring,
+    Segment,
 };
 use geometry_strategy::buffer::{
     BufferDistanceStrategy, BufferEndStrategy, BufferJoinStrategy, BufferPointStrategy,
@@ -63,7 +64,8 @@ use geometry_trait::{
     Segment as SegmentTrait, box_max, box_min, segment_end, segment_start,
 };
 
-use crate::operation::OverlayError;
+use crate::operation::{OverlayError, difference_multi, union_multi};
+use crate::predicate::segment_intersection::{SegmentIntersection, segment_intersection};
 
 /// How to fill the wedge at a convex corner of the offset boundary.
 ///
@@ -431,13 +433,18 @@ where
             // falls back on, so it has to answer.
             return zero_width_polygon_buffer(polygon);
         }
-        let Some(outer) = offset_ring(polygon.exterior(), distance, settings.join, true) else {
-            return Ok(MultiPolygon(alloc::vec![]));
-        };
+        let outer = offset_ring(polygon.exterior(), distance, settings.join, true);
         let inners = polygon
             .interiors()
-            .filter_map(|ring| offset_ring(ring, -distance, settings.join, false))
+            .map(|ring| offset_ring(ring, -distance, settings.join, false))
             .collect::<Vec<_>>();
+        if offset_rings_need_dissolving(outer.as_ref(), &inners, distance) {
+            return dissolve_offset(polygon, distance, settings.join);
+        }
+        let Some(outer) = outer else {
+            return Ok(MultiPolygon(alloc::vec![]));
+        };
+        let inners = inners.into_iter().flatten().collect::<Vec<_>>();
         let outer_vertices = distinct_vertices(&outer);
         if inners.iter().any(|inner| {
             let inner_vertices = distinct_vertices(inner);
@@ -512,7 +519,7 @@ where
         &self,
         ring: &G,
         settings: BufferSettings,
-        _coordinate_strategy: &CartesianBuffer,
+        coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
         let BufferDistanceStrategy::Symmetric(distance) = settings.distance else {
             return Err(OverlayError::Unsupported);
@@ -520,10 +527,12 @@ where
         if !distance.is_finite() || distance == 0.0 {
             return Err(OverlayError::Unsupported);
         }
-        Ok(offset_ring(ring, distance, settings.join, true)
-            .map_or_else(MultiPolygon::new, |outer| {
-                MultiPolygon::from_vec(alloc::vec![Polygon::new(outer)])
-            }))
+        // C++: `buffer_inserter<ring_tag>` is the polygon inserter over one
+        // ring. Its offset can cross itself just as a polygon's can, so it
+        // takes the polygon arm — and with it the dissolve.
+        let polygon: Polygon<G::Point> =
+            Polygon::new(Ring::from_vec(ring.points().copied().collect()));
+        PolygonBuffer.apply(&polygon, settings, coordinate_strategy)
     }
 }
 
@@ -1337,43 +1346,15 @@ where
             continue;
         }
 
-        match join {
-            BufferJoinStrategy::Round { points_per_circle } => {
-                // The ring is walked counter-clockwise, so an outward offset
-                // (`distance > 0`) rounds a convex corner counter-clockwise,
-                // while an inward offset rounds a reflex corner the other
-                // way; forcing one direction sweeps the long way through
-                // the material at the other.
-                boundary.push(before);
-                push_arc_between(
-                    &mut boundary,
-                    vertex,
-                    before,
-                    after,
-                    distance.abs(),
-                    points_per_circle.max(4),
-                    distance > 0.0,
-                );
-                boundary.push(after);
-            }
-            BufferJoinStrategy::Miter { limit } => {
-                if let Some(point) = intersection {
-                    let miter_length = hypot(point.0 - vertex.0, point.1 - vertex.1);
-                    if point.0.is_finite()
-                        && point.1.is_finite()
-                        && miter_length <= limit.max(1.0) * distance.abs()
-                    {
-                        boundary.push(point);
-                    } else {
-                        boundary.push(before);
-                        boundary.push(after);
-                    }
-                } else {
-                    boundary.push(before);
-                    boundary.push(after);
-                }
-            }
-        }
+        push_join_points(
+            join,
+            vertex,
+            before,
+            after,
+            intersection,
+            distance,
+            &mut boundary,
+        );
     }
 
     boundary.dedup();
@@ -1400,6 +1381,360 @@ where
             .map(|(x, y)| make_point(x, y))
             .collect(),
     ))
+}
+
+/// The points the join strategy contributes at a corner the offset turns
+/// away from: from `before`, the end of the incoming side's offset, to
+/// `after`, the start of the outgoing side's. `intersection` is where the two
+/// offset lines meet, the miter point.
+///
+/// C++: `join_round::apply` and `join_miter::apply`, whose output range the
+/// caller appends. Shared by the offsetted ring and the join piece the
+/// dissolve builds for the same corner, so the two describe one offset.
+fn push_join_points(
+    join: BufferJoinStrategy,
+    vertex: (f64, f64),
+    before: (f64, f64),
+    after: (f64, f64),
+    intersection: Option<(f64, f64)>,
+    distance: f64,
+    boundary: &mut Vec<(f64, f64)>,
+) {
+    match join {
+        BufferJoinStrategy::Round { points_per_circle } => {
+            // The ring is walked counter-clockwise, so an outward offset
+            // (`distance > 0`) rounds a convex corner counter-clockwise,
+            // while an inward offset rounds a reflex corner the other
+            // way; forcing one direction sweeps the long way through
+            // the material at the other.
+            boundary.push(before);
+            push_arc_between(
+                boundary,
+                vertex,
+                before,
+                after,
+                distance.abs(),
+                points_per_circle.max(4),
+                distance > 0.0,
+            );
+            boundary.push(after);
+        }
+        BufferJoinStrategy::Miter { limit } => {
+            if let Some(point) = intersection {
+                let miter_length = hypot(point.0 - vertex.0, point.1 - vertex.1);
+                if point.0.is_finite()
+                    && point.1.is_finite()
+                    && miter_length <= limit.max(1.0) * distance.abs()
+                {
+                    boundary.push(point);
+                } else {
+                    boundary.push(before);
+                    boundary.push(after);
+                }
+            } else {
+                boundary.push(before);
+                boundary.push(after);
+            }
+        }
+    }
+}
+
+/// Whether the offsetted rings can stand as the answer, or the offset has to
+/// be rebuilt from its pieces.
+///
+/// C++: `buffered_piece_collection` never trusts an offsetted ring — it finds
+/// the turns between every piece and traverses them whatever the input. This
+/// port keeps the offsetted ring wherever it is already the answer, which is
+/// whenever no ring crosses itself or another and every erosion kept its
+/// clearance, and rebuilds the offset from the pieces only where a ring is
+/// not simple: a notch narrower than twice the distance closes, a neck
+/// thinner than that pinches off, a hole's arm fills in.
+///
+/// `outer` is the exterior's offsetted ring and `inners` the holes', each
+/// `None` where `offset_ring` declined. A growing polygon's hole or an
+/// eroding polygon's exterior that declined may have collapsed only in part,
+/// so both go to the pieces; an eroding polygon's hole declines only with
+/// fewer than three distinct vertices, and encloses nothing either way.
+fn offset_rings_need_dissolving<P>(
+    outer: Option<&Ring<P>>,
+    inners: &[Option<Ring<P>>],
+    distance: f64,
+) -> bool
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+{
+    let eroding = distance < 0.0;
+    let Some(outer) = outer else {
+        return eroding;
+    };
+    if ring_crosses_itself(outer) {
+        return true;
+    }
+    let mut kept: Vec<&Ring<P>> = Vec::new();
+    for inner in inners {
+        match inner {
+            Some(inner) => kept.push(inner),
+            None if eroding => {}
+            None => return true,
+        }
+    }
+    if kept.iter().copied().any(ring_crosses_itself) {
+        return true;
+    }
+    if !eroding {
+        // Growth moves the exterior outward and every hole inward, away from
+        // one another; only erosion can run them into each other.
+        return false;
+    }
+    kept.iter().enumerate().any(|(index, inner)| {
+        rings_cross(outer, inner)
+            || kept[index + 1..]
+                .iter()
+                .any(|other| rings_cross(inner, other))
+    })
+}
+
+/// The sides of a closed ring as coordinate pairs, with the box of each.
+fn ring_sides<P>(ring: &Ring<P>) -> Vec<(P, P, [f64; 4])>
+where
+    P: Point + Copy,
+    P::Scalar: Into<f64>,
+{
+    let points: Vec<P> = ring.points().copied().collect();
+    points
+        .windows(2)
+        .map(|pair| {
+            let (ax, ay): (f64, f64) = (pair[0].get::<0>().into(), pair[0].get::<1>().into());
+            let (bx, by): (f64, f64) = (pair[1].get::<0>().into(), pair[1].get::<1>().into());
+            (
+                pair[0],
+                pair[1],
+                [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)],
+            )
+        })
+        .collect()
+}
+
+/// Whether two sides meet, decided by the exact predicate behind a box test
+/// that keeps the pass cheap for the long arcs a round join produces.
+/// Coordinates the predicate cannot judge count as not meeting, which leaves
+/// such a ring on the path it took before the dissolve existed.
+fn sides_meet<P>(one: &(P, P, [f64; 4]), two: &(P, P, [f64; 4])) -> bool
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+{
+    let (a, b) = (&one.2, &two.2);
+    if a[0] > b[2] || b[0] > a[2] || a[1] > b[3] || b[1] > a[3] {
+        return false;
+    }
+    !matches!(
+        segment_intersection::<Segment<P>, P>(
+            &Segment::new(one.0, one.1),
+            &Segment::new(two.0, two.1)
+        ),
+        SegmentIntersection::Disjoint | SegmentIntersection::OutOfRange
+    )
+}
+
+/// Whether any two sides of the ring that are not neighbours meet.
+fn ring_crosses_itself<P>(ring: &Ring<P>) -> bool
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+{
+    let sides = ring_sides(ring);
+    let count = sides.len();
+    (0..count).any(|first| {
+        let last_neighbour = if first == 0 { count - 1 } else { count };
+        (first + 2..last_neighbour).any(|second| sides_meet(&sides[first], &sides[second]))
+    })
+}
+
+/// Whether any side of one ring meets any side of the other.
+fn rings_cross<P>(one: &Ring<P>, two: &Ring<P>) -> bool
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+{
+    let one = ring_sides(one);
+    let two = ring_sides(two);
+    one.iter()
+        .any(|side| two.iter().any(|other| sides_meet(side, other)))
+}
+
+/// The offset rebuilt from Boost's pieces, for a polygon whose offsetted
+/// rings cannot be trusted.
+///
+/// C++: `buffer_inserter` cuts each ring into pieces — a `buffered_segment`
+/// per side, offset by the distance, and a `buffered_join` at each corner the
+/// join strategy rounds or miters — and `buffered_piece_collection` finds the
+/// turns between them and traverses them, so that a stretch of one piece's
+/// offset that ends up inside another piece never reaches the outline. The
+/// pieces here are the same ones; in place of Boost's turn machinery they go
+/// through the overlay engine: merged into one multi-polygon and then,
+/// growing, unioned with the polygon or, eroding, taken away from it. Each
+/// piece is the region within the distance of one side or one corner, so the
+/// polygon with their union is exactly the grown shape and the polygon less
+/// their union exactly the eroded one — a notch that closes, a neck that
+/// pinches off into separate polygons, a hole that fills in part.
+///
+/// The work grows with the square of the result's vertex count, which is why
+/// this is kept for the rings the offsetted ring gets wrong.
+fn dissolve_offset<G, P>(
+    polygon: &G,
+    distance: f64,
+    join: BufferJoinStrategy,
+) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    G: PolygonTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    let mut pieces: Vec<Polygon<P>> = Vec::new();
+    push_ring_pieces(polygon.exterior(), distance, join, &mut pieces);
+    for ring in polygon.interiors() {
+        // A hole's outside is the polygon's inside, so it offsets the other
+        // way round.
+        push_ring_pieces(ring, -distance, join, &mut pieces);
+    }
+    let pieces = merge_pieces(pieces)?;
+    if pieces.0.is_empty() {
+        return Ok(MultiPolygon::new());
+    }
+    let original: MultiPolygon<Polygon<P>> = MultiPolygon(alloc::vec![Polygon::with_inners(
+        Ring::from_vec(polygon.exterior().points().copied().collect()),
+        polygon
+            .interiors()
+            .map(|ring| Ring::from_vec(ring.points().copied().collect()))
+            .collect(),
+    )]);
+    if distance > 0.0 {
+        union_multi(&original, &pieces)
+    } else {
+        difference_multi(&original, &pieces)
+    }
+}
+
+/// The pieces one ring contributes, offset by `distance` along its outward
+/// normals: a quadrilateral per side and, at each corner the offset turns
+/// away from the ring, the join's wedge. A negative distance puts them on
+/// the ring's inner side, which erodes an exterior and grows a hole.
+///
+/// C++: `buffer_range::iterate` — `add_side_piece` for every side and
+/// `add_join` between consecutive sides, then the closing join. The corner
+/// points are the ones `offset_ring` places, so the pieces and the offsetted
+/// ring describe one offset.
+fn push_ring_pieces<R, P>(
+    ring: &R,
+    distance: f64,
+    join: BufferJoinStrategy,
+    pieces: &mut Vec<Polygon<P>>,
+) where
+    R: RingTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: Into<f64> + FromF64,
+{
+    let mut vertices = distinct_vertices(ring);
+    vertices.dedup();
+    while vertices.len() > 1 && vertices.last() == vertices.first() {
+        vertices.pop();
+    }
+    if vertices.len() < 3 || distance == 0.0 {
+        return;
+    }
+    if signed_area_ccw_positive(&vertices) < 0.0 {
+        vertices.reverse();
+    }
+
+    let count = vertices.len();
+    for index in 0..count {
+        let previous = vertices[(index + count - 1) % count];
+        let vertex = vertices[index];
+        let next = vertices[(index + 1) % count];
+        let incoming = (vertex.0 - previous.0, vertex.1 - previous.1);
+        let outgoing = (next.0 - vertex.0, next.1 - vertex.1);
+        let incoming_normal = outward_normal(incoming.0, incoming.1);
+        let outgoing_normal = outward_normal(outgoing.0, outgoing.1);
+        let before = (
+            vertex.0 + incoming_normal.0 * distance,
+            vertex.1 + incoming_normal.1 * distance,
+        );
+        let after = (
+            vertex.0 + outgoing_normal.0 * distance,
+            vertex.1 + outgoing_normal.1 * distance,
+        );
+        let far = (
+            next.0 + outgoing_normal.0 * distance,
+            next.1 + outgoing_normal.1 * distance,
+        );
+        push_piece(pieces, alloc::vec![vertex, next, far, after]);
+
+        let cross = incoming.0 * outgoing.1 - incoming.1 * outgoing.0;
+        if cross * distance > 0.0 {
+            let intersection = line_intersection(before, incoming, after, outgoing);
+            let mut wedge = alloc::vec![vertex, before];
+            push_join_points(
+                join,
+                vertex,
+                before,
+                after,
+                intersection,
+                distance,
+                &mut wedge,
+            );
+            wedge.push(after);
+            push_piece(pieces, wedge);
+        }
+    }
+}
+
+/// One piece as a closed ring, dropped when it encloses nothing.
+fn push_piece<P>(pieces: &mut Vec<Polygon<P>>, mut boundary: Vec<(f64, f64)>)
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: FromF64,
+{
+    boundary.dedup();
+    if boundary.len() < 3 || signed_area_ccw_positive(&boundary).abs() <= f64::EPSILON {
+        return;
+    }
+    boundary.push(boundary[0]);
+    pieces.push(Polygon::new(Ring::from_vec(
+        boundary
+            .into_iter()
+            .map(|(x, y)| make_point(x, y))
+            .collect(),
+    )));
+}
+
+/// The union of the pieces, merged neighbour with neighbour and then pair
+/// with pair, so each union is between parts of like size and the work grows
+/// with the result rather than with the number of pieces.
+fn merge_pieces<P>(pieces: Vec<Polygon<P>>) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    let mut merged: Vec<MultiPolygon<Polygon<P>>> = pieces
+        .into_iter()
+        .map(|piece| MultiPolygon(alloc::vec![piece]))
+        .collect();
+    while merged.len() > 1 {
+        let mut next = Vec::with_capacity(merged.len().div_ceil(2));
+        let mut pairs = merged.into_iter();
+        while let Some(left) = pairs.next() {
+            match pairs.next() {
+                Some(right) => next.push(union_multi(&left, &right)?),
+                None => next.push(left),
+            }
+        }
+        merged = next;
+    }
+    Ok(merged.pop().unwrap_or_default())
 }
 
 fn buffer_linestring<L, P>(

@@ -16,8 +16,8 @@ use geometry_algorithm::ring_area;
 use geometry_cs::Cartesian;
 use geometry_model::{MultiPolygon, Point2D, Polygon, polygon};
 use geometry_overlay::{
-    difference, difference_multi, intersection, intersection_multi, is_valid, sym_difference,
-    sym_difference_multi, union_multi, union_poly,
+    OverlayError, difference, difference_multi, intersection, intersection_multi, is_valid,
+    sym_difference, sym_difference_multi, union_multi, union_poly,
 };
 use geometry_trait::{MultiPolygon as _, Point as _, Polygon as _, Ring as _};
 
@@ -215,6 +215,84 @@ fn intersection_splits_lobes_meeting_at_a_point() {
     let mut sizes: Vec<usize> = result.polygons().map(|pg| pg.exterior().0.len()).collect();
     sizes.sort_unstable();
     assert_eq!(sizes, [4, 7], "each lobe keeps its own closed ring");
+}
+
+// ---- Result lobes meeting at two or more points -----------------------
+//
+// Where two lobes of the result meet at two or more points, the region
+// between them is not part of the result and each lobe is its own polygon.
+// A walker that takes the wrong exit at such a point traces the lobes'
+// common outline and cuts the region between them out as a hole touching
+// the outer ring — the right area, but a polygon `is_valid` rejects as
+// `DisconnectedInterior`. C++ Boost 1.83 returns the lobes separately in
+// every case below.
+
+/// Two offset squares: `A ⊖ B` is two L-shapes meeting at `(1, 2)` and
+/// `(2, 1)`. C++ Boost 1.83: two polygons of area 3 each.
+#[test]
+fn sym_difference_of_offset_squares_is_two_valid_polygons() {
+    let a = square(0.0, 0.0, 2.0);
+    let b = square(1.0, 1.0, 2.0);
+    let out = sym_difference(&a, &b).unwrap();
+    assert_eq!(is_valid(&out), Ok(()), "{out:?}");
+    assert_eq!(out.polygons().count(), 2, "{out:?}");
+    close(area(&out), 6.0);
+    for lobe in out.polygons() {
+        close(ring_area(lobe.exterior()).abs(), 3.0);
+        assert_eq!(lobe.interiors().count(), 0);
+    }
+}
+
+/// A diamond inscribed in a square, touching all four sides at their
+/// midpoints. `square − diamond` is the four corner triangles, and each pair
+/// of neighbours meets at a midpoint. C++ Boost 1.83: four polygons of area
+/// 12.5 each.
+#[test]
+fn difference_with_an_inscribed_diamond_is_four_triangles() {
+    let sq = square(0.0, 0.0, 10.0);
+    let diamond: Polygon<P> =
+        polygon![[(5.0, 0.0), (10.0, 5.0), (5.0, 10.0), (0.0, 5.0), (5.0, 0.0)]];
+    let out = difference(&sq, &diamond).unwrap();
+    assert_eq!(is_valid(&out), Ok(()), "{out:?}");
+    assert_eq!(out.polygons().count(), 4, "{out:?}");
+    close(area(&out), 50.0);
+    for triangle in out.polygons() {
+        close(ring_area(triangle.exterior()).abs(), 12.5);
+        assert_eq!(triangle.interiors().count(), 0);
+    }
+}
+
+/// Two L-shapes that touch at `(1, 2)` and `(2, 1)` and nowhere else; the
+/// unit square between them belongs to neither, so their union is the two
+/// operands unchanged. C++ Boost 1.83: two polygons of area 3 each.
+#[test]
+fn union_of_two_ls_touching_at_two_points_is_two_polygons() {
+    let lower: Polygon<P> = polygon![[
+        (0.0, 0.0),
+        (0.0, 2.0),
+        (1.0, 2.0),
+        (1.0, 1.0),
+        (2.0, 1.0),
+        (2.0, 0.0),
+        (0.0, 0.0)
+    ]];
+    let upper: Polygon<P> = polygon![[
+        (1.0, 2.0),
+        (1.0, 3.0),
+        (3.0, 3.0),
+        (3.0, 1.0),
+        (2.0, 1.0),
+        (2.0, 2.0),
+        (1.0, 2.0)
+    ]];
+    let out = union_poly(&lower, &upper).unwrap();
+    assert_eq!(is_valid(&out), Ok(()), "{out:?}");
+    assert_eq!(out.polygons().count(), 2, "{out:?}");
+    close(area(&out), 6.0);
+    for lobe in out.polygons() {
+        close(ring_area(lobe.exterior()).abs(), 3.0);
+        assert_eq!(lobe.interiors().count(), 0);
+    }
 }
 
 // ---- Multi-polygon operands ------------------------------------------
@@ -835,4 +913,400 @@ fn union_multi_keeps_an_island_in_a_hole_when_the_outer_is_traversed() {
         1
     );
     assert_eq!(is_valid(&out), Ok(()));
+}
+
+// ---- Every result over this file's fixtures is a valid multi-polygon ----
+//
+// The area checks above cannot tell two separate lobes from one polygon
+// whose hole touches its outer ring at two points: the filled area is the
+// same either way. `is_valid` can, and this sweep is what would have caught
+// the walker taking the wrong exit at a pinch point. The pairs are this
+// file's fixtures, listed once more so that every test above keeps its own
+// copy.
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fixture pair per test above, read as a table"
+)]
+fn polygon_pairs() -> Vec<(&'static str, Polygon<P>, Polygon<P>)> {
+    let square_100: Polygon<P> = polygon![[
+        (0.0, 0.0),
+        (0.0, 100.0),
+        (100.0, 100.0),
+        (100.0, 0.0),
+        (0.0, 0.0)
+    ]];
+    let pentagon: Polygon<P> = polygon![[
+        (182.0, 100.0),
+        (125.0, 23.0),
+        (34.0, 52.0),
+        (34.0, 148.0),
+        (125.0, 177.0),
+        (182.0, 100.0)
+    ]];
+    vec![
+        (
+            "star of david",
+            polygon![[(0.0, 0.0), (4.0, 0.0), (2.0, 4.0), (0.0, 0.0)]],
+            polygon![[(0.0, 3.0), (4.0, 3.0), (2.0, -1.0), (0.0, 3.0)]],
+        ),
+        (
+            "union producing a hole",
+            polygon![[
+                (0.0, 0.0),
+                (6.0, 0.0),
+                (6.0, 6.0),
+                (4.0, 6.0),
+                (4.0, 2.0),
+                (2.0, 2.0),
+                (2.0, 6.0),
+                (0.0, 6.0),
+                (0.0, 0.0)
+            ]],
+            polygon![[
+                (-1.0, 4.0),
+                (7.0, 4.0),
+                (7.0, 5.0),
+                (-1.0, 5.0),
+                (-1.0, 4.0)
+            ]],
+        ),
+        (
+            "corner overlap",
+            square(0.0, 0.0, 2.0),
+            square(1.0, 1.0, 2.0),
+        ),
+        (
+            "rectangular overlap",
+            polygon![[(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0), (0.0, 0.0)]],
+            polygon![[(2.0, 1.0), (6.0, 1.0), (6.0, 5.0), (2.0, 5.0), (2.0, 1.0)]],
+        ),
+        ("containment", square(0.0, 0.0, 10.0), square(3.0, 3.0, 2.0)),
+        ("disjoint", square(0.0, 0.0, 1.0), square(5.0, 5.0, 1.0)),
+        (
+            "lobes meeting at a point",
+            polygon![[
+                (5.0, -1.0),
+                (6.0, -2.0),
+                (2.0, -3.0),
+                (1.0, 1.0),
+                (3.0, 2.0),
+                (2.0, 6.0),
+                (4.0, 7.0),
+                (5.0, 0.0),
+                (6.0, 1.0),
+                (7.0, -1.0),
+                (5.0, -1.0)
+            ]],
+            square(0.0, 0.0, 10.0),
+        ),
+        (
+            "square and triangle sharing an edge",
+            polygon![[
+                (0.0, 0.0),
+                (0.0, 10.0),
+                (10.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0)
+            ]],
+            polygon![[(0.0, 0.0), (10.0, 0.0), (5.0, -8.0), (0.0, 0.0)]],
+        ),
+        (
+            "squares sharing a whole edge",
+            polygon![[
+                (0.0, 0.0),
+                (0.0, 10.0),
+                (10.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0)
+            ]],
+            polygon![[
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (20.0, 10.0),
+                (20.0, 0.0),
+                (10.0, 0.0)
+            ]],
+        ),
+        (
+            "two turns on one segment",
+            square_100.clone(),
+            polygon![[
+                (100.0, 30.0),
+                (100.0, 70.0),
+                (200.0, 70.0),
+                (200.0, 30.0),
+                (100.0, 30.0)
+            ]],
+        ),
+        (
+            "overlap along part of one side",
+            square_100.clone(),
+            polygon![[
+                (50.0, 100.0),
+                (150.0, 100.0),
+                (150.0, 50.0),
+                (50.0, 50.0),
+                (50.0, 100.0)
+            ]],
+        ),
+        (
+            "rectangle straddling the square",
+            square_100.clone(),
+            polygon![[
+                (0.0, 50.0),
+                (0.0, 150.0),
+                (100.0, 150.0),
+                (100.0, 50.0),
+                (0.0, 50.0)
+            ]],
+        ),
+        (
+            "lobes meeting at a corner",
+            square_100,
+            polygon![[
+                (100.0, 100.0),
+                (100.0, 200.0),
+                (200.0, 200.0),
+                (200.0, 100.0),
+                (100.0, 100.0)
+            ]],
+        ),
+        (
+            "nonagon crossing a decagon",
+            polygon![[
+                (181.0, 100.0),
+                (157.0, 43.0),
+                (100.0, 19.0),
+                (43.0, 43.0),
+                (19.0, 100.0),
+                (43.0, 157.0),
+                (100.0, 181.0),
+                (157.0, 157.0),
+                (181.0, 100.0)
+            ]],
+            polygon![[
+                (200.0, 4.0),
+                (188.0, -26.0),
+                (160.0, -43.0),
+                (129.0, -37.0),
+                (107.0, -12.0),
+                (107.0, 20.0),
+                (128.0, 45.0),
+                (160.0, 51.0),
+                (188.0, 34.0),
+                (200.0, 4.0)
+            ]],
+        ),
+        (
+            "pentagon with a bite",
+            pentagon.clone(),
+            polygon![[
+                (135.0, 192.0),
+                (105.0, 153.0),
+                (60.0, 168.0),
+                (60.0, 216.0),
+                (105.0, 231.0),
+                (135.0, 192.0)
+            ]],
+        ),
+        (
+            "pentagon clipped by a nonagon",
+            pentagon,
+            polygon![[
+                (161.0, 91.0),
+                (145.0, 49.0),
+                (106.0, 27.0),
+                (63.0, 34.0),
+                (33.0, 69.0),
+                (33.0, 113.0),
+                (62.0, 148.0),
+                (106.0, 155.0),
+                (145.0, 133.0),
+                (161.0, 91.0)
+            ]],
+        ),
+        (
+            "untouched sliver",
+            polygon![[(3.0, 3.0), (2.0, 4.0), (3.0, 5.0), (3.0, 4.0), (3.0, 3.0)]],
+            square(20.0, 20.0, 4.0),
+        ),
+        (
+            "inscribed diamond",
+            square(0.0, 0.0, 10.0),
+            polygon![[(5.0, 0.0), (10.0, 5.0), (5.0, 10.0), (0.0, 5.0), (5.0, 0.0)]],
+        ),
+        (
+            "two ls touching at two points",
+            polygon![[
+                (0.0, 0.0),
+                (0.0, 2.0),
+                (1.0, 2.0),
+                (1.0, 1.0),
+                (2.0, 1.0),
+                (2.0, 0.0),
+                (0.0, 0.0)
+            ]],
+            polygon![[
+                (1.0, 2.0),
+                (1.0, 3.0),
+                (3.0, 3.0),
+                (3.0, 1.0),
+                (2.0, 1.0),
+                (2.0, 2.0),
+                (1.0, 2.0)
+            ]],
+        ),
+    ]
+}
+
+type MultiPolygonPair = (
+    &'static str,
+    MultiPolygon<Polygon<P>>,
+    MultiPolygon<Polygon<P>>,
+);
+
+fn multi_polygon_pairs() -> Vec<MultiPolygonPair> {
+    vec![
+        (
+            "multi-polygon operands",
+            MultiPolygon::from_vec(vec![square(0.0, 0.0, 1.0), square(4.0, 0.0, 1.0)]),
+            MultiPolygon::from_vec(vec![polygon![[
+                (0.5, 0.0),
+                (0.5, 1.0),
+                (1.5, 1.0),
+                (1.5, 0.0),
+                (0.5, 0.0)
+            ]]]),
+        ),
+        (
+            "member with a hole",
+            MultiPolygon::from_vec(vec![polygon![
+                [
+                    (0.0, 0.0),
+                    (10.0, 0.0),
+                    (10.0, 10.0),
+                    (0.0, 10.0),
+                    (0.0, 0.0)
+                ],
+                [(3.0, 3.0), (3.0, 7.0), (7.0, 7.0), (7.0, 3.0), (3.0, 3.0)]
+            ]]),
+            MultiPolygon::from_vec(vec![square(5.0, 5.0, 10.0)]),
+        ),
+        (
+            "untouched pieces",
+            MultiPolygon(vec![
+                polygon![[
+                    (3139.0, 3263.0),
+                    (3104.0, 3325.0),
+                    (3_103.231_759_656_652_2, 3_336.523_605_150_214_7),
+                    (3139.0, 3263.0)
+                ]],
+                polygon![[
+                    (3103.0, 3344.0),
+                    (3099.0, 3363.0),
+                    (3103.0, 3346.0),
+                    (3103.0, 3344.0)
+                ]],
+                polygon![[
+                    (3139.0, 3263.0),
+                    (3165.0, 3210.0),
+                    (3162.0, 3216.0),
+                    (3139.0, 3263.0)
+                ]],
+            ]),
+            MultiPolygon(vec![polygon![[
+                (3_103.231_759_656_652_2, 3_336.523_605_150_214_7),
+                (3103.0, 3337.0),
+                (3103.0, 3340.0),
+                (3_103.231_759_656_652_2, 3_336.523_605_150_214_7)
+            ]]]),
+        ),
+        (
+            "island in a hole",
+            MultiPolygon::from_vec(vec![
+                polygon![
+                    [
+                        (0.0, 0.0),
+                        (10.0, 0.0),
+                        (10.0, 10.0),
+                        (0.0, 10.0),
+                        (0.0, 0.0)
+                    ],
+                    [(2.0, 2.0), (2.0, 8.0), (8.0, 8.0), (8.0, 2.0), (2.0, 2.0)]
+                ],
+                polygon![[(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0), (4.0, 4.0)]],
+            ]),
+            MultiPolygon::from_vec(vec![polygon![[
+                (9.0, 4.0),
+                (11.0, 4.0),
+                (11.0, 6.0),
+                (9.0, 6.0),
+                (9.0, 4.0)
+            ]]]),
+        ),
+    ]
+}
+
+fn record(
+    failures: &mut Vec<String>,
+    name: &str,
+    operation: &str,
+    result: Result<MultiPolygon<Polygon<P>>, OverlayError>,
+) {
+    match result {
+        Ok(out) => {
+            if let Err(failure) = is_valid(&out) {
+                failures.push(format!(
+                    "{name}: {operation} is invalid ({failure:?}): {out:?}"
+                ));
+            }
+        }
+        Err(error) => failures.push(format!("{name}: {operation} failed ({error:?})")),
+    }
+}
+
+#[test]
+fn every_boolean_result_over_the_fixtures_is_valid() {
+    let mut failures = Vec::new();
+    for (name, a, b) in polygon_pairs() {
+        record(&mut failures, name, "intersection", intersection(&a, &b));
+        record(&mut failures, name, "union", union_poly(&a, &b));
+        record(&mut failures, name, "difference", difference(&a, &b));
+        record(
+            &mut failures,
+            name,
+            "reverse difference",
+            difference(&b, &a),
+        );
+        record(
+            &mut failures,
+            name,
+            "sym_difference",
+            sym_difference(&a, &b),
+        );
+    }
+    for (name, a, b) in multi_polygon_pairs() {
+        record(
+            &mut failures,
+            name,
+            "intersection",
+            intersection_multi(&a, &b),
+        );
+        record(&mut failures, name, "union", union_multi(&a, &b));
+        record(&mut failures, name, "difference", difference_multi(&a, &b));
+        record(
+            &mut failures,
+            name,
+            "reverse difference",
+            difference_multi(&b, &a),
+        );
+        record(
+            &mut failures,
+            name,
+            "sym_difference",
+            sym_difference_multi(&a, &b),
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
