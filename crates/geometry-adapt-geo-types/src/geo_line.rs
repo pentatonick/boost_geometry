@@ -80,21 +80,29 @@ impl<T: CoordinateScalar + CoordNum> Geometry for GeoLine<T> {
 impl<T: CoordinateScalar + CoordNum> IndexedAccess for GeoLine<T> {
     #[inline]
     fn get_indexed<const I: usize, const D: usize>(&self) -> T {
-        let coord = if I == 0 { self.0.start } else { self.0.end };
-        if D == 0 { coord.x } else { coord.y }
+        let coord = match I {
+            0 => self.0.start,
+            1 => self.0.end,
+            _ => panic!("GeoLine::get_indexed: endpoint index {I} is out of range"),
+        };
+        match D {
+            0 => coord.x,
+            1 => coord.y,
+            _ => panic!("GeoLine::get_indexed: dimension {D} is out of range for a 2-D line"),
+        }
     }
 
     #[inline]
     fn set_indexed<const I: usize, const D: usize>(&mut self, value: T) {
-        let coord = if I == 0 {
-            &mut self.0.start
-        } else {
-            &mut self.0.end
+        let coord = match I {
+            0 => &mut self.0.start,
+            1 => &mut self.0.end,
+            _ => panic!("GeoLine::set_indexed: endpoint index {I} is out of range"),
         };
-        if D == 0 {
-            coord.x = value;
-        } else {
-            coord.y = value;
+        match D {
+            0 => coord.x = value,
+            1 => coord.y = value,
+            _ => panic!("GeoLine::set_indexed: dimension {D} is out of range for a 2-D line"),
         }
     }
 }

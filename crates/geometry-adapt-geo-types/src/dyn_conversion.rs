@@ -30,7 +30,9 @@
 //! * `Triangle` → `DynGeometry::Polygon`    (the triangle as a ring).
 //!
 //! Coordinates are preserved exactly across every mapping; only the
-//! *kind* of those three normalises. The reverse direction therefore
+//! *kind* of those three normalises (a `Rect`'s corners are emitted in
+//! the kernel polygon's declared clockwise order, since `geo-types`
+//! itself chooses that ring's winding). The reverse direction therefore
 //! reproduces a `LineString` / `Polygon` rather than the original
 //! `Line` / `Rect` / `Triangle`.
 
@@ -144,7 +146,14 @@ pub fn to_dyn_geometry<T: CoordinateScalar + CoordNum>(
         GtGeometry::GeometryCollection(gc) => {
             DynGeometry::GeometryCollection(gc.0.into_iter().map(to_dyn_geometry).collect())
         }
-        GtGeometry::Rect(r) => DynGeometry::Polygon(polygon_to_kernel(r.to_polygon())),
+        GtGeometry::Rect(r) => {
+            // `Rect::to_polygon` winds counter-clockwise; the kernel polygon
+            // declares clockwise, so emit the corners in its declared order
+            // the way Boost's box → polygon `convert` does.
+            let mut polygon = polygon_to_kernel(r.to_polygon());
+            polygon.outer.0.reverse();
+            DynGeometry::Polygon(polygon)
+        }
         GtGeometry::Triangle(t) => DynGeometry::Polygon(polygon_to_kernel(t.to_polygon())),
     }
 }

@@ -91,16 +91,20 @@ impl<T: CoordinateScalar + CoordNum> IndexedAccess for GeoRect<T> {
     #[inline]
     fn get_indexed<const I: usize, const D: usize>(&self) -> T {
         let c = self.corners[I].0;
-        if D == 0 { c.x } else { c.y }
+        match D {
+            0 => c.x,
+            1 => c.y,
+            _ => panic!("GeoRect::get_indexed: dimension {D} is out of range for a 2-D rect"),
+        }
     }
 
     #[inline]
     fn set_indexed<const I: usize, const D: usize>(&mut self, value: T) {
         let c = &mut self.corners[I].0;
-        if D == 0 {
-            *c = coord! { x: value, y: c.y };
-        } else {
-            *c = coord! { x: c.x, y: value };
+        match D {
+            0 => *c = coord! { x: value, y: c.y },
+            1 => *c = coord! { x: c.x, y: value },
+            _ => panic!("GeoRect::set_indexed: dimension {D} is out of range for a 2-D rect"),
         }
     }
 }

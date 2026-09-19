@@ -506,3 +506,69 @@ fn geo_multi_polygon_round_trips() {
     let mpg = GeoMultiPolygon::new(original.clone());
     assert_eq!(mpg.into_inner(), original);
 }
+
+// ---- Out-of-range const indices fail loudly --------------------------
+
+/// A dimension past the second must not be answered with `y`: the
+/// two-way branch form aliased every out-of-range `D` onto it.
+#[test]
+#[should_panic(expected = "dimension 2 is out of range")]
+fn geo_coord_get_rejects_a_third_dimension() {
+    let c = GeoCoord::new(coord! { x: 3.0_f64, y: 4.0 });
+    let _ = c.get::<2>();
+}
+
+#[test]
+#[should_panic(expected = "dimension 2 is out of range")]
+fn geo_coord_set_rejects_a_third_dimension() {
+    let mut c = GeoCoord::new(coord! { x: 3.0_f64, y: 4.0 });
+    c.set::<2>(9.0);
+}
+
+#[test]
+#[should_panic(expected = "dimension 2 is out of range")]
+fn geo_point_get_rejects_a_third_dimension() {
+    let p = GeoPoint::new(GtPoint::new(3.0_f64, 4.0));
+    let _ = p.get::<2>();
+}
+
+#[test]
+#[should_panic(expected = "dimension 2 is out of range")]
+fn geo_line_get_indexed_rejects_a_third_dimension() {
+    let line = GeoLine::new(Line::new((0.0_f64, 1.0), (2.0, 3.0)));
+    let _ = line.get_indexed::<0, 2>();
+}
+
+#[test]
+#[should_panic(expected = "endpoint index 2 is out of range")]
+fn geo_line_get_indexed_rejects_a_third_endpoint() {
+    let line = GeoLine::new(Line::new((0.0_f64, 1.0), (2.0, 3.0)));
+    let _ = line.get_indexed::<2, 0>();
+}
+
+#[test]
+#[should_panic(expected = "dimension 2 is out of range")]
+fn geo_rect_get_indexed_rejects_a_third_dimension() {
+    let rect = GeoRect::new(Rect::new((0.0_f64, 1.0), (3.0, 4.0)));
+    let _ = rect.get_indexed::<1, 2>();
+}
+
+/// The kernel `Polygon` that `to_dyn_geometry` builds for a `Rect` is the
+/// model default — declared clockwise — so its ring must wind clockwise
+/// for the kernel's signed area (Boost's clockwise-positive convention,
+/// which Boost's own box → polygon `convert` honours) to come out positive.
+#[test]
+fn to_dyn_geometry_rect_polygon_winds_as_the_model_declares() {
+    use geometry_algorithm::{area, area_dyn};
+    use geometry_trait::{PointOrder, Ring as _};
+    let g: GtGeometry<f64> = Rect::new((0.0, 0.0), (2.0, 3.0)).into();
+    let dyn_g = to_dyn_geometry(g);
+    assert_eq!(area_dyn(&dyn_g), 6.0, "a 2×3 rectangle has area 6");
+    match dyn_g {
+        DynGeometry::Polygon(p) => {
+            assert_eq!(p.outer.point_order(), PointOrder::Clockwise);
+            assert_eq!(area(&p), 6.0);
+        }
+        _ => panic!("expected Polygon"),
+    }
+}
