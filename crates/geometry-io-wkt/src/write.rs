@@ -183,6 +183,20 @@ where
 /// [`WktError::InvalidNumber`](crate::WktError::InvalidNumber)), so reaching here non-finite means a
 /// caller built the geometry that way directly; the debug assertion
 /// surfaces that in tests rather than letting it reach a file.
+///
+/// The guard belongs here, and it is a tripwire by necessity rather
+/// than by compromise. It looks like an invariant that should live at
+/// the model's boundary instead, but it cannot: the writers are generic
+/// over [`PointTrait`], so their input need not be a
+/// [`geometry_model::Point`] at all — the adapter crates implement that
+/// trait for wrappers over `geo_types` and `nalgebra` values, which no
+/// invariant in `geometry-model` can reach. Two further paths bypass a
+/// constructor even for the model's own type: `PointMut::set` writes an
+/// arbitrary scalar, and `CoordinateScalar` also covers `i32`/`i64`,
+/// where finiteness is not a meaningful predicate. A validating
+/// constructor would narrow the hole without closing it, and this
+/// assertion would have to stay regardless; closing it outright would
+/// mean making [`to_wkt`] fallible.
 fn write_scalar<W: core::fmt::Write + ?Sized>(out: &mut W, v: f64) -> core::fmt::Result {
     debug_assert!(
         v.is_finite(),
