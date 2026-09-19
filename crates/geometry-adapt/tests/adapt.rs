@@ -173,3 +173,83 @@ fn adapt_new_and_into_inner_round_trip() {
     // And `into_inner` returns the exact array it was built from.
     assert_eq!(a.into_inner(), [3.0, 4.0]);
 }
+
+// --- Borrowed arrays: read-only by construction ---------------------
+// `adapt_borrowed_array` implements `Point` but deliberately not
+// `PointMut`, mirroring the single read-only `traits::access`
+// specialisation C++ uses for both `c_array.hpp` and `std_array.hpp`.
+// The facade crate exercises this adapter; geometry-adapt's own suite
+// did not, so a change here could only have been caught one crate away.
+
+#[test]
+fn borrowed_array_reads_through_to_its_storage() {
+    let storage = [3.0_f64, 4.0];
+    let p = Adapt(&storage);
+    assert_eq!(p.get::<0>(), 3.0);
+    assert_eq!(p.get::<1>(), 4.0);
+    assert_eq!(<Adapt<&[f64; 2]> as Point>::DIM, 2);
+}
+
+#[test]
+fn borrowed_array_is_a_point_at_other_arities() {
+    assert_is_point::<Adapt<&[f64; 2]>>();
+    assert_is_point::<Adapt<&[f64; 3]>>();
+    let storage = [1.0_f64, 2.0, 3.0];
+    let p = Adapt(&storage);
+    assert_eq!(p.get::<2>(), 3.0);
+    assert_eq!(<Adapt<&[f64; 3]> as Point>::DIM, 3);
+}
+
+/// The borrow is shared, so one array can back two adapters at once —
+/// the case the read-only split exists to make safe.
+#[test]
+fn one_array_can_back_two_borrowed_adapters() {
+    let storage = [5.0_f64, 6.0];
+    let a = Adapt(&storage);
+    let b = Adapt(&storage);
+    assert_eq!(a.get::<0>(), b.get::<0>());
+    assert_eq!(storage[1], b.get::<1>());
+}
+
+// --- Integer coordinates --------------------------------------------
+// `CoordinateScalar` is implemented for `i32`/`i64` so callers can hand
+// the kernel integer-coordinate geometries; the `Promote` lattice
+// widens to a float only where the arithmetic demands it. Every
+// adapter test above used `f64`/`f32`, so the integer path through the
+// adapters was never instantiated.
+
+#[test]
+fn integer_scalars_round_trip_through_the_array_adapter() {
+    let mut a = Adapt([0_i32, 0]);
+    a.set::<0>(-7);
+    a.set::<1>(9);
+    assert_eq!(a.get::<0>(), -7);
+    assert_eq!(a.get::<1>(), 9);
+}
+
+#[test]
+fn integer_scalars_round_trip_through_the_tuple_adapters() {
+    let mut two = Adapt((0_i64, 0));
+    two.set::<0>(i64::MIN);
+    two.set::<1>(i64::MAX);
+    assert_eq!(two.get::<0>(), i64::MIN);
+    assert_eq!(two.get::<1>(), i64::MAX);
+
+    let mut three = Adapt((0_i32, 0, 0));
+    three.set::<0>(1);
+    three.set::<1>(-2);
+    three.set::<2>(3);
+    assert_eq!(three.get::<0>(), 1);
+    assert_eq!(three.get::<1>(), -2);
+    assert_eq!(three.get::<2>(), 3);
+}
+
+#[test]
+fn integer_adapters_carry_their_scalar_and_dim() {
+    fn assert_scalar<P: Point<Scalar = T>, T>() {}
+    assert_scalar::<Adapt<[i32; 2]>, i32>();
+    assert_scalar::<Adapt<(i64, i64)>, i64>();
+    assert_eq!(<Adapt<[i32; 2]> as Point>::DIM, 2);
+    assert_eq!(<Adapt<(i32, i32, i32)> as Point>::DIM, 3);
+    assert_is_point::<Adapt<[i64; 3]>>();
+}
