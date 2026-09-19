@@ -183,10 +183,11 @@ impl<Pg: RemoveSpikes + geometry_trait::Polygon> RemoveSpikes for MultiPolygon<P
 
 #[cfg(test)]
 mod tests {
-    //! Reference behaviour from
-    //! `boost/geometry/test/algorithms/remove_spikes.cpp`: an
-    //! out-and-back spur on a linestring is collapsed to its base
-    //! vertex.
+    //! Ring and polygon behaviour follows
+    //! `boost/geometry/test/algorithms/remove_spikes.cpp`. Boost only
+    //! dispatches areal kinds and leaves a linestring untouched;
+    //! collapsing an out-and-back spur on a linestring to its base
+    //! vertex is this port's extension, not a Boost fixture.
 
     use super::remove_spikes;
     use geometry_cs::Cartesian;

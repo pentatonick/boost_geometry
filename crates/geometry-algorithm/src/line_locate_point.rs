@@ -72,4 +72,17 @@ mod tests {
         let line = Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(2.0, 0.0), P::new(2.0, 2.0)]);
         assert_eq!(line_locate_point(&line, &P::new(2.5, 1.0)), Some(0.75));
     }
+
+    /// "Ties retain the earliest position along the line": a point
+    /// equidistant from two edges locates on the first of them.
+    #[test]
+    fn tie_keeps_the_earliest_position() {
+        let line = Linestring::from_vec(alloc::vec![
+            P::new(0.0, 0.0),
+            P::new(2.0, 0.0),
+            P::new(2.0, 2.0),
+            P::new(0.0, 2.0),
+        ]);
+        assert_eq!(line_locate_point(&line, &P::new(1.0, 1.0)), Some(1.0 / 6.0));
+    }
 }

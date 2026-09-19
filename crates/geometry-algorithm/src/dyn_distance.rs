@@ -49,6 +49,14 @@ const SUPPORTED: &[&[DynKind]] = &[
 ///
 /// Returns `Err(DynKindMismatch)` for any kind pair with no static
 /// distance impl (e.g. polygon-polygon).
+///
+/// # Panics
+///
+/// Panics on an empty linestring: there is no point to measure to, and
+/// `0` would read as "touching". Boost throws `empty_input_exception`
+/// here; the port panics with a clear message, as
+/// [`discrete_hausdorff_distance`](crate::discrete_hausdorff_distance)
+/// does.
 #[allow(
     clippy::match_same_arms,
     reason = "The two point↔linestring arms differ by argument order; keeping them separate documents both directions."
@@ -107,9 +115,9 @@ where
     }
     // Degenerate: fewer than two points. A single vertex is handled as
     // a zero-length segment (its point-to-segment distance is the
-    // point-to-vertex distance); an empty linestring has distance 0.
+    // point-to-vertex distance); an empty linestring has no distance.
     best.unwrap_or_else(|| match ls.points().next() {
         Some(v) => distance_with(p, &Segment::new(*v, *v), strategy),
-        None => S::ZERO,
+        None => panic!("distance_dyn: empty linestring has no distance to a point"),
     })
 }
