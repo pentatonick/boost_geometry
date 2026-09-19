@@ -12,4 +12,8 @@ fn ui() {
     // M-KC1 — a read-only point handed to `envelope` (which must
     // construct a `Box<P>`) fails with the `PointMut` plate.
     t.compile_fail("tests/ui/readonly_envelope.rs");
+
+    // `#[derive(Point)]` works in a package that depends on the facade
+    // alone: the generated impls route through `boost_geometry::__private`.
+    t.pass("tests/ui/derive_point_facade_only.rs");
 }

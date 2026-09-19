@@ -10,9 +10,50 @@
 //! (`boost/geometry/geometries/register/point.hpp:81-87`): one trait
 //! specialisation per field, in declaration order.
 
-use proc_macro2::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, parse2};
+
+/// Absolute paths to the kernel crates the generated impls name, resolved
+/// for the crate being compiled.
+///
+/// A crate that depends only on the `boost_geometry` facade has no
+/// `geometry_trait` in its extern prelude (Cargo does not expose
+/// transitive dependencies), so when the facade is a dependency there —
+/// under whatever name Cargo gave it — the paths route through the
+/// facade's hidden `__private` re-exports. Otherwise they name the kernel
+/// crates directly, which is what a caller depending on `geometry-derive`
+/// alongside `geometry-trait`, `geometry-tag`, and `geometry-cs` has in
+/// scope.
+struct KernelPaths {
+    trait_: TokenStream,
+    tag: TokenStream,
+    cs: TokenStream,
+}
+
+fn kernel_paths() -> KernelPaths {
+    let facade = match crate_name("boost_geometry") {
+        Ok(FoundCrate::Itself) => Some(quote! { ::boost_geometry }),
+        Ok(FoundCrate::Name(name)) => {
+            let ident = syn::Ident::new(&name, Span::call_site());
+            Some(quote! { ::#ident })
+        }
+        Err(_) => None,
+    };
+    match facade {
+        Some(facade) => KernelPaths {
+            trait_: quote! { #facade::__private::geometry_trait },
+            tag: quote! { #facade::__private::geometry_tag },
+            cs: quote! { #facade::__private::geometry_cs },
+        },
+        None => KernelPaths {
+            trait_: quote! { ::geometry_trait },
+            tag: quote! { ::geometry_tag },
+            cs: quote! { ::geometry_cs },
+        },
+    }
+}
 
 /// Expand `#[derive(Point)]` on a single struct.
 ///
@@ -28,11 +69,14 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
 
     let name = &ast.ident;
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let KernelPaths { trait_, tag, cs } = kernel_paths();
 
     // Parse #[geometry(cs = "…", scalar = "…")]. Both keys are optional.
     // Defaults: `Cartesian` and `f64`, matching the C++ register macro
-    // family at `boost/geometry/geometries/register/point.hpp`.
-    let mut cs_path: TokenStream = quote! { ::geometry_cs::Cartesian };
+    // family at `boost/geometry/geometries/register/point.hpp`. A `cs`
+    // path is emitted as written; the generated block glob-imports the
+    // CS crate so `Spherical<Degree>` resolves without a use-site import.
+    let mut cs_path: TokenStream = quote! { #cs::Cartesian };
     let mut scalar: TokenStream = quote! { f64 };
     for attr in &ast.attrs {
         if !attr.path().is_ident("geometry") {
@@ -42,7 +86,7 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
             if meta.path.is_ident("cs") {
                 let lit: syn::LitStr = meta.value()?.parse()?;
                 let parsed: syn::Path = syn::parse_str(&lit.value())?;
-                cs_path = quote! { ::geometry_cs::#parsed };
+                cs_path = quote! { #parsed };
                 Ok(())
             } else if meta.path.is_ident("scalar") {
                 let lit: syn::LitStr = meta.value()?.parse()?;
@@ -97,31 +141,37 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
         .enumerate()
         .map(|(i, ident)| quote! { #i => self.#ident = value });
 
+    // The impls live in an anonymous const so the CS glob import stays
+    // scoped to the generated code.
     quote! {
-        impl #impl_generics ::geometry_trait::Geometry for #name #ty_generics #where_clause {
-            type Kind  = ::geometry_tag::PointTag;
-            type Point = Self;
-        }
-        impl #impl_generics ::geometry_trait::Point for #name #ty_generics #where_clause {
-            type Scalar = #scalar;
-            type Cs     = #cs_path;
-            const DIM: usize = #dim;
+        const _: () = {
+            #[allow(unused_imports, clippy::wildcard_imports)]
+            use #cs::*;
+            impl #impl_generics #trait_::Geometry for #name #ty_generics #where_clause {
+                type Kind  = #tag::PointTag;
+                type Point = Self;
+            }
+            impl #impl_generics #trait_::Point for #name #ty_generics #where_clause {
+                type Scalar = #scalar;
+                type Cs     = #cs_path;
+                const DIM: usize = #dim;
 
-            fn get<const D: usize>(&self) -> Self::Scalar {
-                match D {
-                    #( #get_arms , )*
-                    _ => panic!("Point::get: dimension out of range"),
+                fn get<const D: usize>(&self) -> Self::Scalar {
+                    match D {
+                        #( #get_arms , )*
+                        _ => panic!("Point::get: dimension out of range"),
+                    }
                 }
             }
-        }
-        impl #impl_generics ::geometry_trait::PointMut for #name #ty_generics #where_clause {
-            fn set<const D: usize>(&mut self, value: Self::Scalar) {
-                match D {
-                    #( #set_arms , )*
-                    _ => panic!("PointMut::set: dimension out of range"),
+            impl #impl_generics #trait_::PointMut for #name #ty_generics #where_clause {
+                fn set<const D: usize>(&mut self, value: Self::Scalar) {
+                    match D {
+                        #( #set_arms , )*
+                        _ => panic!("PointMut::set: dimension out of range"),
+                    }
                 }
             }
-        }
+        };
     }
 }
 
@@ -221,5 +271,58 @@ mod tests {
     fn unparseable_input_returns_compile_error() {
         let out = expand(quote! { this is not valid rust }).to_string();
         assert!(out.contains("compile_error"));
+    }
+
+    /// A non-string `cs` value is a `compile_error!`, not a silent fall
+    /// back to the `Cartesian` default.
+    #[test]
+    fn non_string_cs_value_is_a_compile_error() {
+        let out = expand(quote! {
+            #[geometry(cs = 5)]
+            struct P { x: f64 }
+        })
+        .to_string();
+        assert!(out.contains("compile_error"), "got: {out}");
+        assert!(out.contains("expected string literal"), "got: {out}");
+        assert!(
+            !out.contains("Cartesian"),
+            "fell back to the default: {out}"
+        );
+    }
+
+    /// A `cs` string that does not parse as a path is a `compile_error!`.
+    #[test]
+    fn unparsable_cs_path_is_a_compile_error() {
+        let out = expand(quote! {
+            #[geometry(cs = "not a path!")]
+            struct P { x: f64 }
+        })
+        .to_string();
+        assert!(out.contains("compile_error"), "got: {out}");
+        assert!(
+            !out.contains("Cartesian"),
+            "fell back to the default: {out}"
+        );
+    }
+
+    /// A non-string or unparsable `scalar` value is a `compile_error!`,
+    /// not a silent fall back to `f64`.
+    #[test]
+    fn bad_scalar_values_are_compile_errors() {
+        let out = expand(quote! {
+            #[geometry(scalar = 32)]
+            struct P { x: f64 }
+        })
+        .to_string();
+        assert!(out.contains("compile_error"), "got: {out}");
+        assert!(!out.contains("PointMut"), "fell back to the default: {out}");
+
+        let out = expand(quote! {
+            #[geometry(scalar = "f64 f64")]
+            struct P { x: f64 }
+        })
+        .to_string();
+        assert!(out.contains("compile_error"), "got: {out}");
+        assert!(!out.contains("PointMut"), "fell back to the default: {out}");
     }
 }

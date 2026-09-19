@@ -27,3 +27,41 @@ use boost_geometry::prelude::{
 
 #[test]
 fn all_mapped_algorithm_entries_import_from_the_public_prelude() {}
+
+/// A foreign linestring type registered through the facade-root macro.
+struct RegisteredPath {
+    pts: Vec<boost_geometry::model::Point2D<f64, boost_geometry::prelude::Cartesian>>,
+}
+boost_geometry::register_linestring!(
+    RegisteredPath,
+    boost_geometry::model::Point2D<f64, boost_geometry::prelude::Cartesian>,
+    |s| s.pts.iter()
+);
+
+/// The `#[macro_export]`ed model and adapter macros are reachable at the
+/// facade's crate root, as its module docs promise — a downstream crate
+/// with `boost_geometry` as its only dependency can invoke them there.
+#[test]
+#[allow(
+    clippy::float_cmp,
+    reason = "3-4-5 lengths and integer literals are exact in f64"
+)]
+fn model_and_register_macros_are_reachable_at_the_facade_root() {
+    use boost_geometry::model::Point2D;
+    use boost_geometry::prelude::{Cartesian, length};
+    use boost_geometry::trait_::Point as _;
+
+    let p: Point2D<f64, Cartesian> = boost_geometry::point!((1.0, 2.0));
+    assert_eq!(p.get::<0>(), 1.0);
+    let ls: boost_geometry::model::Linestring<Point2D<f64, Cartesian>> =
+        boost_geometry::linestring![(0.0, 0.0), (3.0, 4.0)];
+    assert_eq!(length(&ls), 5.0);
+    let pg: boost_geometry::model::Polygon<Point2D<f64, Cartesian>> =
+        boost_geometry::polygon![[(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.0, 0.0)]];
+    assert_eq!(pg.outer.0.len(), 4);
+
+    let path = RegisteredPath {
+        pts: vec![Point2D::new(0.0, 0.0), Point2D::new(3.0, 4.0)],
+    };
+    assert_eq!(length(&path), 5.0);
+}

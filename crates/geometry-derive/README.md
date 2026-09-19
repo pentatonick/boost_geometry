@@ -23,14 +23,17 @@ Both keys are optional. `cs` defaults to `Cartesian` and `scalar`
 to `f64`. Field order in the struct becomes dimension order in the
 emitted `Point::get::<D>` / `Point::set::<D>` match arms.
 
-## Crate dependencies (pragmatic approach)
+## Crate dependencies
 
-The generated code uses absolute paths into the kernel crates —
-`::geometry_trait::Point`, `::geometry_tag::PointTag`,
-`::geometry_cs::Cartesian`, etc. Downstream callers must therefore
-depend on `geometry-trait`, `geometry-tag`, and `geometry-cs`
-(directly, or transitively via the `geometry` facade crate landing
-in T47).
+The generated code names the kernel crates by absolute path. When the
+`boost_geometry` facade is a dependency of the crate being compiled
+(under whatever name Cargo gave it), the paths route through the
+facade's hidden `__private` re-exports, so depending on the facade
+alone is enough. Otherwise they name `geometry_trait`, `geometry_tag`,
+and `geometry_cs` directly, so a caller using this crate without the
+facade must depend on those three. The coordinate-system path in
+`#[geometry(cs = "…")]` resolves against `geometry_cs` first, so
+`Spherical<Degree>` needs no import at the use site.
 
 ## License
 

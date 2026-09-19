@@ -113,14 +113,14 @@
 //! ### Polygon, area, point-in-polygon
 //!
 //! The `polygon!`, `linestring!`, and `point!` literal macros are
-//! `#[macro_export]`ed by `geometry-model`, so they are reachable as
-//! `geometry_model::polygon!` once the `geometry` crate is in your
-//! dependency tree.
+//! `#[macro_export]`ed by `geometry-model` and re-exported here, so they
+//! are reachable as `boost_geometry::polygon!` with the facade as your
+//! only dependency.
 //!
 //! ```
 //! use boost_geometry::prelude::*;
 //! use boost_geometry::model::Polygon;
-//! use geometry_model::polygon;
+//! use boost_geometry::polygon;
 //!
 //! // Ring traversed clockwise (the default `PointOrder` for `Ring`).
 //! let p: Polygon<Point2D<f64, Cartesian>> = polygon![
@@ -190,12 +190,14 @@ pub mod trait_ {
 /// `Linestring`, `Ring`, `Polygon`, `MultiPoint`, `MultiLinestring`,
 /// `MultiPolygon`, `PointingSegment`, `InfiniteLine`, and
 /// `PolyhedralSurface`. The declarative macros `point!`, `linestring!`,
-/// and `polygon!` are `#[macro_export]`ed by `geometry-model` and so
-/// appear at the crate root of `geometry` itself, not under
-/// `boost_geometry::model`.
+/// and `polygon!` are `#[macro_export]`ed by `geometry-model`, so they
+/// are re-exported at the crate root of `boost_geometry` itself
+/// (`boost_geometry::polygon!`) as well as under `boost_geometry::model`.
 pub mod model {
     pub use geometry_model::*;
 }
+
+pub use geometry_model::{linestring, point, polygon};
 
 /// Pluggable algorithm strategies per coordinate-system family.
 ///
@@ -219,12 +221,18 @@ pub mod algorithm {
 ///
 /// Re-exports every item from [`geometry-adapt`](geometry_adapt).
 /// The `register_linestring!`, `register_ring!`, `register_polygon!`, and
-/// `register_multi_*!` macros are `#[macro_export]`ed and so live at
-/// the crate root of `geometry` itself, not under
+/// `register_multi_*!` macros are `#[macro_export]`ed and so are
+/// re-exported at the crate root of `boost_geometry` itself
+/// (`boost_geometry::register_linestring!`) as well as under
 /// `boost_geometry::adapt`.
 pub mod adapt {
     pub use geometry_adapt::*;
 }
+
+pub use geometry_adapt::{
+    register_linestring, register_multi_linestring, register_multi_point, register_multi_polygon,
+    register_polygon, register_ring,
+};
 
 /// Re-exports every item from [`geometry-overlay`](geometry_overlay) —
 /// the boolean overlay engine (`intersection`, `union`, `difference`,
@@ -249,15 +257,14 @@ pub mod prelude;
 /// Private re-exports for procedural macros to point at — never type
 /// these paths directly.
 ///
-/// `#[derive(Point)]`'s generated impl block names the trait paths
-/// `::geometry_trait::Geometry`, `::geometry_trait::Point`,
-/// `::geometry_tag::PointTag`, and CS types from `::geometry_cs::*`.
-/// We re-export them here so future revisions of the derive can
-/// switch to `::boost_geometry::__private::…` paths without breaking
-/// downstream crates that pin only on `boost_geometry`.
+/// `#[derive(Point)]` resolves the crate it expands in: when this facade
+/// is a dependency there, the generated impl block names the kernel
+/// traits and coordinate systems through the crate re-exports below, so
+/// a downstream crate that pins only on `boost_geometry` needs no direct
+/// dependency on `geometry-trait`, `geometry-tag`, or `geometry-cs`.
 #[doc(hidden)]
 pub mod __private {
-    pub use geometry_cs::{Cartesian, Geographic, Polar, Spherical};
-    pub use geometry_tag::PointTag;
-    pub use geometry_trait::{Geometry, Point};
+    pub use geometry_cs;
+    pub use geometry_tag;
+    pub use geometry_trait;
 }
