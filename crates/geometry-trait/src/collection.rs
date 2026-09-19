@@ -88,7 +88,9 @@ mod tests {
         const DIM: usize = 2;
 
         fn get<const D: usize>(&self) -> f64 {
-            if D == 0 { self.0 } else { self.1 }
+            // Indexed, not `if D == 0 { .. } else { .. }`: the branch
+            // form silently aliased every out-of-range `D` onto y.
+            [self.0, self.1][D]
         }
     }
 
@@ -110,10 +112,13 @@ mod tests {
 
     #[test]
     fn collection_iterates_all_items() {
-        let m = ManyPoints(vec![Xy(0.0, 0.0), Xy(1.0, 1.0), Xy(2.0, 2.0)]);
+        // Distinct x and y per item: reading only one ordinate, or
+        // transposing the two, would still have matched a fixture whose
+        // members were `Xy(n, n)`.
+        let m = ManyPoints(vec![Xy(0.0, 10.0), Xy(1.0, 11.0), Xy(2.0, 12.0)]);
         accepts_gc::<ManyPoints>();
         assert_eq!(m.items().len(), 3);
-        let xs: Vec<f64> = m.items().map(Xy::get::<0>).collect();
-        assert_eq!(xs, vec![0.0, 1.0, 2.0]);
+        let coords: Vec<(f64, f64)> = m.items().map(|p| (p.get::<0>(), p.get::<1>())).collect();
+        assert_eq!(coords, vec![(0.0, 10.0), (1.0, 11.0), (2.0, 12.0)]);
     }
 }

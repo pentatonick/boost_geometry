@@ -87,6 +87,19 @@ pub fn ceil<T: Float>(value: T) -> T {
     value.ceil()
 }
 
+/// Nearest integer-valued coordinate, halfway cases away from zero.
+///
+/// # Examples
+///
+/// ```
+/// use geometry_coords::math::round;
+/// assert_eq!(round(2.5_f64), 3.0);
+/// assert_eq!(round(-2.5_f64), -3.0);
+/// ```
+pub fn round<T: Float>(value: T) -> T {
+    value.round()
+}
+
 /// Tangent of a floating-point coordinate in radians.
 pub fn tan<T: Float>(value: T) -> T {
     value.tan()
@@ -143,6 +156,9 @@ pub trait Float: private::Sealed + Copy {
     /// `value.ceil()` dispatched onto `std` or `libm`.
     #[must_use]
     fn ceil(self) -> Self;
+    /// `value.round()` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn round(self) -> Self;
     /// `value.tan()` dispatched onto `std` or `libm`.
     #[must_use]
     fn tan(self) -> Self;
@@ -241,6 +257,17 @@ impl Float for f32 {
     #[inline]
     fn ceil(self) -> Self {
         libm::ceilf(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn round(self) -> Self {
+        f32::round(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn round(self) -> Self {
+        libm::roundf(self)
     }
 
     #[cfg(feature = "std")]
@@ -369,6 +396,17 @@ impl Float for f64 {
     #[inline]
     fn ceil(self) -> Self {
         libm::ceil(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn round(self) -> Self {
+        f64::round(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn round(self) -> Self {
+        libm::round(self)
     }
 
     #[cfg(feature = "std")]

@@ -16,8 +16,8 @@ use geometry_algorithm::ring_area;
 use geometry_cs::Cartesian;
 use geometry_model::{MultiPolygon, Point2D, Polygon, polygon};
 use geometry_overlay::{
-    difference, difference_multi, intersection, intersection_multi, sym_difference, union_multi,
-    union_poly,
+    difference, difference_multi, intersection, intersection_multi, sym_difference,
+    sym_difference_multi, union_multi, union_poly,
 };
 use geometry_trait::{MultiPolygon as _, Point as _, Polygon as _, Ring as _};
 
@@ -243,6 +243,43 @@ fn multi_polygon_operands() {
     close(area(&union_multi(&a, &b).unwrap()), 2.5);
     close(area(&intersection_multi(&a, &b).unwrap()), 0.5);
     close(area(&difference_multi(&a, &b).unwrap()), 1.5);
+    // A ⊖ B = |A| + |B| − 2|A ∩ B| = 2 + 1 − 1.
+    close(area(&sym_difference_multi(&a, &b).unwrap()), 2.0);
+}
+
+/// A member with a hole, through the multi-polygon entry points.
+///
+/// `multi_polygon_segments` walks each member's exterior **and its interiors**,
+/// which is what makes this the same overlay Boost dispatches rather than a
+/// per-exterior approximation. The hole is placed so the second operand covers
+/// part of it, so every one of the four answers moves if the interior ring is
+/// dropped: without it the first operand would be 100 rather than 84 and the
+/// intersection 25 rather than 21.
+///
+/// ```text
+/// A = (0,0)-(10,10) with a hole (3,3)-(7,7)      area 100 − 16 = 84
+/// B = (5,5)-(15,15)                              area 100
+/// A ∩ B = [5,10]² minus the hole's [5,7]² corner = 25 − 4 = 21
+/// A − B = 84 − 21 = 63     A ∪ B = 184 − 21 = 163     A ⊖ B = 184 − 42 = 142
+/// ```
+#[test]
+fn a_multi_polygon_member_carries_its_hole_into_the_overlay() {
+    let holed: MultiPolygon<Polygon<P>> = MultiPolygon::from_vec(vec![polygon![
+        [
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+            (0.0, 0.0)
+        ],
+        [(3.0, 3.0), (3.0, 7.0), (7.0, 7.0), (7.0, 3.0), (3.0, 3.0)]
+    ]]);
+    let corner: MultiPolygon<Polygon<P>> = MultiPolygon::from_vec(vec![square(5.0, 5.0, 10.0)]);
+
+    close(area(&intersection_multi(&holed, &corner).unwrap()), 21.0);
+    close(area(&difference_multi(&holed, &corner).unwrap()), 63.0);
+    close(area(&union_multi(&holed, &corner).unwrap()), 163.0);
+    close(area(&sym_difference_multi(&holed, &corner).unwrap()), 142.0);
 }
 
 // ---- Where a union ring starts, when the first operand starts at a turn ----

@@ -13,6 +13,7 @@ members = [
     "crates/geometry-adapt-geo-types",
     "crates/geometry-derive",
     "crates/geometry-io-wkt",
+    "crates/geometry-io-ewkt",
     "crates/geometry-io-wkb",
     "crates/geometry-io-geojson",
     "crates/geometry-io-svg",

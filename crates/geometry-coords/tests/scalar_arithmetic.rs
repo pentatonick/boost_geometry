@@ -5,7 +5,7 @@
 
 use geometry_coords::CoordinateScalar;
 use geometry_coords::math::{
-    abs, atan2, ceil, cos, hypot, ln, mul_add, rem_euclid, sin, sqrt, tan,
+    abs, atan2, ceil, cos, hypot, ln, mul_add, rem_euclid, round, sin, sqrt, tan,
 };
 
 #[test]
@@ -63,4 +63,30 @@ fn public_math_dispatch_supports_f32() {
     assert!(ln(1.0_f32).abs() < epsilon);
     assert!((rem_euclid(-0.5_f32, 2.0) - 1.5).abs() < epsilon);
     assert!((rem_euclid(0.5_f32, 2.0) - 0.5).abs() < epsilon);
+}
+
+/// `round` promises "halfway cases away from zero", which is the rule that
+/// separates it from the even-biased rounding a reader may assume: under
+/// banker's rounding `2.5` would land on `2`, not `3`. Pin the tie on both
+/// sides of zero for both native widths — every tie here is exact in binary,
+/// so the comparisons are exact too.
+#[test]
+#[allow(
+    clippy::float_cmp,
+    reason = "every result here is an exact integer-valued float"
+)]
+fn round_breaks_ties_away_from_zero() {
+    assert_eq!(round(2.5_f64), 3.0);
+    assert_eq!(round(-2.5_f64), -3.0);
+    assert_eq!(round(3.5_f64), 4.0);
+    assert_eq!(round(0.5_f64), 1.0);
+    assert_eq!(round(-0.5_f64), -1.0);
+    assert_eq!(round(2.25_f64), 2.0);
+
+    assert_eq!(round(2.5_f32), 3.0);
+    assert_eq!(round(-2.5_f32), -3.0);
+    assert_eq!(round(3.5_f32), 4.0);
+    assert_eq!(round(0.5_f32), 1.0);
+    assert_eq!(round(-0.5_f32), -1.0);
+    assert_eq!(round(2.25_f32), 2.0);
 }

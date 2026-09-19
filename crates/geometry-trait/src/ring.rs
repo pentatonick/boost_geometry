@@ -89,7 +89,9 @@ mod tests {
         const DIM: usize = 2;
 
         fn get<const D: usize>(&self) -> f64 {
-            if D == 0 { self.0 } else { self.1 }
+            // See `collection.rs`: indexing panics out of range where
+            // the branch form quietly returned y.
+            [self.0, self.1][D]
         }
     }
 
@@ -124,8 +126,11 @@ mod tests {
     #[test]
     fn ring_iterates_in_declared_order() {
         let r = VRing(vec![Xy(0.0, 0.0), Xy(1.0, 0.0), Xy(0.0, 1.0), Xy(0.0, 0.0)]);
-        let xs: Vec<f64> = r.points().map(Xy::get::<0>).collect();
-        assert_eq!(xs, vec![0.0, 1.0, 0.0, 0.0]);
+        // Both ordinates, because the x column alone cannot tell the
+        // second vertex from the third here — `(1,0)` and `(0,1)` share
+        // it once transposed, which is exactly the bug worth catching.
+        let coords: Vec<(f64, f64)> = r.points().map(|p| (p.get::<0>(), p.get::<1>())).collect();
+        assert_eq!(coords, vec![(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (0.0, 0.0)]);
     }
 
     // A ring impl that overrides both defaults — confirms the trait

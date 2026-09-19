@@ -214,17 +214,15 @@ mod tests {
         const DIM: usize = 2;
 
         fn get<const D: usize>(&self) -> f64 {
-            if D == 0 { self.x } else { self.y }
+            [self.x, self.y][D]
         }
     }
 
     impl PointMut for Xy {
         fn set<const D: usize>(&mut self, v: f64) {
-            if D == 0 {
-                self.x = v;
-            } else {
-                self.y = v;
-            }
+            // Indexed for the same reason as `get`: a stand-in point
+            // should fail on an out-of-range dimension, not write y.
+            *[&mut self.x, &mut self.y][D] = v;
         }
     }
 

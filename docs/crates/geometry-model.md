@@ -40,8 +40,8 @@ their own. Every type here implements the matching `geometry-trait` concept.
 ### `DynGeometry` — dynamic-kind geometry
 
 An enum with one variant per OGC kind (mirrors `core/tags.hpp`'s
-`dynamic_geometry_tag`). This is where the WKT/WKB/GeoJSON parsers land
-their output, and where a heterogeneous collection (e.g. an rtree of mixed
+`dynamic_geometry_tag`). This is where the WKT/EWKT/WKB/GeoJSON parsers
+land their output, and where a heterogeneous collection (e.g. an rtree of mixed
 kinds) has somewhere to go. Every algorithm that needs to work on
 heterogeneous input grows a thin `_dyn` wrapper elsewhere (see
 `geometry-algorithm`'s `dyn_area`/`dyn_distance`/etc.) that match-and-forwards
@@ -57,5 +57,5 @@ places macros at the crate root.
 ## Who depends on this
 
 `geometry-adapt`, `geometry-strategy`, `geometry-algorithm`, `geometry-overlay`,
-`geometry-rtree`, all four I/O crates, both ecosystem adapters, `geometry-proj`.
+`geometry-rtree`, all five I/O crates, both ecosystem adapters, `geometry-proj`.
 This is the most widely depended-on crate above the concept layer.

@@ -141,7 +141,13 @@ mod tests {
     }
 
     // Stacking: re-tag a user-owned Cartesian point as Spherical.
-    struct MyXy(f64, f64);
+    //
+    // Ordinates live in an array rather than two fields so `get`/`set`
+    // can index by `D` the way `geometry_model::Point` does. The
+    // earlier `if D == 0 { .. } else { .. }` spelling silently aliased
+    // every out-of-range `D` onto the y ordinate; indexing panics
+    // instead, which is what a stand-in for a real point should do.
+    struct MyXy([f64; 2]);
 
     impl Geometry for MyXy {
         type Kind = PointTag;
@@ -154,23 +160,19 @@ mod tests {
         const DIM: usize = 2;
 
         fn get<const D: usize>(&self) -> f64 {
-            if D == 0 { self.0 } else { self.1 }
+            self.0[D]
         }
     }
 
     impl PointMut for MyXy {
         fn set<const D: usize>(&mut self, v: f64) {
-            if D == 0 {
-                self.0 = v;
-            } else {
-                self.1 = v;
-            }
+            self.0[D] = v;
         }
     }
 
     #[test]
     fn re_tag_user_point() {
-        let p: WithCs<MyXy, Spherical<Degree>> = WithCs::new(MyXy(1.0, 2.0));
+        let p: WithCs<MyXy, Spherical<Degree>> = WithCs::new(MyXy([1.0, 2.0]));
         assert_eq!(p.get::<0>(), 1.0);
         assert_eq!(p.get::<1>(), 2.0);
     }
@@ -179,15 +181,14 @@ mod tests {
     /// storage; re-reading through `get` returns the written value.
     #[test]
     fn set_writes_through_to_inner() {
-        let mut p: WithCs<MyXy, Spherical<Degree>> = WithCs::new(MyXy(0.0, 0.0));
+        let mut p: WithCs<MyXy, Spherical<Degree>> = WithCs::new(MyXy([0.0, 0.0]));
         p.set::<0>(7.0);
         p.set::<1>(9.0);
         assert_eq!(p.get::<0>(), 7.0);
         assert_eq!(p.get::<1>(), 9.0);
         // The change landed in the wrapped MyXy, visible after unwrap.
         let inner = p.into_inner();
-        assert_eq!(inner.0, 7.0);
-        assert_eq!(inner.1, 9.0);
+        assert_eq!(inner.0, [7.0, 9.0]);
     }
 
     // `#[repr(transparent)]` guarantees layout-compat; this is a

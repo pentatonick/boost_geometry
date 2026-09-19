@@ -96,6 +96,10 @@ name = "geometry-io-wkt"
 version_group = "lockstep"
 
 [[package]]
+name = "geometry-io-ewkt"
+version_group = "lockstep"
+
+[[package]]
 name = "geometry-io-wkb"
 version_group = "lockstep"
 

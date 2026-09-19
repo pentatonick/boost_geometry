@@ -238,14 +238,35 @@ impl<'a> Parser<'a> {
         Ok(DynGeometry::MultiPoint(MultiPoint(pts)))
     }
 
-    /// `MULTILINESTRING` body: `((x y, …), …)` or `EMPTY`.
+    /// `MULTILINESTRING` body: `((x y, …), …)` or `EMPTY`. An
+    /// individual member may also be `EMPTY` — `<multilinestring text>`
+    /// is a list of `<linestring text>`, and that production admits
+    /// `<empty set>` (OGC SFA-1 06-103r4 §7.2.2) — so this walks the
+    /// members itself rather than going through
+    /// [`Parser::parse_coord_list_list`], which has no per-member
+    /// `EMPTY` branch. Mirrors [`Parser::parse_multipolygon_body`].
     fn parse_multilinestring_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
         if let Token::Empty = self.peek() {
             self.advance()?;
             return Ok(DynGeometry::MultiLineString(MultiLinestring(Vec::new())));
         }
-        let lists = self.parse_coord_list_list()?;
-        let lines: Vec<Linestring<Pt>> = lists.into_iter().map(Linestring).collect();
+        self.expect_left_paren()?;
+        let mut lines = Vec::new();
+        loop {
+            if let Token::Empty = self.peek() {
+                self.advance()?;
+                lines.push(Linestring(Vec::new()));
+            } else {
+                lines.push(Linestring(self.parse_coord_list()?));
+            }
+            match self.peek() {
+                Token::Comma => {
+                    self.advance()?;
+                }
+                _ => break,
+            }
+        }
+        self.expect_right_paren()?;
         Ok(DynGeometry::MultiLineString(MultiLinestring(lines)))
     }
 
@@ -345,6 +366,22 @@ impl<'a> Parser<'a> {
 /// `GEOMETRYCOLLECTION EMPTY` → an empty `Vec`, and so on). `POINT
 /// EMPTY` is rejected with [`WktError::TypeMismatch`]: a 2D
 /// [`geometry_model::Point`] has no representation for "no coordinate".
+///
+/// An individual *member* of a `MULTIPOLYGON` or `MULTILINESTRING` may
+/// also be `EMPTY` — those productions are lists of `<polygon text>` /
+/// `<linestring text>`, each of which admits `<empty set>` (OGC SFA-1
+/// 06-103r4 §7.2.2) — so `MULTIPOLYGON(EMPTY,((0 0,1 0,1 1,0 0)))`
+/// parses to a two-member multipolygon whose first member is empty.
+/// This is the form [`to_wkt`](crate::to_wkt) emits. `MULTIPOINT`
+/// members cannot be empty, for the same reason `POINT EMPTY` is
+/// rejected.
+///
+/// # Coordinate range
+///
+/// A numeric literal must denote a finite `f64`. An exponent that
+/// overflows the type is rejected with [`WktError::InvalidNumber`]
+/// rather than silently yielding an infinity, which WKT could not spell
+/// on the way back out. Underflow is not an error: it rounds to zero.
 ///
 /// # `MULTIPOINT` forms
 ///
@@ -790,6 +827,46 @@ mod tests {
     fn polygon_empty() {
         let g = from_wkt("POLYGON EMPTY").unwrap();
         assert_eq!(g, DynGeometry::Polygon(Polygon::new(Ring::new())));
+    }
+
+    /// An individual member of a multi-geometry may be `EMPTY`:
+    /// `<multipolygon text>` is a list of `<polygon text>` and
+    /// `<multilinestring text>` a list of `<linestring text>`, both of
+    /// which admit `<empty set>` (OGC SFA-1 06-103r4 §7.2.2). This is
+    /// the form the writer emits, so the two stay symmetric.
+    #[test]
+    fn multi_members_may_be_empty() {
+        assert_eq!(
+            from_wkt("MULTIPOLYGON(EMPTY)").unwrap(),
+            DynGeometry::MultiPolygon(MultiPolygon::from_vec(vec![Polygon::new(Ring::new())]))
+        );
+
+        assert_eq!(
+            from_wkt("MULTILINESTRING(EMPTY)").unwrap(),
+            DynGeometry::MultiLineString(MultiLinestring::from_vec(vec![Linestring::from_vec(
+                Vec::new()
+            )]))
+        );
+
+        // An empty member holds its place: the populated member stays in
+        // the middle rather than being compacted to the front.
+        assert_eq!(
+            from_wkt("MULTILINESTRING(EMPTY,(0 0,1 1),EMPTY)").unwrap(),
+            DynGeometry::MultiLineString(MultiLinestring::from_vec(vec![
+                Linestring::from_vec(Vec::new()),
+                Linestring::from_vec(vec![Pt::new(0.0, 0.0), Pt::new(1.0, 1.0)]),
+                Linestring::from_vec(Vec::new()),
+            ]))
+        );
+    }
+
+    /// An overflowing coordinate literal is an error, not an infinity.
+    #[test]
+    fn overflowing_coordinate_is_rejected() {
+        assert_eq!(
+            from_wkt("POINT(1e400 1)").unwrap_err(),
+            WktError::InvalidNumber("1e400".into())
+        );
     }
 
     /// `MULTIPOINT EMPTY`, `MULTILINESTRING EMPTY`, and `MULTIPOLYGON

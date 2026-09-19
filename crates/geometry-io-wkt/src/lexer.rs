@@ -224,9 +224,18 @@ impl<'a> Lexer<'a> {
                 let value = integer as f64;
                 if negative { -value } else { value }
             } else {
-                slice
+                let parsed: f64 = slice
                     .parse()
-                    .map_err(|_| WktError::InvalidNumber(slice.to_string()))?
+                    .map_err(|_| WktError::InvalidNumber(slice.to_string()))?;
+                // `str::parse` maps an out-of-range exponent to an infinity
+                // rather than failing, so `1e400` would otherwise enter the
+                // model as `+inf` — a value WKT cannot spell on the way back
+                // out. The integer fast path above cannot reach here
+                // non-finite: it falls through to this branch on overflow.
+                if !parsed.is_finite() {
+                    return Err(WktError::InvalidNumber(slice.to_string()));
+                }
+                parsed
             };
             Ok(Token::Number(value))
         } else {
@@ -359,6 +368,30 @@ mod tests {
     fn malformed_number_reports_slice() {
         let err = tokenize("1.2.3").unwrap_err();
         assert_eq!(err, WktError::InvalidNumber("1.2.3".into()));
+    }
+
+    /// An exponent too large for `f64` is rejected rather than silently
+    /// becoming an infinity. `str::parse` returns `Ok(inf)` for these, so
+    /// without the finiteness check `POINT(1e400 1)` would enter the
+    /// model as `+inf` and come back out as the unparseable
+    /// `POINT(inf 1)`.
+    #[test]
+    fn overflowing_exponent_is_rejected_not_infinity() {
+        for literal in ["1e400", "-1e400", "1.5e309"] {
+            assert_eq!(
+                tokenize(literal).unwrap_err(),
+                WktError::InvalidNumber(literal.into()),
+                "literal {literal}"
+            );
+        }
+    }
+
+    /// Underflow is not an error: it rounds to a finite zero, which WKT
+    /// can spell and which round-trips.
+    #[test]
+    fn underflowing_exponent_is_a_finite_zero() {
+        let tokens = tokenize("1e-400").unwrap();
+        assert!(matches!(tokens[0], Token::Number(v) if v == 0.0));
     }
 
     /// Every `WktError` variant renders a distinct message through its
