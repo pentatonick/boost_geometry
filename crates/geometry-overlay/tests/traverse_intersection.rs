@@ -100,3 +100,30 @@ fn disjoint_squares_intersection_is_empty() {
     let rings = intersection_rings(&a, &b);
     assert!(rings.is_empty());
 }
+
+/// Open rings (no closing duplicate) carry `n` directed segments, not
+/// `n − 1`: enrich and traverse produce the same intersection and union
+/// as the closed spelling.
+#[test]
+fn open_rings_traverse_intersection_and_union() {
+    let a: Ring<P> = Ring::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(2.0, 0.0),
+        P::new(2.0, 2.0),
+        P::new(0.0, 2.0),
+    ]);
+    let b: Ring<P> = Ring::from_vec(vec![
+        P::new(1.0, 1.0),
+        P::new(3.0, 1.0),
+        P::new(3.0, 3.0),
+        P::new(1.0, 3.0),
+    ]);
+    let turns = get_turns_ring_ring(&a, 0, RingKind::Exterior, &b, 1, RingKind::Exterior);
+    let enriched = enrich(&a, &b, &turns);
+    let rings = traverse(&enriched, &turns, OverlayOp::Intersection).unwrap();
+    assert_eq!(rings.len(), 1);
+    assert!(close(ring_area(&rings[0]).abs(), 1.0));
+    let unioned = traverse(&enriched, &turns, OverlayOp::Union).unwrap();
+    assert_eq!(unioned.len(), 1);
+    assert!(close(ring_area(&unioned[0]).abs(), 7.0));
+}

@@ -16,7 +16,7 @@ use geometry_algorithm::ring_area;
 use geometry_cs::Cartesian;
 use geometry_model::{MultiPolygon, Point2D, Polygon, polygon};
 use geometry_overlay::{
-    difference, difference_multi, intersection, intersection_multi, sym_difference,
+    difference, difference_multi, intersection, intersection_multi, is_valid, sym_difference,
     sym_difference_multi, union_multi, union_poly,
 };
 use geometry_trait::{MultiPolygon as _, Point as _, Polygon as _, Ring as _};
@@ -793,4 +793,46 @@ fn untouched_pieces_keep_their_operands_order() {
             (3_103.231_759_656_652_2, 3_336.523_605_150_214_7)
         ]
     );
+}
+
+/// Assembly ties break toward the *smallest* container: an island inside
+/// a hole stays a separate polygon member when the outer ring is the one
+/// being traversed (the untouched hole and island are emitted first, so
+/// the island meets its smaller container before the outer).
+#[test]
+fn union_multi_keeps_an_island_in_a_hole_when_the_outer_is_traversed() {
+    let a: MultiPolygon<Polygon<P>> = MultiPolygon::from_vec(vec![
+        polygon![
+            [
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 0.0)
+            ],
+            [(2.0, 2.0), (2.0, 8.0), (8.0, 8.0), (8.0, 2.0), (2.0, 2.0)]
+        ],
+        polygon![[(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0), (4.0, 4.0)]],
+    ]);
+    let b: MultiPolygon<Polygon<P>> = MultiPolygon::from_vec(vec![polygon![[
+        (9.0, 4.0),
+        (11.0, 4.0),
+        (11.0, 6.0),
+        (9.0, 6.0),
+        (9.0, 4.0)
+    ]]]);
+    let out = union_multi(&a, &b).unwrap();
+    assert_eq!(
+        out.polygons().count(),
+        2,
+        "island stays a separate polygon: {out:?}"
+    );
+    close(area(&out), 70.0);
+    assert_eq!(
+        out.polygons()
+            .map(|pg| pg.interiors().count())
+            .sum::<usize>(),
+        1
+    );
+    assert_eq!(is_valid(&out), Ok(()));
 }

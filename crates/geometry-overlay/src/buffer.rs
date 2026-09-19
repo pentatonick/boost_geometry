@@ -1339,6 +1339,11 @@ where
 
         match join {
             BufferJoinStrategy::Round { points_per_circle } => {
+                // The ring is walked counter-clockwise, so an outward offset
+                // (`distance > 0`) rounds a convex corner counter-clockwise,
+                // while an inward offset rounds a reflex corner the other
+                // way; forcing one direction sweeps the long way through
+                // the material at the other.
                 boundary.push(before);
                 push_arc_between(
                     &mut boundary,
@@ -1347,7 +1352,7 @@ where
                     after,
                     distance.abs(),
                     points_per_circle.max(4),
-                    true,
+                    distance > 0.0,
                 );
                 boundary.push(after);
             }

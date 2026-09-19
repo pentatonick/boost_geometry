@@ -18,14 +18,15 @@ use geometry_tag::SameAs;
 use geometry_trait::PointMut;
 
 use crate::operation::{OverlayError, union_poly};
-use crate::relate::overlaps;
+use crate::relate::{Dimension, relate};
 
-/// Merge a list of polygons, unioning any that overlap, until no two
-/// remaining polygons overlap.
+/// Merge a list of polygons, unioning any whose interiors meet, until
+/// no two remaining polygons do.
 ///
-/// Overlapping pairs are combined with [`union_poly`]; polygons that
-/// only touch or are disjoint are left as separate members of the
-/// result. Mirrors `boost::geometry::merge_elements`
+/// Pairs whose interiors meet — overlapping, one inside the other, or
+/// identical — are combined with [`union_poly`]; polygons that only
+/// touch or are disjoint are left as separate members of the result.
+/// Mirrors `boost::geometry::merge_elements`
 /// (`algorithms/merge_elements.hpp`) for the areal case.
 ///
 /// # Errors
@@ -171,16 +172,18 @@ where
     Ok(None)
 }
 
-/// The first `(i, j)` with `i < j` whose polygons *overlap in area*, or
-/// `None`.
+/// The first `(i, j)` with `i < j` whose polygons' *interiors meet* —
+/// they overlap, one contains the other, or they are identical — or
+/// `None`. `overlaps` alone misses the last two (its `IE`/`EI` cells are
+/// empty there), which left a nested or duplicated member unmerged.
 ///
-/// [`overlaps`] returns `Err(Unsupported)` for the ambiguous
+/// [`relate`] returns `Err(Unsupported)` for the ambiguous
 /// non-transversal-contact class (an edge-aligned or vertex-only touch the
 /// relate engine cannot tell apart from a vertex-through overlap). For
 /// merging, that ambiguity is resolved conservatively as **"do not merge
 /// this pair"**: a pair that only touches must stay separate anyway, and
 /// an unresolvable pair is left intact rather than aborting the whole
-/// merge. So an `Err` is treated the same as `Ok(false)` here.
+/// merge. So an `Err` is treated the same as "interiors apart" here.
 fn first_overlapping_pair<P>(polygons: &[Polygon<P>]) -> Option<(usize, usize)>
 where
     P: PointMut + Default + Copy,
@@ -189,7 +192,9 @@ where
 {
     for i in 0..polygons.len() {
         for j in (i + 1)..polygons.len() {
-            if overlaps(&polygons[i], &polygons[j]).unwrap_or(false) {
+            let interiors_meet = relate(&polygons[i], &polygons[j])
+                .is_ok_and(|matrix| matrix.interior_interior() != Dimension::Empty);
+            if interiors_meet {
                 return Some((i, j));
             }
         }
@@ -309,5 +314,51 @@ mod tests {
         let d = square(12.0, 0.0, 2.0); // shares edge x=12 with c only
         let merged = merge_polygons(vec![a, b, c, d]).unwrap();
         assert_eq!(merged.polygons().count(), 3);
+    }
+
+    /// Boost's `merge_elements` unions every pair whose interiors meet:
+    /// a member inside another, or identical members, coalesce into one
+    /// valid polygon instead of surviving as overlapping members.
+    #[test]
+    fn contained_and_identical_members_coalesce() {
+        use crate::is_valid;
+        let big: Polygon<P> = polygon![[
+            (0.0, 0.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 0.0),
+            (0.0, 0.0)
+        ]];
+        let small: Polygon<P> =
+            polygon![[(3.0, 3.0), (3.0, 5.0), (5.0, 5.0), (5.0, 3.0), (3.0, 3.0)]];
+        let merged = merge_polygons(vec![big.clone(), small]).unwrap();
+        assert_eq!(is_valid(&merged), Ok(()), "{merged:?}");
+        assert_eq!(merged.polygons().count(), 1);
+        assert!(
+            (ring_area(merged.polygons().next().unwrap().exterior()).abs() - 100.0).abs() < 1e-9
+        );
+        let twice = merge_polygons(vec![big.clone(), big]).unwrap();
+        assert_eq!(is_valid(&twice), Ok(()), "{twice:?}");
+        assert_eq!(twice.polygons().count(), 1);
+    }
+
+    /// A multi-point buffer dissolves through `merge_polygons`, so two
+    /// coincident points yield one disc, not two identical ones.
+    #[test]
+    fn multipoint_buffer_of_duplicate_points_is_one_disc() {
+        use crate::{JoinStrategy, PointStrategy, buffer, is_valid};
+        use geometry_model::MultiPoint;
+        let dup = MultiPoint::from_vec(vec![P::new(0.0, 0.0), P::new(0.0, 0.0)]);
+        let discs = buffer(
+            &dup,
+            1.0,
+            JoinStrategy::Miter,
+            PointStrategy::Circle {
+                points_per_circle: 36,
+            },
+        )
+        .unwrap();
+        assert_eq!(discs.polygons().count(), 1, "{:?}", is_valid(&discs));
+        assert_eq!(is_valid(&discs), Ok(()));
     }
 }

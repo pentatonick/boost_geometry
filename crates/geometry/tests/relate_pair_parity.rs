@@ -261,7 +261,12 @@ fn line_on_polygon_boundary_and_reversed_pair_are_related() {
     let polygon = square();
     let boundary = Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(4.0, 0.0)]);
     let matrix = relation(&boundary, &polygon).unwrap();
-    assert_eq!(matrix.m[0][1], Dimension::Point);
+    // `relate_linear_areal.cpp`: a line along the boundary is F1FF0F212 —
+    // its interior meets the polygon's boundary in a curve and never the
+    // polygon's interior, so it touches.
+    assert!(matrix.matches("F1FF0F212").unwrap(), "{matrix:?}");
+    assert_eq!(matrix.m[0][1], Dimension::Curve);
+    assert!(touches(&boundary, &polygon).unwrap());
     assert_eq!(relation(&polygon, &boundary).unwrap(), matrix.transposed());
 
     let empty_polygon = Polygon::new(Ring::<P>::new());

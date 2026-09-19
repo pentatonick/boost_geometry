@@ -637,10 +637,6 @@ where
 ///
 /// Returns the first [`ValidityFailure`] not accepted by `options`.
 ///
-/// # Panics
-///
-/// Panics if a custom ring implementation passes validation with a non-empty
-/// point iterator but yields no point when iterated again immediately after.
 #[inline]
 #[must_use = "validity failures must be handled"]
 pub fn is_valid_polygon_with<G, P>(
@@ -657,13 +653,6 @@ where
     let inners: Vec<_> = polygon.interiors().collect();
     for inner in &inners {
         validate_ring(*inner, true, options)?;
-        let rep = inner
-            .points()
-            .next()
-            .expect("a validated ring contains at least four points");
-        if !WithinRing.covered_by(rep, polygon.exterior()) {
-            return Err(ValidityFailure::InteriorRingOutside);
-        }
         let interaction = ring_pair_interaction(polygon.exterior(), *inner);
         // A hole that shares a *curve* with the exterior is a
         // self-intersection, the same way two holes sharing one is (below).
@@ -677,6 +666,15 @@ where
         //   hole sharing a segment of it               failure=21
         if interaction.proper_crossing || interaction.overlap {
             return Err(ValidityFailure::SelfIntersection);
+        }
+        // With no crossing, every hole vertex must lie in the closed
+        // exterior: a hole wholly outside can still touch the exterior at
+        // one vertex, so one representative point is not enough.
+        if inner
+            .points()
+            .any(|vertex| !WithinRing.covered_by(vertex, polygon.exterior()))
+        {
+            return Err(ValidityFailure::InteriorRingOutside);
         }
         if interaction.contacts.len() > 1 {
             return Err(ValidityFailure::DisconnectedInterior);
@@ -1134,6 +1132,27 @@ mod tests {
         assert_eq!(
             is_valid_polygon(&pg),
             Err(ValidityFailure::WrongOrientation)
+        );
+    }
+
+    /// Boost 1.83 rejects a "hole" lying wholly outside the exterior even
+    /// when its first vertex rests on the exterior's boundary: every hole
+    /// vertex must be covered by the exterior, not just one.
+    #[test]
+    fn hole_outside_touching_the_exterior_at_a_vertex_is_invalid() {
+        let pg: Polygon<P> = polygon![
+            [
+                (0.0, 0.0),
+                (0.0, 10.0),
+                (10.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0)
+            ],
+            [(10.0, 5.0), (12.0, 4.0), (12.0, 6.0), (10.0, 5.0)]
+        ];
+        assert_eq!(
+            is_valid_polygon(&pg),
+            Err(ValidityFailure::InteriorRingOutside)
         );
     }
 }
