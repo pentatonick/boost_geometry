@@ -325,7 +325,9 @@ fn push_ring_path(out: &mut String, ring: &[(f64, f64)], transform: &Transform) 
 /// Round a pixel coordinate to a compact, stable string. Two decimal
 /// places is well below one device pixel and keeps the output small.
 fn round(v: f64) -> f64 {
-    (v * 100.0).round() / 100.0
+    // Via the coords math layer rather than the inherent `f64::round`,
+    // which is `std`-only and would cost this crate its `no_std` build.
+    geometry_coords::math::round(v * 100.0) / 100.0
 }
 
 /// Turns a concrete geometry into [`Shape`]s and grows the mapper's

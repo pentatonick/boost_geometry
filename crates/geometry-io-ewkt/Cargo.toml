@@ -18,7 +18,12 @@ std = [
     "geometry-trait/std",
     "geometry-model/std",
 ]
-libm = ["geometry-cs/libm", "geometry-trait/libm", "geometry-model/libm"]
+libm = [
+    "geometry-io-wkt/libm",
+    "geometry-cs/libm",
+    "geometry-trait/libm",
+    "geometry-model/libm",
+]
 
 [dependencies]
 geometry-io-wkt = { version = "0.0.8", path = "../geometry-io-wkt", default-features = false }

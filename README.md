@@ -418,19 +418,19 @@ plus a `_with` companion that takes an explicit strategy.
 | `and` / `not` / `satisfies` | ✅ | [→](https://docs.rs/boost_geometry/latest/boost_geometry/rtree/fn.and.html) |
 | `Rtree` | ✅ | [→](https://docs.rs/boost_geometry/latest/boost_geometry/rtree/struct.Rtree.html) |
 | **I/O — Well-Known Text** — Parse and write the OGC WKT format |||
-| `from_wkt` / `parse_linestring` / `parse_multi_linestring` / `parse_multi_point` / `parse_multi_polygon` / `parse_point` / `parse_polygon` | ❌ | [→](https://docs.rs/geometry-io-wkt) |
-| `to_wkt` / `to_wkt_polygon` / `write_wkt` | ❌ | [→](https://docs.rs/geometry-io-wkt) |
+| `from_wkt` / `parse_linestring` / `parse_multi_linestring` / `parse_multi_point` / `parse_multi_polygon` / `parse_point` / `parse_polygon` | ✅ | [→](https://docs.rs/geometry-io-wkt) |
+| `to_wkt` / `to_wkt_polygon` / `write_wkt` | ✅ | [→](https://docs.rs/geometry-io-wkt) |
 | **I/O — Extended Well-Known Text** — Parse and write PostGIS EWKT (WKT with an SRID prefix) |||
 | `from_ewkt` / `parse_linestring` / `parse_multi_linestring` / `parse_multi_point` / `parse_multi_polygon` / `parse_point` / `parse_polygon` | ✅ | [→](https://docs.rs/geometry-io-ewkt) |
 | `to_ewkt` / `to_ewkt_polygon` / `write_ewkt` | ✅ | [→](https://docs.rs/geometry-io-ewkt) |
 | **I/O — Well-Known Binary** — Parse and write the OGC WKB format |||
-| `from_wkb` | ❌ | [→](https://docs.rs/geometry-io-wkb) |
-| `to_wkb` / `to_wkb_polygon` | ❌ | [→](https://docs.rs/geometry-io-wkb) |
+| `from_wkb` | ✅ | [→](https://docs.rs/geometry-io-wkb) |
+| `to_wkb` / `to_wkb_polygon` | ✅ | [→](https://docs.rs/geometry-io-wkb) |
 | **I/O — GeoJSON** — Parse and write GeoJSON (RFC 7946) |||
-| `from_geojson` | ❌ | [→](https://docs.rs/geometry-io-geojson) |
-| `to_geojson` / `to_geojson_polygon` | ❌ | [→](https://docs.rs/geometry-io-geojson) |
+| `from_geojson` | ✅ | [→](https://docs.rs/geometry-io-geojson) |
+| `to_geojson` / `to_geojson_polygon` | ✅ | [→](https://docs.rs/geometry-io-geojson) |
 | **I/O — SVG** — Render geometries to SVG (debugging) |||
-| `SvgMapper` | ❌ | [→](https://docs.rs/geometry-io-svg) |
+| `SvgMapper` | ✅ | [→](https://docs.rs/geometry-io-svg) |
 | **Reprojection** — CRS-to-CRS point reprojection (standalone crate) |||
 | `reproject` | ✅ | [→](https://docs.rs/geometry-proj) |
 <!-- feature-table:end -->
@@ -476,10 +476,10 @@ that need a libm-backed `Float` impl) and is checked in CI:
 | `geometry-cs` | ✅ |
 | `geometry-derive` | ✅ |
 | `geometry-io-ewkt` | ✅ |
-| `geometry-io-geojson` | ❌ |
-| `geometry-io-svg` | ❌ |
-| `geometry-io-wkb` | ❌ |
-| `geometry-io-wkt` | ❌ |
+| `geometry-io-geojson` | ✅ |
+| `geometry-io-svg` | ✅ |
+| `geometry-io-wkb` | ✅ |
+| `geometry-io-wkt` | ✅ |
 | `geometry-model` | ✅ |
 | `geometry-overlay` | ✅ |
 | `geometry-proj` | ✅ |

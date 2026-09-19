@@ -18,6 +18,12 @@ std = [
     "geometry-trait/std",
     "geometry-model/std",
 ]
+libm = [
+    "geometry-coords/libm",
+    "geometry-cs/libm",
+    "geometry-trait/libm",
+    "geometry-model/libm",
+]
 
 [dependencies]
 geometry-tag    = { version = "0.0.7", path = "../geometry-tag" }
