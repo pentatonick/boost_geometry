@@ -21,7 +21,8 @@
 
 use geometry_cs::Cartesian;
 use geometry_io_ewkt::{
-    Ewkt, EwktError, Srid, WktError, from_ewkt, parse_linestring, to_ewkt, to_ewkt_polygon,
+    Ewkt, EwktError, Srid, WktError, from_ewkt, parse_linestring, parse_multi_linestring,
+    parse_multi_point, parse_multi_polygon, parse_point, parse_polygon, to_ewkt, to_ewkt_polygon,
 };
 use geometry_io_wkt::{from_wkt, to_wkt, to_wkt_polygon};
 use geometry_model::{DynGeometry, Linestring, MultiPoint, Point2D, Polygon, Ring};
@@ -354,6 +355,83 @@ fn a_non_ascii_body_byte_keeps_its_offset() {
     let input = "SRID=4326;POINTé";
     assert_eq!(input.find('é'), Some(15));
     assert_eq!(from_ewkt(input), Err(at(15, 'é')));
+}
+
+/// Each typed parser on its success path, through the two things this
+/// crate adds to a WKT body: the `SRID=` prefix and a glued dimension
+/// suffix. Every one of these had a doc example and nothing else — and
+/// `cargo llvm-cov` does not count doctests, so five of the six read as
+/// entirely uncovered.
+#[test]
+fn public_typed_parsers_accept_their_geometry_kinds() {
+    let e = parse_point("SRID=4326;POINTM(1 2 3)").unwrap();
+    assert_eq!(e.srid, Some(Srid::new(4326)));
+    assert_eq!(e.geometry, Point2D::new(1.0, 2.0));
+
+    let e = parse_linestring("SRID=4326;LINESTRINGZ(0 0 1,1 1 2)").unwrap();
+    assert_eq!(e.srid, Some(Srid::new(4326)));
+    assert_eq!(e.geometry.0.len(), 2);
+
+    let e = parse_polygon("SRID=4326;POLYGON((0 0,1 0,1 1,0 0))").unwrap();
+    assert_eq!(e.srid, Some(Srid::new(4326)));
+    assert_eq!(e.geometry.outer.0.len(), 4);
+
+    let e = parse_multi_point("SRID=4326;MULTIPOINT(0 0,1 1)").unwrap();
+    assert_eq!(e.srid, Some(Srid::new(4326)));
+    assert_eq!(e.geometry.0.len(), 2);
+
+    let e = parse_multi_linestring("SRID=4326;MULTILINESTRING((0 0,1 1))").unwrap();
+    assert_eq!(e.srid, Some(Srid::new(4326)));
+    assert_eq!(e.geometry.0.len(), 1);
+
+    let e = parse_multi_polygon("SRID=4326;MULTIPOLYGON(((0 0,1 0,1 1,0 0)))").unwrap();
+    assert_eq!(e.srid, Some(Srid::new(4326)));
+    assert_eq!(e.geometry.0.len(), 1);
+}
+
+/// The same six with no prefix: the geometry still parses and `srid` is
+/// `None`, which is the case that distinguishes "absent" from
+/// `SRID=0;`.
+#[test]
+fn typed_parsers_accept_a_prefixless_body() {
+    assert_eq!(parse_point("POINT(1 2)").unwrap().srid, None);
+    assert_eq!(parse_linestring("LINESTRING(0 0,1 1)").unwrap().srid, None);
+    assert_eq!(
+        parse_polygon("POLYGON((0 0,1 0,1 1,0 0))").unwrap().srid,
+        None
+    );
+    assert_eq!(parse_multi_point("MULTIPOINT(0 0,1 1)").unwrap().srid, None);
+    assert_eq!(
+        parse_multi_linestring("MULTILINESTRING((0 0,1 1))")
+            .unwrap()
+            .srid,
+        None
+    );
+    assert_eq!(
+        parse_multi_polygon("MULTIPOLYGON(((0 0,1 0,1 1,0 0)))")
+            .unwrap()
+            .srid,
+        None
+    );
+}
+
+/// A malformed prefix is reported by every typed parser, not just
+/// [`from_ewkt`] — they share one prefix scanner, and this pins that.
+#[test]
+fn typed_parsers_report_a_malformed_prefix() {
+    let expected = EwktError::InvalidSrid {
+        reason: "sign not allowed",
+        pos: 5,
+    };
+    assert_eq!(parse_point("SRID=-1;POINT(1 2)").unwrap_err(), expected);
+    assert_eq!(
+        parse_polygon("SRID=-1;POLYGON((0 0,1 0,1 1,0 0))").unwrap_err(),
+        expected
+    );
+    assert_eq!(
+        parse_multi_point("SRID=-1;MULTIPOINT(0 0)").unwrap_err(),
+        expected
+    );
 }
 
 #[test]
