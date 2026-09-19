@@ -330,8 +330,9 @@ accessors.
 
 Every capability below is a free function you call on your own registered
 types — no conversion step. Adding the single `boost_geometry` crate brings
-in all of the ✅ rows; the I/O and reprojection formats are separate crates
-so a default build stays lean. The **Docs** link opens the rustdoc for that
+in every row whose crate the facade re-exports; the I/O and reprojection
+formats (the WKT, EWKT, WKB, GeoJSON, SVG, and reprojection rows) are
+separate crates, so a default build stays lean. The **Docs** link opens the rustdoc for that
 item; the `no_std` column is the status of the crate the function lives in
 (see the [full matrix](#no_std-support) below).
 
@@ -419,6 +420,9 @@ plus a `_with` companion that takes an explicit strategy.
 | **I/O — Well-Known Text** — Parse and write the OGC WKT format |||
 | `from_wkt` / `parse_linestring` / `parse_multi_linestring` / `parse_multi_point` / `parse_multi_polygon` / `parse_point` / `parse_polygon` | ❌ | [→](https://docs.rs/geometry-io-wkt) |
 | `to_wkt` / `to_wkt_polygon` / `write_wkt` | ❌ | [→](https://docs.rs/geometry-io-wkt) |
+| **I/O — Extended Well-Known Text** — Parse and write PostGIS EWKT (WKT with an SRID prefix) |||
+| `from_ewkt` / `parse_linestring` / `parse_multi_linestring` / `parse_multi_point` / `parse_multi_polygon` / `parse_point` / `parse_polygon` | ✅ | [→](https://docs.rs/geometry-io-ewkt) |
+| `to_ewkt` / `to_ewkt_polygon` / `write_ewkt` | ✅ | [→](https://docs.rs/geometry-io-ewkt) |
 | **I/O — Well-Known Binary** — Parse and write the OGC WKB format |||
 | `from_wkb` | ❌ | [→](https://docs.rs/geometry-io-wkb) |
 | `to_wkb` / `to_wkb_polygon` | ❌ | [→](https://docs.rs/geometry-io-wkb) |
@@ -444,10 +448,10 @@ to their own docs.rs pages.
 
 ## Workspace layout
 
-Nineteen crates form a dependency spine from foundational tag/coords
+Twenty crates form a dependency spine from foundational tag/coords
 crates up through traits, models, strategies, and algorithms to the
 `boost_geometry` facade — plus adapters (nalgebra, geo-types), IO
-(WKT, WKB, GeoJSON, SVG), an R-tree, overlay operations, and
+(WKT, EWKT, WKB, GeoJSON, SVG), an R-tree, overlay operations, and
 projections. `boost_geometry` re-exports everything; depend on it alone
 unless you need a slimmer build.
 
@@ -471,6 +475,7 @@ that need a libm-backed `Float` impl) and is checked in CI:
 | `geometry-coords` | ✅ |
 | `geometry-cs` | ✅ |
 | `geometry-derive` | ✅ |
+| `geometry-io-ewkt` | ✅ |
 | `geometry-io-geojson` | ❌ |
 | `geometry-io-svg` | ❌ |
 | `geometry-io-wkb` | ❌ |

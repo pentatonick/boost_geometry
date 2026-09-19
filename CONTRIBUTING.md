@@ -61,8 +61,11 @@ CI fails if the generated files are out of sync.
 
 ## Design ground rules
 
-- **Mirror Boost.Geometry.** Every public item cites the Boost C++
-  header it ports. Read `docs/` first — the architecture, the
+- **Mirror Boost.Geometry.** Every public item that ports a Boost header
+  cites it. Four crates have no Boost counterpart
+  (`geometry-io-wkb`, `geometry-io-geojson`, `geometry-io-ewkt`,
+  `geometry-proj`); those cite the format specification or upstream
+  reference they implement instead. Read `docs/` first — the architecture, the
   tag-dispatch pattern, and the overlay engine are documented there.
 - **`unsafe_code = "forbid"`** across the whole workspace.
 - **Dependency spine.** Crates depend strictly downward (tags/coords →

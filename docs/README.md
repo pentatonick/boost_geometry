@@ -2,10 +2,13 @@
 
 A Rust port of [Boost.Geometry](https://www.boost.org/doc/libs/release/libs/geometry/):
 dimension-agnostic, coordinate-system-agnostic, bring-your-own-type,
-strategy-pluggable. 18 crates, ~66k lines of Rust, 52 test files. Every
-public item carries a `///` doc comment referencing the exact Boost C++
-header it mirrors — this documentation set is a *map* on top of that
-existing rustdoc, not a replacement for it. When in doubt, the crate's own
+strategy-pluggable. 20 crates, ~76k lines of Rust, 68 test files. Every
+public item carries a `///` doc comment; in the crates that port Boost it
+names the exact header it mirrors, and in the crates with no Boost
+counterpart (`geometry-io-wkb`, `geometry-io-geojson`, `geometry-io-ewkt`,
+`geometry-proj`) it names the format specification or upstream reference
+instead — this documentation set is a *map* on top of that existing
+rustdoc, not a replacement for it. When in doubt, the crate's own
 `src/lib.rs` doc comment is the primary source; these pages tell you which
 file to open.
 
@@ -13,7 +16,7 @@ file to open.
 
 New to this codebase? Read in this order:
 
-1. **[Architecture](01-architecture.md)** — the 18-crate dependency spine,
+1. **[Architecture](01-architecture.md)** — the 20-crate dependency spine,
    what each layer owns, why the shape is acyclic by construction. The map
    of the whole workspace.
 2. **[The tag-dispatch pattern](02-tag-dispatch-pattern.md)** — the one
@@ -48,6 +51,7 @@ depends on it. Ordered by dependency layer (foundation first):
 | adapter | [`geometry-adapt-geo-types`](crates/geometry-adapt-geo-types.md) | Adapts the [`geo-types`](https://docs.rs/geo-types) ecosystem crate |
 | adapter | [`geometry-adapt-nalgebra`](crates/geometry-adapt-nalgebra.md) | Adapts [`nalgebra`](https://nalgebra.org) points/vectors |
 | I/O | [`geometry-io-wkt`](crates/geometry-io-wkt.md) | Well-Known Text |
+| I/O | [`geometry-io-ewkt`](crates/geometry-io-ewkt.md) | PostGIS Extended Well-Known Text (`SRID=…;` prefix) |
 | I/O | [`geometry-io-wkb`](crates/geometry-io-wkb.md) | Well-Known Binary |
 | I/O | [`geometry-io-geojson`](crates/geometry-io-geojson.md) | GeoJSON (RFC 7946) |
 | I/O | [`geometry-io-svg`](crates/geometry-io-svg.md) | SVG output (debugging) |
@@ -62,7 +66,7 @@ depends on it. Ordered by dependency layer (foundation first):
 | Adapt a `geo-types` or `nalgebra` type | [`geometry-adapt-geo-types`](crates/geometry-adapt-geo-types.md) / [`geometry-adapt-nalgebra`](crates/geometry-adapt-nalgebra.md) |
 | Add a new algorithm | Read [tag-dispatch pattern](02-tag-dispatch-pattern.md) first, then [`geometry-strategy`](crates/geometry-strategy.md)'s own "how to write a strategy" tutorial in its `lib.rs` |
 | Understand `intersection`/`union`/`difference` | [Overlay deep-dive](03-overlay-engine.md) |
-| Parse/write WKT, WKB, or GeoJSON | [`geometry-io-wkt`](crates/geometry-io-wkt.md) / [`geometry-io-wkb`](crates/geometry-io-wkb.md) / [`geometry-io-geojson`](crates/geometry-io-geojson.md) |
+| Parse/write WKT, EWKT, WKB, or GeoJSON | [`geometry-io-wkt`](crates/geometry-io-wkt.md) / [`geometry-io-ewkt`](crates/geometry-io-ewkt.md) / [`geometry-io-wkb`](crates/geometry-io-wkb.md) / [`geometry-io-geojson`](crates/geometry-io-geojson.md) |
 | Spatially index a set of geometries | [`geometry-rtree`](crates/geometry-rtree.md) |
 | Reproject between coordinate systems | [`geometry-proj`](crates/geometry-proj.md) |
 | See the full crate dependency graph | [Architecture](01-architecture.md) |

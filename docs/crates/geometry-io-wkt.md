@@ -25,3 +25,9 @@ construction — a `GEOMETRYCOLLECTION` mixes kinds). The typed
 expected kind and don't want to match on `DynGeometry`. `to_wkt`/`write_wkt`
 serialise any concrete geometry implementing the model traits — no
 `DynGeometry` required on the output side.
+
+## Who depends on this
+
+`geometry-io-ewkt`, which delegates the geometry body of every EWKT string
+to this crate's public readers and writers. Nothing else in the workspace
+depends on it — the facade does not re-export the I/O crates.
