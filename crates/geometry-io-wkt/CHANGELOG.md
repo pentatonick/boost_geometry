@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/geometry-io-wkt-v0.0.9...geometry-io-wkt-v0.0.10) - 2026-09-20
+
+### Added
+
+- *(coords)* add a round primitive and give every I/O crate a libm feature
+
+### Fixed
+
+- *(io-wkt)* emit re-parseable WKT for empty members and reject non-finite input
+
+### Other
+
+- *(io-wkb,io-wkt,io-ewkt)* sweep every prefix and pin the untested contracts
+- *(coords,io-wkt,io-ewkt)* close the eight lines the patch left uncovered
+- *(io-wkt)* record why the non-finite guard belongs in the writer
+
 ## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/geometry-io-wkt-v0.0.8...geometry-io-wkt-v0.0.9) - 2026-09-05
 
 ### Other

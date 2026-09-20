@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/geometry-overlay-v0.0.9...geometry-overlay-v0.0.10) - 2026-09-20
+
+### Fixed
+
+- *(overlay)* split lobes at any pinch and dissolve self-intersecting offsets
+- *(overlay)* relate through the topology engine, hole coverage, merge pairs, arc direction
+
+### Other
+
+- *(trait,algorithm,strategy,overlay,adapt-geo-types)* reach the last row of every dimension table
+- *(overlay)* sym_difference_multi, and a multi-polygon member's hole
+- *(overlay)* cover the collinear joins and cross-ring turns of buffer(0)
+- *(overlay)* pin what the section partition walk reaches, and in what order
+
 ## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/geometry-overlay-v0.0.8...geometry-overlay-v0.0.9) - 2026-09-05
 
 ### Added

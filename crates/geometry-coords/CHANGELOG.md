@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/geometry-coords-v0.0.9...geometry-coords-v0.0.10) - 2026-09-20
+
+### Added
+
+- *(coords)* add a round primitive and give every I/O crate a libm feature
+
+### Fixed
+
+- *(coords)* subtract directly and tell overflow from invalid when parsing
+
+### Other
+
+- *(coords,io-wkt,io-ewkt)* close the eight lines the patch left uncovered
+- *(coords)* pin the kernel's tolerant equality for every scalar kind
+
 ## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/geometry-coords-v0.0.8...geometry-coords-v0.0.9) - 2026-09-05
 
 ### Fixed
