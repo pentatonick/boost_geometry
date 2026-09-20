@@ -127,6 +127,15 @@ impl<I: RationalInteger> Rational<I> {
         if denominator == 0 {
             return None;
         }
+        // Zero reduces to `0/1` whatever the denominator; skipping the gcd
+        // keeps a `-2^127` denominator (whose magnitude does not fit `i128`)
+        // from being misreported as an overflow of a value that is exactly zero.
+        if numerator == 0 {
+            return Some(Self {
+                numerator: I::from_i128(0)?,
+                denominator: I::from_i128(1)?,
+            });
+        }
 
         let divisor = gcd(numerator.unsigned_abs(), denominator.unsigned_abs());
         let divisor = i128::try_from(divisor).ok()?;
@@ -202,9 +211,29 @@ impl<I: RationalInteger> Add for Rational<I> {
 impl<I: RationalInteger> Sub for Rational<I> {
     type Output = Self;
 
+    // Computed directly rather than as `self + (-rhs)`: negating `MIN/1`
+    // is unrepresentable even when the difference itself fits.
     #[inline]
     fn sub(self, rhs: Self) -> Self::Output {
-        self + (-rhs)
+        let left = self
+            .numerator
+            .to_i128()
+            .checked_mul(rhs.denominator.to_i128())
+            .expect("rational subtraction intermediate overflow");
+        let right = rhs
+            .numerator
+            .to_i128()
+            .checked_mul(self.denominator.to_i128())
+            .expect("rational subtraction intermediate overflow");
+        let numerator = left
+            .checked_sub(right)
+            .expect("rational subtraction intermediate overflow");
+        let denominator = self
+            .denominator
+            .to_i128()
+            .checked_mul(rhs.denominator.to_i128())
+            .expect("rational subtraction intermediate overflow");
+        Self::from_wide_or_panic(numerator, denominator)
     }
 }
 
@@ -335,12 +364,8 @@ impl<I: RationalInteger> FromStr for Rational<I> {
             if denominator.contains('/') {
                 return Err(ParseRationalError::Invalid);
             }
-            let numerator = numerator
-                .parse::<i128>()
-                .map_err(|_| ParseRationalError::Invalid)?;
-            let denominator = denominator
-                .parse::<i128>()
-                .map_err(|_| ParseRationalError::Invalid)?;
+            let numerator = parse_integer_literal(numerator)?;
+            let denominator = parse_integer_literal(denominator)?;
             if denominator == 0 {
                 return Err(ParseRationalError::ZeroDenominator);
             }
@@ -363,6 +388,12 @@ impl<I: RationalInteger> FromStr for Rational<I> {
             let whole = digits
                 .parse::<i128>()
                 .map_err(|_| ParseRationalError::Overflow)?;
+            // Trailing zeros carry no value: dropping them keeps `1.5` padded
+            // with forty zeros at `3/2` instead of judging the un-reduced
+            // `10^41` denominator before the value is reduced.
+            let fraction = fraction.trim_end_matches('0');
+            let exponent =
+                u32::try_from(fraction.len()).map_err(|_| ParseRationalError::Overflow)?;
             let fraction = if fraction.is_empty() {
                 0
             } else {
@@ -370,8 +401,6 @@ impl<I: RationalInteger> FromStr for Rational<I> {
                     .parse::<i128>()
                     .map_err(|_| ParseRationalError::Overflow)?
             };
-            let exponent =
-                u32::try_from(fraction_digits(input)).map_err(|_| ParseRationalError::Overflow)?;
             let denominator = 10_i128
                 .checked_pow(exponent)
                 .ok_or(ParseRationalError::Overflow)?;
@@ -389,17 +418,24 @@ impl<I: RationalInteger> FromStr for Rational<I> {
             return Self::from_wide(numerator, denominator).ok_or(ParseRationalError::Overflow);
         }
 
-        let value = input
-            .parse::<i128>()
-            .map_err(|_| ParseRationalError::Invalid)?;
+        let value = parse_integer_literal(input)?;
         Self::from_wide(value, 1).ok_or(ParseRationalError::Overflow)
     }
 }
 
-fn fraction_digits(input: &str) -> usize {
-    input
-        .split_once('.')
-        .map_or(0, |(_, fraction)| fraction.len())
+/// Parse a signed decimal integer literal into the wide intermediate,
+/// telling a malformed literal (`Invalid`) apart from a well-formed one
+/// too wide for `i128` (`Overflow`).
+fn parse_integer_literal(text: &str) -> Result<i128, ParseRationalError> {
+    let digits = text
+        .strip_prefix('-')
+        .or_else(|| text.strip_prefix('+'))
+        .unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(ParseRationalError::Invalid);
+    }
+    text.parse::<i128>()
+        .map_err(|_| ParseRationalError::Overflow)
 }
 
 impl<I: RationalInteger> CoordinateScalar for Rational<I> {

@@ -405,3 +405,29 @@ fn validity_options_preserve_strict_behavior_and_offer_boost_defaults() {
         "Geometry is valid"
     );
 }
+
+/// `strategy/spherical/compare.hpp` — `Less`/`Greater` are strict weak
+/// orderings on angular points: neither holds between equal points, and
+/// an equal-longitude pair is neither less nor greater on dimension 0
+/// even when the antimeridian is spelled two ways.
+#[test]
+fn angular_less_and_greater_are_strict_on_equal_points() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let a = SphericalPoint::new(10.0, 20.0);
+    let b = SphericalPoint::new(10.0, 20.0);
+    assert!(!LESS.apply(&a, &b));
+    assert!(!GREATER.apply(&a, &b));
+    assert!(!LESS_EXACT.apply(&a, &b));
+    assert!(EQUAL_TO.apply(&a, &b));
+    let same_longitude = SphericalPoint::new(10.0, 30.0);
+    assert!(!Less::<0>.apply(&a, &same_longitude));
+    assert!(!Greater::<0>.apply(&a, &same_longitude));
+    assert!(EqualTo::<0>.apply(&a, &same_longitude));
+    assert!(!EqualTo::<0>.apply(&a, &SphericalPoint::new(11.0, 20.0)));
+    let west = SphericalPoint::new(-180.0, 5.0);
+    let east = SphericalPoint::new(180.0, 6.0);
+    assert!(!Less::<0>.apply(&west, &east));
+    assert!(!Greater::<0>.apply(&west, &east));
+    assert!(LESS.apply(&west, &east));
+    assert!(!GREATER.apply(&west, &east));
+}

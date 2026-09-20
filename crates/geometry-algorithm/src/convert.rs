@@ -28,8 +28,6 @@ use geometry_model::{
 };
 use geometry_trait::{Point as PointTrait, PointMut};
 
-use crate::make::make_point;
-
 /// Convert `src` into the destination kind `Dst`.
 ///
 /// Mirrors `boost::geometry::convert(src, dst)` from
@@ -54,12 +52,16 @@ pub trait Convert<Dst> {
     fn convert(&self) -> Dst;
 }
 
-/// `Box` → `Polygon`: the rectangle's four corners wound clockwise
-/// and closed back onto the first, giving a 5-point exterior ring.
+/// `Box` → `Polygon`: the rectangle's four corners, wound in the
+/// destination's declared order from the minimum corner and closed back
+/// onto it when the destination declares closure — a 5-point ring for
+/// the default `Polygon`, 4 points for an open one.
 ///
 /// Mirrors the `box → polygon` arm of
-/// `boost/geometry/algorithms/convert.hpp`. Only the first two
-/// dimensions participate — a box is a planar rectangle.
+/// `boost/geometry/algorithms/convert.hpp` (`box_to_range`, which
+/// honours the target's order and closure). Only the first two
+/// dimensions participate — a box is a planar rectangle — so a further
+/// dimension of each corner keeps the point type's default value.
 impl<P, const CW: bool, const CL: bool> Convert<Polygon<P, CW, CL>> for Box<P>
 where
     P: PointMut + Default,
@@ -69,16 +71,32 @@ where
         let min_y = self.min().get::<1>();
         let max_x = self.max().get::<0>();
         let max_y = self.max().get::<1>();
-        // Clockwise from the minimum corner, closed back to the start:
-        // (minx, miny) → (minx, maxy) → (maxx, maxy) → (maxx, miny) → (minx, miny).
-        let ring = Ring::<P, CW, CL>::from_vec(alloc::vec![
-            make_point(&[min_x, min_y]),
-            make_point(&[min_x, max_y]),
-            make_point(&[max_x, max_y]),
-            make_point(&[max_x, min_y]),
-            make_point(&[min_x, min_y]),
-        ]);
-        Polygon::new(ring)
+        let corner = |x: P::Scalar, y: P::Scalar| {
+            let mut p = P::default();
+            p.set::<0>(x);
+            p.set::<1>(y);
+            p
+        };
+        // Clockwise: (minx, miny) → (minx, maxy) → (maxx, maxy) → (maxx, miny).
+        let mut ring = if CW {
+            alloc::vec![
+                corner(min_x, min_y),
+                corner(min_x, max_y),
+                corner(max_x, max_y),
+                corner(max_x, min_y),
+            ]
+        } else {
+            alloc::vec![
+                corner(min_x, min_y),
+                corner(max_x, min_y),
+                corner(max_x, max_y),
+                corner(min_x, max_y),
+            ]
+        };
+        if CL {
+            ring.push(corner(min_x, min_y));
+        }
+        Polygon::new(Ring::<P, CW, CL>::from_vec(ring))
     }
 }
 
@@ -269,5 +287,65 @@ mod tests {
         let mpg: MultiPolygon<Polygon<Pt>> = convert(&pg);
         assert_eq!(mpg.0.len(), 1);
         assert_eq!(mpg.0[0].exterior().points().count(), 4);
+    }
+
+    /// The ring is wound clockwise from the minimum corner exactly as
+    /// Boost emits it (`(0 0,0 3,4 3,4 0,0 0)`), not merely over the
+    /// same corners.
+    #[test]
+    fn box_to_polygon_is_wound_clockwise() {
+        let b: Box<Pt> = Box::from_corners(Pt::new(0., 0.), Pt::new(4., 3.));
+        let pg: Polygon<Pt> = convert(&b);
+        let pts: alloc::vec::Vec<(f64, f64)> = pg
+            .exterior()
+            .points()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(
+            pts,
+            alloc::vec![(0., 0.), (0., 3.), (4., 3.), (4., 0.), (0., 0.)]
+        );
+        assert_eq!(crate::area::ring_area(pg.exterior()), 12.0);
+    }
+
+    /// A counter-clockwise-declared destination receives a
+    /// counter-clockwise ring (positive area under its own convention).
+    #[test]
+    fn box_to_ccw_polygon_is_wound_counter_clockwise() {
+        let b: Box<Pt> = Box::from_corners(Pt::new(0., 0.), Pt::new(4., 3.));
+        let pg: Polygon<Pt, false, true> = convert(&b);
+        let pts: alloc::vec::Vec<(f64, f64)> = pg
+            .exterior()
+            .points()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(
+            pts,
+            alloc::vec![(0., 0.), (4., 0.), (4., 3.), (0., 3.), (0., 0.)]
+        );
+        assert_eq!(crate::area::ring_area(pg.exterior()), 12.0);
+    }
+
+    /// An open-declared destination receives the four corners without a
+    /// closing duplicate.
+    #[test]
+    fn box_to_open_polygon_has_four_stored_points() {
+        let b: Box<Pt> = Box::from_corners(Pt::new(0., 0.), Pt::new(4., 3.));
+        let pg: Polygon<Pt, true, false> = convert(&b);
+        assert_eq!(pg.exterior().points().count(), 4);
+        assert_eq!(crate::area::ring_area(pg.exterior()), 12.0);
+    }
+
+    /// A 3-D box converts too: the planar rectangle is drawn in `x`/`y`
+    /// and the third ordinate keeps the point's default.
+    #[test]
+    fn three_d_box_to_polygon_uses_the_first_two_dimensions() {
+        use geometry_model::Point3D;
+        type P3 = Point3D<f64, Cartesian>;
+        let b: Box<P3> = Box::from_corners(P3::new(0., 0., 0.), P3::new(4., 3., 1.));
+        let pg: Polygon<P3> = convert(&b);
+        assert_eq!(pg.exterior().points().count(), 5);
+        assert!(pg.exterior().points().all(|p| p.get::<2>() == 0.0));
+        assert_eq!(crate::area::ring_area(pg.exterior()), 12.0);
     }
 }

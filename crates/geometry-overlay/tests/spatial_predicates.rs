@@ -8,7 +8,7 @@
 
 use geometry_algorithm::within;
 use geometry_cs::Cartesian;
-use geometry_model::{Point2D, Polygon, Ring, polygon};
+use geometry_model::{Linestring, MultiLinestring, MultiPolygon, Point2D, Polygon, Ring, polygon};
 use geometry_overlay::relate::Dimension;
 use geometry_overlay::{
     ValidityFailure, crosses, is_valid_polygon, overlaps, point_on_surface, relate_matrix, touches,
@@ -146,4 +146,90 @@ fn representative_point_rejects_degenerate_surfaces() {
         vec![Ring::<P>::new()],
     );
     assert!(point_on_surface(&with_empty_hole).is_some());
+}
+
+/// Boost `relation`: a line grazing a corner is `F01FF0212` (touches,
+/// does not cross); a line that stops 0.5 inside after one crossing is
+/// `1010F0212` (crosses, does not merely touch); a vertex resting on an
+/// edge from outside touches. The one-member multi-linestring must agree.
+#[test]
+fn line_polygon_contacts_match_boost_matrices() {
+    let sq = square(0.0, 0.0, 2.0);
+    let tangent = Linestring::from_vec(vec![P::new(-2.0, 0.0), P::new(2.0, 4.0)]);
+    assert!(
+        relate_matrix(&tangent, &sq)
+            .unwrap()
+            .matches("F01FF0212")
+            .unwrap()
+    );
+    assert!(!crosses(&tangent, &sq).unwrap());
+    assert!(touches(&tangent, &sq).unwrap());
+    let as_multi = MultiLinestring::from_vec(vec![tangent.clone()]);
+    assert_eq!(
+        relate_matrix(&as_multi, &sq).unwrap(),
+        relate_matrix(&tangent, &sq).unwrap()
+    );
+
+    let short_entry = Linestring::from_vec(vec![P::new(-10.0, 1.0), P::new(0.5, 1.0)]);
+    assert!(
+        relate_matrix(&short_entry, &sq)
+            .unwrap()
+            .matches("1010F0212")
+            .unwrap()
+    );
+    assert!(crosses(&short_entry, &sq).unwrap());
+    assert!(!touches(&short_entry, &sq).unwrap());
+
+    let vertex_on_edge = Linestring::from_vec(vec![P::new(1.0, 2.0), P::new(1.0, 5.0)]);
+    assert!(
+        relate_matrix(&vertex_on_edge, &sq)
+            .unwrap()
+            .matches("FF1F00212")
+            .unwrap()
+    );
+    assert!(touches(&vertex_on_edge, &sq).unwrap());
+    assert!(!crosses(&vertex_on_edge, &sq).unwrap());
+}
+
+/// Boost `relation(square, annulus) = 212F1FFF2` and
+/// `relation(annulus, square) = 2FF11F2F2`: the square's boundary
+/// coincides with the annulus's outer ring and is nowhere in its
+/// exterior, although the square has area (the hole) outside the
+/// annulus. The static pair and the one-member multi-polygon agree.
+#[test]
+fn square_vs_annulus_boundary_cells_match_boost() {
+    let sq: Polygon<P> = polygon![[
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (10.0, 10.0),
+        (0.0, 10.0),
+        (0.0, 0.0)
+    ]];
+    let annulus: Polygon<P> = polygon![
+        [
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+            (0.0, 0.0)
+        ],
+        [(3.0, 3.0), (3.0, 7.0), (7.0, 7.0), (7.0, 3.0), (3.0, 3.0)]
+    ];
+    assert!(
+        relate_matrix(&sq, &annulus)
+            .unwrap()
+            .matches("212F1FFF2")
+            .unwrap()
+    );
+    assert!(
+        relate_matrix(&annulus, &sq)
+            .unwrap()
+            .matches("2FF11F2F2")
+            .unwrap()
+    );
+    let as_multi = MultiPolygon::from_vec(vec![sq.clone()]);
+    assert_eq!(
+        relate_matrix(&as_multi, &annulus).unwrap(),
+        relate_matrix(&sq, &annulus).unwrap()
+    );
 }

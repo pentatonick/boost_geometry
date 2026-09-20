@@ -37,10 +37,18 @@ pub trait IsConvex {
 }
 
 /// Convexity test for a ring: every consecutive cross-product shares one
-/// sign (zero permitted). Uses modular indexing so the closing edge of a
-/// closed ring is checked too.
+/// sign (zero permitted). A closing duplicate is dropped first and the
+/// walk indexes modularly, so the seam vertex's own turn is examined —
+/// kept, the duplicate makes both windows touching the seam degenerate
+/// and a reflex first vertex goes unnoticed.
 fn ring_is_convex<P: PointTrait, const CW: bool, const CL: bool>(ring: &Ring<P, CW, CL>) -> bool {
-    let pts: Vec<&P> = ring.points().collect();
+    let mut pts: Vec<&P> = ring.points().collect();
+    if pts.len() >= 2 {
+        let (first, last) = (pts[0], pts[pts.len() - 1]);
+        if first.get::<0>() == last.get::<0>() && first.get::<1>() == last.get::<1>() {
+            pts.pop();
+        }
+    }
     let len = pts.len();
     if len < 3 {
         return true;
@@ -173,5 +181,37 @@ mod tests {
         assert!(is_convex(&all_convex));
         let mixed = MultiPolygon(alloc::vec![convex, reflex]);
         assert!(!is_convex(&mixed));
+    }
+
+    /// The turn at the seam vertex counts: a polygon whose only reflex
+    /// vertex is its first (and closing) vertex is not convex.
+    #[test]
+    fn reflex_vertex_at_closed_ring_seam_is_not_convex() {
+        let pg: Polygon<Pt> =
+            polygon![[(2., 1.), (4., 4.), (0., 4.), (0., 0.), (4., 0.), (2., 1.)]];
+        assert!(!is_convex(&pg));
+        let r: Ring<Pt> = Ring::from_vec(alloc::vec![
+            Pt::new(2., 1.),
+            Pt::new(4., 4.),
+            Pt::new(0., 4.),
+            Pt::new(0., 0.),
+            Pt::new(4., 0.),
+            Pt::new(2., 1.),
+        ]);
+        assert!(!is_convex(&r));
+    }
+
+    /// Below two vertices there is no pair to compare for a closing
+    /// duplicate, so the seam-trimming step is skipped entirely. Both
+    /// degenerate rings still have to answer — convex, by the same
+    /// `len < 3` rule that covers the two-point ring — rather than
+    /// index into an empty sequence.
+    #[test]
+    fn rings_below_two_vertices_are_trivially_convex() {
+        let empty: Ring<Pt> = Ring::from_vec(alloc::vec![]);
+        assert!(is_convex(&empty));
+
+        let single: Ring<Pt> = Ring::from_vec(alloc::vec![Pt::new(3., 7.)]);
+        assert!(is_convex(&single));
     }
 }

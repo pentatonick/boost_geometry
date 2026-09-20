@@ -152,8 +152,14 @@ where
         let mut pts = Vec::new();
         g.collect_points(&mut pts);
         if pts.len() < 3 {
-            // Degenerate: a 0-, 1-, or 2-point hull is the input itself.
-            return Ring::from_vec(pts);
+            // Degenerate: a 0-, 1-, or 2-point hull is the input itself,
+            // closed onto its first vertex like every other hull so the
+            // closed-declared output ring keeps its invariant.
+            let mut ring = pts;
+            if let Some(&first) = ring.first() {
+                ring.push(first);
+            }
+            return Ring::from_vec(ring);
         }
 
         // `monotone_chain` returns a CCW hull; reverse for the
@@ -214,9 +220,42 @@ mod tests {
     }
 
     #[test]
-    fn hull_of_two_points_is_the_input() {
+    fn hull_of_two_points_is_the_input_closed() {
         let mp = multi_point(&[(0., 0.), (1., 1.)]);
         let hull = MonotoneChain.convex_hull(&mp);
-        assert_eq!(hull.points().count(), 2);
+        let pts: alloc::vec::Vec<(f64, f64)> = hull
+            .0
+            .iter()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(pts, alloc::vec![(0., 0.), (1., 1.), (0., 0.)]);
+    }
+
+    /// The hull is emitted clockwise and closed, carrying only the
+    /// corners: positive signed area under Boost's clockwise-positive
+    /// convention and a right turn at every vertex.
+    #[test]
+    fn hull_is_wound_clockwise_and_carries_only_the_corners() {
+        use crate::area::{AreaStrategy, ShoelaceArea};
+        let mp = multi_point(&[(0., 0.), (4., 0.), (4., 4.), (0., 4.), (2., 2.), (1., 3.)]);
+        let hull = MonotoneChain.convex_hull(&mp);
+        let signed = ShoelaceArea.area(&hull);
+        assert!(
+            signed > 0.0,
+            "declared-CW ring must have positive signed area, got {signed}"
+        );
+        assert!((signed - 16.0).abs() < 1e-12);
+        let pts: alloc::vec::Vec<(f64, f64)> = hull
+            .0
+            .iter()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(pts.len(), 5);
+        assert_eq!(pts[0], pts[4]);
+        for w in pts.windows(3) {
+            let cross =
+                (w[1].0 - w[0].0) * (w[2].1 - w[1].1) - (w[1].1 - w[0].1) * (w[2].0 - w[1].0);
+            assert!(cross < 0.0, "left turn in a clockwise hull: {pts:?}");
+        }
     }
 }

@@ -143,3 +143,67 @@ fn rational_promotion_keeps_exact_storage() {
         TypeId::of::<Q32>()
     );
 }
+
+/// Subtraction is exact whenever its result is representable — `-1 - MIN`
+/// is `MAX`, and it must not detour through a `-MIN` the storage cannot hold.
+#[test]
+fn rational_subtraction_of_min_is_exact_when_the_result_fits() {
+    assert_eq!(
+        Q::from_integer(-1) - Q::from_integer(i64::MIN),
+        Q::from_integer(i64::MAX)
+    );
+    assert_eq!(
+        Q32::from_integer(-1) - Q32::from_integer(i32::MIN),
+        Q32::from_integer(i32::MAX)
+    );
+}
+
+/// A well-formed literal too wide for the intermediate is an `Overflow`
+/// in every grammar form; `Invalid` is reserved for malformed syntax.
+#[test]
+fn rational_parse_reports_overflow_for_every_grammar_form() {
+    // 2^127: one past i128::MAX, so past every storage width.
+    let too_wide = "170141183460469231731687303715884105728";
+    assert_eq!(
+        Q::from_str(&format!("{too_wide}.0")),
+        Err(ParseRationalError::Overflow)
+    );
+    assert_eq!(Q::from_str(too_wide), Err(ParseRationalError::Overflow));
+    assert_eq!(
+        Q::from_str(&format!("{too_wide}/3")),
+        Err(ParseRationalError::Overflow)
+    );
+    assert_eq!(
+        Q::from_str(&format!("1/{too_wide}")),
+        Err(ParseRationalError::Overflow)
+    );
+    for malformed in [
+        "1/2/3", "1e3", "abc", "--1", "1/", "/2", " 1", "1.2.3", "+", "",
+    ] {
+        assert_eq!(
+            Q::from_str(malformed),
+            Err(ParseRationalError::Invalid),
+            "{malformed:?}"
+        );
+    }
+}
+
+/// Overflow is judged on the *reduced* value: trailing fraction zeros do
+/// not widen the denominator.
+#[test]
+fn rational_parse_reduces_before_judging_overflow() {
+    let padded = format!("1.5{}", "0".repeat(40));
+    assert_eq!(Q::from_str(&padded), Ok(Q::new(3, 2)));
+    assert_eq!(Q::from_str("2.000"), Ok(Q::from_integer(2)));
+}
+
+/// Zero over any non-zero denominator is zero, including one whose
+/// magnitude does not fit the intermediate as a positive value.
+#[test]
+fn rational_parse_zero_over_any_denominator_is_zero() {
+    assert_eq!(Q::from_str("0/-5").unwrap(), Q::from_integer(0));
+    assert_eq!(
+        Q::from_str("0/-170141183460469231731687303715884105728").unwrap(),
+        Q::from_integer(0)
+    );
+}

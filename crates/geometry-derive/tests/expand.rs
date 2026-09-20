@@ -106,3 +106,24 @@ fn ui() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/unknown_cs.rs");
 }
+
+// ---------------------------------------------------------------------
+// Case — a parameterised coordinate system resolves without importing
+// its unit: the generated block brings `geometry_cs` into scope itself.
+// ---------------------------------------------------------------------
+
+#[derive(Default, Point)]
+#[geometry(cs = "Spherical<Degree>", scalar = "f64")]
+struct LonLatWithoutUnitImport {
+    lon: f64,
+    lat: f64,
+}
+
+#[test]
+fn parameterised_cs_resolves_without_importing_the_unit() {
+    fn family<P: geometry_trait::Point>() -> &'static str {
+        core::any::type_name::<<P::Cs as geometry_cs::CoordinateSystem>::Family>()
+    }
+    assert!(family::<LonLatWithoutUnitImport>().contains("SphericalFamily"));
+    let _ = LonLatWithoutUnitImport::default();
+}

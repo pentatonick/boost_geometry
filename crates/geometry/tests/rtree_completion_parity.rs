@@ -291,3 +291,87 @@ fn serde_round_trip_restores_a_queryable_mutable_tree_through_the_facade() {
     assert_eq!(ids, (10..20).collect::<Vec<_>>());
     assert_eq!(restored.remove(&(Bounds::point([12.0, 2.0]), 12)), 1);
 }
+
+/// `and(l, r).covers_all` is only sound as `l.covers_all && r.covers_all`:
+/// on a tree deep enough for a branch child to be fully covered by one
+/// operand, the other operand must still filter that subtree.
+#[test]
+fn and_keeps_filtering_inside_a_subtree_covered_by_one_operand() {
+    let tree: Rtree<Entry> = (0..40u32)
+        .map(|id| Entry::point(id, [f64::from(id), 0.0]))
+        .collect();
+    assert!(tree.height() > 1, "the fixture must have branch nodes");
+    let row = Bounds::new([-1.0, -1.0], [40.0, 1.0]);
+
+    let evens =
+        tree.query_with(Predicate::Intersects(row).and(satisfies(|v: &Entry| v.id % 2 == 0)));
+    assert_eq!(sorted_ids(evens), (0..40).step_by(2).collect::<Vec<_>>());
+
+    let left_half = Bounds::new([-1.0, -1.0], [19.0, 1.0]);
+    let both = tree.query_with(Predicate::Intersects(row).and(Predicate::CoveredBy(left_half)));
+    assert_eq!(sorted_ids(both), (0..20).collect::<Vec<_>>());
+
+    let neither =
+        tree.query_with(Predicate::Intersects(row).and(!Predicate::Intersects(left_half)));
+    assert_eq!(sorted_ids(neither), (20..40).collect::<Vec<_>>());
+}
+
+/// Boost's box-level `within` (`box_in_box.hpp`) requires `min < max` on
+/// *every* axis of the contained box: a horizontal or vertical segment is
+/// covered by, but not within, a window, and a query box degenerate in one
+/// axis is covered by, but not contained by, the boxes around it.
+#[test]
+fn within_and_contains_reject_boxes_degenerate_in_one_axis_only() {
+    let tree: Rtree<Entry> = [
+        Entry::new(0, [2.0, 5.0], [8.0, 5.0]), // horizontal segment
+        Entry::new(1, [5.0, 2.0], [5.0, 8.0]), // vertical segment
+        Entry::new(2, [2.0, 2.0], [8.0, 8.0]), // proper box
+        Entry::point(3, [4.0, 4.0]),
+    ]
+    .into_iter()
+    .collect();
+    let window = Bounds::new([0.0, 0.0], [10.0, 10.0]);
+    assert_eq!(sorted_ids(tree.query(Predicate::Within(window))), [2]);
+    assert_eq!(
+        sorted_ids(tree.query(Predicate::CoveredBy(window))),
+        [0, 1, 2, 3]
+    );
+
+    let horizontal_query = Bounds::new([3.0, 5.0], [7.0, 5.0]);
+    let vertical_query = Bounds::new([5.0, 3.0], [5.0, 7.0]);
+    assert!(tree.query(Predicate::Contains(horizontal_query)).is_empty());
+    assert!(tree.query(Predicate::Contains(vertical_query)).is_empty());
+    assert_eq!(
+        sorted_ids(tree.query(Predicate::Covers(horizontal_query))),
+        [0, 2]
+    );
+    assert_eq!(
+        sorted_ids(tree.query(Predicate::Covers(vertical_query))),
+        [1, 2]
+    );
+}
+
+/// `Values` is an `ExactSizeIterator`: its hint is exact before and after
+/// mutation and while it is being consumed, so `len()` never panics and
+/// `collect_seq`-style consumers can trust it.
+#[test]
+fn iter_is_an_exact_size_iterator_through_mutation_and_partial_consumption() {
+    let mut tree: Rtree<Entry> = (0..37u32)
+        .map(|id| Entry::new(id, [f64::from(id), 1.0], [f64::from(id) + 0.5, 2.0]))
+        .collect();
+    assert_eq!(tree.iter().size_hint(), (37, Some(37)));
+    assert_eq!(tree.iter().len(), 37);
+    for id in 100..110u32 {
+        tree.insert(Entry::new(id, [0.0, 0.0], [1.0, 1.0]));
+    }
+    assert_eq!(tree.iter().len(), 47);
+    assert_eq!(tree.remove(&Entry::new(3, [3.0, 1.0], [3.5, 2.0])), 1);
+    assert_eq!(tree.iter().size_hint(), (46, Some(46)));
+    let mut it = tree.iter();
+    for consumed in 1..=20 {
+        it.next().unwrap();
+        assert_eq!(it.len(), 46 - consumed);
+    }
+    assert_eq!(it.count(), 26);
+    assert_eq!(Rtree::<Entry>::new().iter().size_hint(), (0, Some(0)));
+}

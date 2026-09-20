@@ -3,9 +3,10 @@
 //!
 //! Mirrors `boost::geometry::discrete_hausdorff_distance` from
 //! `boost/geometry/algorithms/discrete_hausdorff_distance.hpp`. The
-//! Boost overload is symmetric — `max(directed(A,B), directed(B,A))`
-//! where `directed(A,B) = max_{p ∈ A} min_{q ∈ B} dist(p, q)` — the
-//! Rust port matches. `O(m × n)` time, `O(1)` space.
+//! Boost overload is *directed* — `max_{p ∈ A} min_{q ∈ B} dist(p, q)`,
+//! walking the first geometry's vertices only — and the Rust port
+//! matches; the symmetric Hausdorff distance is `max(d(A, B), d(B, A))`
+//! and is the caller's to compose. `O(m × n)` time, `O(1)` space.
 
 use alloc::vec::Vec;
 
@@ -24,8 +25,8 @@ type DefaultDistOut<L1, L2> = <DefaultDistanceStrategy<
     <L2 as Geometry>::Point,
 > as DistanceStrategy<<L1 as Geometry>::Point, <L2 as Geometry>::Point>>::Out;
 
-/// Symmetric discrete Hausdorff distance between two linestrings, using
-/// the default distance strategy for their coordinate systems.
+/// Directed discrete Hausdorff distance from `l1` to `l2`, using the
+/// default distance strategy for their coordinate systems.
 ///
 /// Mirrors `boost::geometry::discrete_hausdorff_distance(l1, l2)` from
 /// `boost/geometry/algorithms/discrete_hausdorff_distance.hpp`.
@@ -47,15 +48,14 @@ where
     discrete_hausdorff_distance_with(l1, l2, s)
 }
 
-/// Symmetric discrete Hausdorff distance using an explicit distance
-/// strategy `dist`.
+/// Directed discrete Hausdorff distance from `l1` to `l2` using an
+/// explicit distance strategy `dist`.
 ///
 /// Mirrors the strategy-taking `boost::geometry::discrete_hausdorff_distance`
 /// overload from
-/// `boost/geometry/algorithms/discrete_hausdorff_distance.hpp`. The
-/// reverse direction reuses the same strategy with the arguments
-/// swapped, so a single `DistanceStrategy<L1::Point, L2::Point>` serves
-/// both directed suprema.
+/// `boost/geometry/algorithms/discrete_hausdorff_distance.hpp`: the
+/// supremum over `l1`'s vertices of the distance to the nearest vertex
+/// of `l2`.
 ///
 /// # Panics
 ///
@@ -80,12 +80,7 @@ where
     );
 
     // directed(A, B): outer over `seq1` (L1 points), inner over `seq2`.
-    let sup_ab = directed_sup(&seq1, &seq2, |p, q| dist.distance(p, q));
-    // directed(B, A): outer over `seq2`, inner over `seq1`. The distance
-    // call keeps its `(L1::Point, L2::Point)` argument order.
-    let sup_ba = directed_sup(&seq2, &seq1, |p, q| dist.distance(q, p));
-
-    if sup_ab > sup_ba { sup_ab } else { sup_ba }
+    directed_sup(&seq1, &seq2, |p, q| dist.distance(p, q))
 }
 
 /// Directed supremum `max_{p ∈ a} min_{q ∈ b} f(p, q)`.
@@ -164,14 +159,25 @@ mod tests {
         assert!((discrete_hausdorff_distance(&a, &b) - 1.0).abs() < 1e-9);
     }
 
-    /// The symmetric property: `H(a, b) == H(b, a)`.
+    /// The distance is directed, as Boost's is: the longer line's far
+    /// vertex is one unit from the shorter line, while every vertex of the
+    /// shorter line lies on the longer one.
     #[test]
-    fn symmetric() {
+    fn directed_distance_depends_on_argument_order() {
         let a: Linestring<Pt> = linestring![(0., 0.), (1., 0.), (2., 0.)];
         let b: Linestring<Pt> = linestring![(0., 0.), (1., 0.)];
-        assert_eq!(
-            discrete_hausdorff_distance(&a, &b).to_bits(),
-            discrete_hausdorff_distance(&b, &a).to_bits(),
-        );
+        assert_eq!(discrete_hausdorff_distance(&a, &b), 1.0);
+        assert_eq!(discrete_hausdorff_distance(&b, &a), 0.0);
+    }
+
+    /// Boost's overload is directed: every vertex of the straight line
+    /// coincides with a vertex of the bent one (0), while the bent line's
+    /// apex is √34 from the nearest vertex of the straight one.
+    #[test]
+    fn matches_boost_directed_value() {
+        let a: Linestring<Pt> = linestring![(0.0, 0.0), (10.0, 0.0)];
+        let b: Linestring<Pt> = linestring![(0.0, 0.0), (5.0, 3.0), (10.0, 0.0)];
+        assert!(discrete_hausdorff_distance(&a, &b).abs() < 1e-12);
+        assert!((discrete_hausdorff_distance(&b, &a) - 34.0_f64.sqrt()).abs() < 1e-12);
     }
 }

@@ -7,15 +7,15 @@ use boost_geometry::model::{
 };
 use boost_geometry::overlay::{
     JoinStrategy, OverlayError, PointStrategy, buffer, buffer_convex_polygon, buffer_with,
-    buffer_with_strategy,
+    buffer_with_strategy, is_valid,
 };
-use boost_geometry::prelude::{area, distance_with};
+use boost_geometry::prelude::{area, covered_by, distance_with};
 use boost_geometry::strategy::buffer::{
     BufferDistanceStrategy, BufferEndStrategy, BufferJoinStrategy, BufferPointStrategy,
     BufferSettings, BufferSideStrategy, GeographicBuffer, SphericalBuffer,
 };
 use boost_geometry::strategy::{Haversine, Vincenty};
-use boost_geometry::trait_::{MultiPolygon as _, Polygon as _, Ring as _};
+use boost_geometry::trait_::{MultiPolygon as _, Point as _, Polygon as _, Ring as _};
 
 type P = Point2D<f64, Cartesian>;
 
@@ -927,4 +927,230 @@ fn angular_buffer_wraps_antimeridian_and_reprojects_holes() {
     let donut = Polygon::with_inners(outer, vec![inner]);
     let result = buffer_with_strategy(&donut, BufferSettings::round(100.0, 36), spherical).unwrap();
     assert_eq!(result.polygons().next().unwrap().interiors().count(), 1);
+}
+
+fn round_settings(distance: f64) -> BufferSettings {
+    BufferSettings {
+        distance: BufferDistanceStrategy::Symmetric(distance),
+        side: BufferSideStrategy::Straight,
+        join: BufferJoinStrategy::Round {
+            points_per_circle: 720,
+        },
+        end: BufferEndStrategy::Flat,
+        point: BufferPointStrategy::Square,
+    }
+}
+
+/// Boost 1.83 `join_round`: eroding the L by 0.5 leaves one valid polygon
+/// of area 9.05366 — the arc at the reflex corner sweeps the short way,
+/// on the eroded side, not through the material.
+#[test]
+fn round_erosion_of_an_l_shape_rounds_the_reflex_corner_inward() {
+    let l: Polygon<P> = polygon![[
+        (0.0, 0.0),
+        (0.0, 6.0),
+        (2.0, 6.0),
+        (2.0, 2.0),
+        (6.0, 2.0),
+        (6.0, 0.0),
+        (0.0, 0.0)
+    ]];
+    let result = buffer_with(&l, round_settings(-0.5)).unwrap();
+    assert_eq!(result.polygons().count(), 1, "{result:?}");
+    assert!(
+        (buffered_area(&result) - 9.053_66).abs() < 0.01,
+        "area {}",
+        buffered_area(&result)
+    );
+    assert_eq!(is_valid(&result), Ok(()));
+}
+
+/// Boost 1.83 `join_round`: growing a square with an L-shaped hole by
+/// 0.5 keeps one valid polygon with one hole, area 115.732.
+#[test]
+fn round_growth_of_a_square_with_an_l_hole_is_valid() {
+    let holed: Polygon<P> = polygon![
+        [
+            (0.0, 0.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 0.0),
+            (0.0, 0.0)
+        ],
+        [
+            (2.0, 2.0),
+            (6.0, 2.0),
+            (6.0, 4.0),
+            (4.0, 4.0),
+            (4.0, 6.0),
+            (2.0, 6.0),
+            (2.0, 2.0)
+        ]
+    ];
+    let result = buffer_with(&holed, round_settings(0.5)).unwrap();
+    assert!(
+        (buffered_area(&result) - 115.732).abs() < 0.01,
+        "area {}",
+        buffered_area(&result)
+    );
+    assert_eq!(result.polygons().count(), 1);
+    assert_eq!(result.polygons().next().unwrap().interiors().count(), 1);
+    assert_eq!(is_valid(&result), Ok(()));
+}
+
+/// Distance from `p` to the nearest edge of `pg`.
+fn boundary_distance(p: (f64, f64), pg: &Polygon<P>) -> f64 {
+    let mut best = f64::INFINITY;
+    for ring in core::iter::once(pg.exterior()).chain(pg.interiors()) {
+        let pts: Vec<(f64, f64)> = ring
+            .points()
+            .map(|q| (q.get::<0>(), q.get::<1>()))
+            .collect();
+        for w in pts.windows(2) {
+            let (dx, dy) = (w[1].0 - w[0].0, w[1].1 - w[0].1);
+            let t =
+                (((p.0 - w[0].0) * dx + (p.1 - w[0].1) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+            best = best
+                .min(((p.0 - w[0].0 - t * dx).powi(2) + (p.1 - w[0].1 - t * dy).powi(2)).sqrt());
+        }
+    }
+    best
+}
+
+/// The polygon miter limit (five times the distance by default) caps the
+/// spike of a 5.7° apex, whose uncapped miter would sit about 20·d away.
+#[test]
+fn miter_limit_is_honoured_for_polygons() {
+    let spike: Polygon<P> = polygon![[(0.0, 0.0), (5.0, 100.0), (10.0, 0.0), (0.0, 0.0)]];
+    let settings = BufferSettings {
+        distance: BufferDistanceStrategy::Symmetric(1.0),
+        side: BufferSideStrategy::Straight,
+        join: BufferJoinStrategy::Miter { limit: 5.0 },
+        end: BufferEndStrategy::Flat,
+        point: BufferPointStrategy::Square,
+    };
+    let result = buffer_with(&spike, settings).unwrap();
+    let farthest = result
+        .polygons()
+        .flat_map(|pg| pg.exterior().points())
+        .map(|p| boundary_distance((p.get::<0>(), p.get::<1>()), &spike))
+        .fold(0.0_f64, f64::max);
+    assert!(
+        farthest <= 5.0 + 1e-9,
+        "a vertex sits {farthest} from the input, beyond the 5·d limit"
+    );
+}
+
+// ---- Offsets whose offsetted ring crosses itself -------------------------
+//
+// Boost never trusts the offsetted ring: `buffered_piece_collection` finds
+// the turns between the pieces and traverses them. Where a notch is narrower
+// than twice the distance, or a neck thinner than that, the raw offsetted
+// ring crosses itself, and the port rebuilds the offset from the same pieces
+// through the overlay engine.
+
+fn u_shape() -> Polygon<P> {
+    polygon![[
+        (0.0, 0.0),
+        (0.0, 6.0),
+        (2.0, 6.0),
+        (2.0, 2.0),
+        (4.0, 2.0),
+        (4.0, 6.0),
+        (6.0, 6.0),
+        (6.0, 0.0),
+        (0.0, 0.0)
+    ]]
+}
+
+fn dumbbell() -> Polygon<P> {
+    polygon![[
+        (0.0, 0.0),
+        (0.0, 10.0),
+        (10.0, 10.0),
+        (10.0, 5.5),
+        (20.0, 5.5),
+        (20.0, 10.0),
+        (30.0, 10.0),
+        (30.0, 0.0),
+        (20.0, 0.0),
+        (20.0, 4.5),
+        (10.0, 4.5),
+        (10.0, 0.0),
+        (0.0, 0.0)
+    ]]
+}
+
+/// Boost 1.83 `join_round`: growing the U by 1.5 closes its 2-wide notch
+/// into one valid polygon of area 78.8281. The join arcs at the notch's two
+/// top corners meet at `(3, 7.118)`, which is where the outline dips.
+#[test]
+fn round_growth_of_a_u_closes_the_notch() {
+    let result = buffer_with(&u_shape(), round_settings(1.5)).unwrap();
+    assert_eq!(result.polygons().count(), 1, "{result:?}");
+    assert_eq!(result.polygons().next().unwrap().interiors().count(), 0);
+    assert!(
+        (buffered_area(&result) - 78.8281).abs() < 0.01,
+        "area {}",
+        buffered_area(&result)
+    );
+    assert_eq!(is_valid(&result), Ok(()));
+    let grown = result.polygons().next().unwrap();
+    assert!(covered_by(&P::new(3.0, 4.0), grown), "the notch is filled");
+    assert!(covered_by(&P::new(3.0, 7.0), grown), "below the dip");
+    assert!(!covered_by(&P::new(3.0, 7.3), grown), "above the dip");
+
+    // A ring is a polygon without holes, and takes the same path.
+    let as_ring = buffer_with(u_shape().exterior(), round_settings(1.5)).unwrap();
+    assert!((buffered_area(&as_ring) - buffered_area(&result)).abs() < 1e-9);
+    assert_eq!(is_valid(&as_ring), Ok(()));
+}
+
+/// Eroding the dumbbell by 1 removes its 1-wide neck and leaves the two
+/// 10×10 lobes as separate valid polygons; nothing of either is within 1 of
+/// the neck's walls once the neck is gone, so each lobe is the 8×8 core plus
+/// the sliver the round join leaves between the arcs at the neck's two
+/// reflex corners: 64 + 0.0434. C++ Boost 1.83 keeps only one of the two
+/// lobes here — with exactly that area, 64.0434 — where the erosion keeps
+/// both.
+#[test]
+fn round_erosion_of_a_dumbbell_splits_it_into_its_lobes() {
+    let result = buffer_with(&dumbbell(), round_settings(-1.0)).unwrap();
+    assert_eq!(result.polygons().count(), 2, "{result:?}");
+    for lobe in result.polygons() {
+        assert!(
+            (area(lobe) - 64.0434).abs() < 1e-3,
+            "lobe area {}",
+            area(lobe)
+        );
+        assert_eq!(lobe.interiors().count(), 0);
+    }
+    assert_eq!(is_valid(&result), Ok(()));
+    assert!(
+        result
+            .polygons()
+            .any(|lobe| covered_by(&P::new(5.0, 5.0), lobe))
+    );
+    assert!(
+        result
+            .polygons()
+            .any(|lobe| covered_by(&P::new(25.0, 5.0), lobe))
+    );
+    assert!(
+        !result
+            .polygons()
+            .any(|lobe| covered_by(&P::new(15.0, 5.0), lobe))
+    );
+}
+
+/// The same erosion with a miter join: the offset lines at each reflex
+/// corner meet at the lobe's corner, so the lobes are exactly 8×8.
+#[test]
+fn miter_erosion_of_a_dumbbell_leaves_two_squares() {
+    let result = buffer_with(&dumbbell(), miter_settings(-1.0)).unwrap();
+    assert_eq!(result.polygons().count(), 2, "{result:?}");
+    for lobe in result.polygons() {
+        assert!((area(lobe) - 64.0).abs() < 1e-9, "lobe area {}", area(lobe));
+    }
+    assert_eq!(is_valid(&result), Ok(()));
 }

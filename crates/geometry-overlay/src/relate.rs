@@ -23,6 +23,7 @@
 
 use alloc::vec::Vec;
 
+use geometry_coords::math::{hypot, mul_add};
 use geometry_coords::{CoordinateScalar, precise_math};
 use geometry_cs::{Cartesian, CartesianFamily, CoordinateSystem};
 use geometry_model::{DynGeometry, Point2D, Polygon, Ring};
@@ -37,7 +38,7 @@ use geometry_trait::{
 };
 
 use crate::operation::OverlayError;
-use crate::predicate::range_guard::{SAFE_ABS_MAX, polygon_in_range};
+use crate::predicate::range_guard::SAFE_ABS_MAX;
 
 /// The dimension of an intersection cell in a [`De9im`] matrix.
 ///
@@ -432,9 +433,13 @@ where
     P: Point + Copy,
     P::Scalar: Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+    RelateTopology: RelateStrategy<L, G>,
 {
     fn relate(&self, line: &L, polygon: &G) -> Result<De9im, OverlayError> {
-        Ok(relate_linestring_polygon(line, polygon))
+        // The topology engine is the one implementation of the line × areal
+        // DE-9IM semantics (tangent contacts, boundary runs, short entries);
+        // the former sampling kernel disagreed with it and with Boost.
+        RelateTopology.relate(line, polygon)
     }
 }
 
@@ -457,9 +462,10 @@ where
     P: Point + Copy,
     P::Scalar: Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+    RelateTopology: RelateStrategy<G, L>,
 {
     fn relate(&self, polygon: &G, line: &L) -> Result<De9im, OverlayError> {
-        Ok(relate_linestring_polygon(line, polygon).transposed())
+        RelateTopology.relate(polygon, line)
     }
 }
 
@@ -470,9 +476,15 @@ where
     P: PointMut + Default + Copy,
     P::Scalar: CoordinateScalar + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+    RelateTopology: RelateStrategy<A, B>,
 {
     fn relate(&self, first: &A, second: &B) -> Result<De9im, OverlayError> {
-        relate_polygon_polygon(first, second)
+        // Same engine as the multi-polygon path, so a polygon relates to
+        // an annulus exactly as its one-member multi-polygon does (the
+        // former areal kernel derived the boundary/exterior cells from
+        // "has area outside", which a hole satisfies without any boundary
+        // reaching the exterior).
+        RelateTopology.relate(first, second)
     }
 }
 
@@ -906,52 +918,6 @@ where
     matrix
 }
 
-fn relate_linestring_polygon<L, G, P>(line: &L, polygon: &G) -> De9im
-where
-    L: LinestringTrait<Point = P>,
-    G: PolygonTrait<Point = P>,
-    P: Point + Copy,
-    P::Scalar: Into<f64>,
-{
-    let mut matrix = empty_matrix();
-    matrix.m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Area;
-    matrix.m[feature::EXTERIOR][feature::BOUNDARY] = Dimension::Curve;
-    for point in line_boundary_points(line) {
-        let location = point_location_polygon(point, polygon);
-        matrix.m[feature::BOUNDARY][location.index()] = Dimension::Point;
-    }
-
-    let mut boundary_crossings = 0usize;
-    for_each_line_segment(line, |line1, line2| {
-        for fraction in [0.125, 0.375, 0.625, 0.875] {
-            match xy_location_polygon(interpolate(xy(line1), xy(line2), fraction), polygon) {
-                Location::Interior => {
-                    matrix.m[feature::INTERIOR][feature::INTERIOR] = Dimension::Curve;
-                }
-                Location::Boundary => {
-                    matrix.m[feature::INTERIOR][feature::BOUNDARY] = Dimension::Point;
-                }
-                Location::Exterior => {
-                    matrix.m[feature::INTERIOR][feature::EXTERIOR] = Dimension::Curve;
-                }
-            }
-        }
-        for_each_polygon_segment(polygon, |polygon1, polygon2| {
-            if let SegmentRelation::Point(point) =
-                segment_relation(xy(line1), xy(line2), xy(polygon1), xy(polygon2))
-            {
-                boundary_crossings += 1;
-                let line_location = xy_location_linestring(point, line);
-                matrix.m[line_location.index()][feature::BOUNDARY] = Dimension::Point;
-            }
-        });
-    });
-    if boundary_crossings >= 2 {
-        matrix.m[feature::INTERIOR][feature::INTERIOR] = Dimension::Curve;
-    }
-    matrix
-}
-
 fn point_equal<A, B>(first: &A, second: &B) -> bool
 where
     A: Point,
@@ -1047,7 +1013,7 @@ where
 {
     let mut boundary = false;
     for_each_polygon_segment(polygon, |first, second| {
-        if point_on_segment(point, xy(first), xy(second)) {
+        if point_near_segment(point, xy(first), xy(second)) {
             boundary = true;
         }
     });
@@ -1194,6 +1160,33 @@ fn point_on_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> bool {
         && point[0] <= start[0].max(end[0])
         && point[1] >= start[1].min(end[1])
         && point[1] <= start[1].max(end[1])
+}
+
+/// Is `point` on the closed segment `start`–`end`, within rounding?
+///
+/// The exact [`point_on_segment`] is right for a vertex the segment was
+/// built from. A point *computed* onto a segment — an interpolated
+/// interval midpoint, a crossing solved from two oblique segments —
+/// carries a rounding residue, fails the exact test, and would be placed
+/// in the exterior of the very line it lies on. This admits a distance
+/// to the segment of `1e-9` relative to the coordinates' magnitude.
+fn point_near_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> bool {
+    let magnitude = [point, start, end]
+        .iter()
+        .flat_map(|p| p.iter().copied())
+        .fold(0.0_f64, |largest, value| largest.max(value.abs()));
+    let tolerance = mul_add(magnitude, 1e-9, f64::EPSILON * 16.0);
+    let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
+    let length = hypot(dx, dy);
+    if length <= tolerance {
+        return hypot(point[0] - start[0], point[1] - start[1]) <= tolerance;
+    }
+    let distance_to_line = precise_math::orient2d(start, end, point).abs() / length;
+    if distance_to_line > tolerance {
+        return false;
+    }
+    let along = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length;
+    along >= -tolerance && along <= length + tolerance
 }
 
 fn opposite(first: f64, second: f64) -> bool {
@@ -1344,7 +1337,7 @@ fn topology_location(topology: &Topology, point: [f64; 2]) -> Location {
     let mut endpoint_count = 0usize;
     for line in &topology.lines {
         for segment in line.windows(2) {
-            if point_on_segment(point, segment[0], segment[1]) {
+            if point_near_segment(point, segment[0], segment[1]) {
                 on_line = true;
             }
         }
@@ -1421,7 +1414,7 @@ fn segment_parameters(
             }
             SegmentRelation::Overlap => {
                 for point in [start, end] {
-                    if point_on_segment(point, segment.0, segment.1) {
+                    if point_near_segment(point, segment.0, segment.1) {
                         parameters.push(segment_parameter(point, segment.0, segment.1));
                     }
                 }
@@ -1430,7 +1423,7 @@ fn segment_parameters(
         }
     }
     for &point in split_points {
-        if point_on_segment(point, segment.0, segment.1) {
+        if point_near_segment(point, segment.0, segment.1) {
             parameters.push(segment_parameter(point, segment.0, segment.1));
         }
     }
@@ -1564,8 +1557,8 @@ fn relate_topologies(first: &Topology, second: &Topology) -> Result<De9im, Overl
                 SegmentRelation::Point(point) => candidates.push(point),
                 SegmentRelation::Overlap => {
                     for point in [first_start, first_end, second_start, second_end] {
-                        if point_on_segment(point, first_start, first_end)
-                            && point_on_segment(point, second_start, second_end)
+                        if point_near_segment(point, first_start, first_end)
+                            && point_near_segment(point, second_start, second_end)
                         {
                             candidates.push(point);
                         }
@@ -1596,117 +1589,6 @@ fn relate_topologies(first: &Topology, second: &Topology) -> Result<De9im, Overl
     }
 
     Ok(matrix)
-}
-
-/// Compute the DE-9IM matrix relating two polygons.
-///
-/// Fills the matrix from Boolean interior regions and exact segment-pair
-/// boundary dimensions. Mirrors `boost::geometry::relation`
-/// (`algorithms/relation.hpp`) for the areal × areal case.
-///
-/// # Errors
-///
-/// Returns [`OverlayError::Unsupported`] when either polygon leaves the exact
-/// predicate range.
-///
-/// # Examples
-///
-/// ```
-/// use geometry_cs::Cartesian;
-/// use geometry_model::{polygon, Point2D, Polygon};
-/// use geometry_overlay::relate::{relate, Dimension};
-///
-/// type P = Point2D<f64, Cartesian>;
-/// let a: Polygon<P> = polygon![[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]];
-/// let b: Polygon<P> = polygon![[(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0), (1.0, 1.0)]];
-/// let matrix = relate(&a, &b).unwrap();
-/// // Overlapping squares: their interiors meet in an area.
-/// assert_eq!(matrix.interior_interior(), Dimension::Area);
-/// ```
-fn relate_polygon_polygon<G1, G2, P>(g1: &G1, g2: &G2) -> Result<De9im, OverlayError>
-where
-    G1: PolygonTrait<Point = P>,
-    G2: PolygonTrait<Point = P>,
-    P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
-    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
-{
-    if !polygon_in_range(g1) || !polygon_in_range(g2) {
-        return Err(OverlayError::Unsupported);
-    }
-
-    let interiors_overlap = !crate::operation::intersection(g1, g2)?.0.is_empty();
-    let first_outside = !crate::operation::difference(g1, g2)?.0.is_empty();
-    let second_outside = !crate::operation::difference(g2, g1)?.0.is_empty();
-    let boundary_boundary = polygon_boundary_dimension(g1, g2);
-
-    let mut matrix = empty_matrix();
-    if interiors_overlap {
-        matrix.m[feature::INTERIOR][feature::INTERIOR] = Dimension::Area;
-    }
-    if first_outside {
-        matrix.m[feature::INTERIOR][feature::EXTERIOR] = Dimension::Area;
-        matrix.m[feature::BOUNDARY][feature::EXTERIOR] = Dimension::Curve;
-    }
-    if second_outside {
-        matrix.m[feature::EXTERIOR][feature::INTERIOR] = Dimension::Area;
-        matrix.m[feature::EXTERIOR][feature::BOUNDARY] = Dimension::Curve;
-    }
-    matrix.m[feature::BOUNDARY][feature::BOUNDARY] = boundary_boundary;
-
-    if interiors_overlap {
-        match (first_outside, second_outside) {
-            (true, true) => {
-                matrix.m[feature::INTERIOR][feature::BOUNDARY] = Dimension::Curve;
-                matrix.m[feature::BOUNDARY][feature::INTERIOR] = Dimension::Curve;
-            }
-            (true, false) => {
-                matrix.m[feature::INTERIOR][feature::BOUNDARY] = Dimension::Curve;
-            }
-            (false, true) => {
-                matrix.m[feature::BOUNDARY][feature::INTERIOR] = Dimension::Curve;
-            }
-            (false, false) => {}
-        }
-    }
-
-    Ok(matrix)
-}
-
-fn polygon_boundary_dimension<G1, G2, P>(first: &G1, second: &G2) -> Dimension
-where
-    G1: PolygonTrait<Point = P>,
-    G2: PolygonTrait<Point = P>,
-    P: Point,
-    P::Scalar: Into<f64>,
-{
-    let first_segments = polygon_boundary_segments(first);
-    let second_segments = polygon_boundary_segments(second);
-    let mut dimension = Dimension::Empty;
-    for (first_start, first_end) in &first_segments {
-        for (second_start, second_end) in &second_segments {
-            match segment_relation(*first_start, *first_end, *second_start, *second_end) {
-                SegmentRelation::Overlap => return Dimension::Curve,
-                SegmentRelation::Point(_) => dimension = Dimension::Point,
-                SegmentRelation::Disjoint => {}
-            }
-        }
-    }
-    dimension
-}
-
-fn polygon_boundary_segments<G, P>(polygon: &G) -> alloc::vec::Vec<([f64; 2], [f64; 2])>
-where
-    G: PolygonTrait<Point = P>,
-    P: Point,
-    P::Scalar: Into<f64>,
-{
-    let mut segments = alloc::vec::Vec::new();
-    append_boundary_segments(polygon.exterior(), &mut segments);
-    for ring in polygon.interiors() {
-        append_boundary_segments(ring, &mut segments);
-    }
-    segments
 }
 
 fn append_boundary_segments<R>(ring: &R, output: &mut alloc::vec::Vec<([f64; 2], [f64; 2])>)

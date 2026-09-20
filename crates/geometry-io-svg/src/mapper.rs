@@ -447,15 +447,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    //! Structural witnesses. Exact pixel values are transform-dependent
-    //! and fiddly, so these assert document shape (well-formed `<svg>`,
-    //! the right element per kind) and that mapped coordinates land inside
-    //! the canvas — never exact strings.
+    //! Structural witnesses for document shape (well-formed `<svg>`, the
+    //! right element per kind, coordinates inside the canvas), plus exact
+    //! pixel witnesses for the one piece of arithmetic in the crate — the
+    //! world → pixel transform — on asymmetric canvases so a dropped
+    //! y-flip, a swapped axis, or a `max` fit could not pass.
 
     use super::*;
     use alloc::vec;
     use geometry_cs::Cartesian;
-    use geometry_model::Point2D;
+    use geometry_model::{Linestring, Point2D, Polygon, Ring};
 
     type Pt = Point2D<f64, Cartesian>;
 
@@ -658,5 +659,81 @@ mod tests {
 
         assert_eq!(svg.matches("<path").count(), 2);
         assert_eq!(svg.matches("M ").count(), 4); // one exterior and one hole each
+    }
+
+    /// Canvas 400×200 (margin = 0.1 · 200 = 20), world box (0,0)–(10,5):
+    /// `scale_x = 360/10 = 36`, `scale_y = 160/5 = 32` → the aspect-
+    /// preserving scale is the minimum, 32. So `px = 20 + 32x` and
+    /// `py = 200 − 20 − 32y = 180 − 32y`.
+    #[test]
+    fn transform_is_min_scaled_margined_and_y_flipped() {
+        let mut mapper = SvgMapper::new(400, 200);
+        mapper.add(
+            &Linestring(vec![Pt::new(0.0, 0.0), Pt::new(10.0, 5.0)]),
+            "stroke:black",
+        );
+        mapper.add(&Pt::new(10.0, 5.0), "fill:red");
+        mapper.add(&Pt::new(1.0 / 3.0, 0.0), "fill:green");
+        mapper.add(
+            &Polygon::with_inners(
+                Ring::from_vec(vec![
+                    Pt::new(0.0, 0.0),
+                    Pt::new(0.0, 5.0),
+                    Pt::new(10.0, 5.0),
+                    Pt::new(10.0, 0.0),
+                    Pt::new(0.0, 0.0),
+                ]),
+                vec![],
+            ),
+            "fill:blue",
+        );
+        let svg = mapper.to_svg();
+        assert!(
+            svg.contains("<circle cx=\"340\" cy=\"20\" r=\"5\" style=\"fill:red\" />"),
+            "{svg}"
+        );
+        assert!(
+            svg.contains("<circle cx=\"30.67\" cy=\"180\" r=\"5\" style=\"fill:green\" />"),
+            "{svg}"
+        );
+        assert!(
+            svg.contains("<polyline points=\"20,180 340,20\" style=\"stroke:black\" />"),
+            "{svg}"
+        );
+        assert!(
+            svg.contains(
+                "<path d=\"M 20 180 L 20 20 L 340 20 L 340 180 L 20 180 Z\" style=\"fill:blue\" fill-rule=\"evenodd\" />"
+            ),
+            "{svg}"
+        );
+    }
+
+    /// The same box on a 200×400 canvas: `scale_x = 160/10 = 16`,
+    /// `scale_y = 360/5 = 72` → 16, so the drawing is limited by width.
+    #[test]
+    fn transform_on_a_tall_canvas_keeps_the_x_limited_scale() {
+        let mut mapper = SvgMapper::new(200, 400);
+        mapper.add(
+            &Linestring(vec![Pt::new(0.0, 0.0), Pt::new(10.0, 5.0)]),
+            "stroke:black",
+        );
+        let svg = mapper.to_svg();
+        assert!(
+            svg.contains("<polyline points=\"20,380 180,300\" style=\"stroke:black\" />"),
+            "{svg}"
+        );
+    }
+
+    /// A degenerate world box falls back to unit scale: the lone point
+    /// lands at the margin corner.
+    #[test]
+    fn single_point_lands_at_the_margin_corner() {
+        let mut mapper = SvgMapper::new(300, 300);
+        mapper.add(&Pt::new(123.0, -456.0), "fill:red");
+        assert!(
+            mapper
+                .to_svg()
+                .contains("<circle cx=\"30\" cy=\"270\" r=\"5\" style=\"fill:red\" />")
+        );
     }
 }

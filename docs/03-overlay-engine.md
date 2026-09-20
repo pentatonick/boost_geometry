@@ -136,6 +136,20 @@ reversed second polygon (reversing swaps "inside" and "outside" for that
 input). Which arc that is at each turn is decided from the crossing's
 `OperationType`.
 
+**Where result lobes touch.** The Boolean operations' arrangement walker
+(`operation/areal.rs`, `trace_rings`) orients every result edge with the
+filled side on its right and leaves each node along the first unused edge
+counter-clockwise from the one it arrived on — the edge bounding the same
+filled wedge, which is what Boost's `sort_by_side` cluster selection does.
+So two result lobes that touch at one point, or at several, come out as
+separate polygons and the region between them is never walked. The one case
+where a walk revisits a node is a hole that touches the ring it is on; the
+loop is cut there into the outer ring and the hole. Taking the smallest turn
+instead spliced touching lobes into one outline with the region between them
+as a hole against its own outer ring — the `DisconnectedInterior` result the
+`every_boolean_result_over_the_fixtures_is_valid` sweep in
+`overlay_parity.rs` now guards against.
+
 **Scope (v1):** the clean, non-degenerate areal case — simple polygons
 whose boundaries cross transversally. Clustered turns (three-or-more
 segments meeting at a point), self-intersections, and long collinear
@@ -215,6 +229,15 @@ or spheroid bundles, project into a local tangent plane, reuse the Cartesian
 engine, and transform back. That angular path is an intentional local-extent
 approximation; the feature-parity assumptions identify global/polar accuracy
 as the revisit trigger.
+
+Polygon offsets keep the raw offsetted ring where it is simple. Where it
+crosses itself or another ring — a notch narrower than twice the distance, a
+neck thinner than that, a hole whose arm fills in — or an erosion loses its
+clearance, the offset is rebuilt the way Boost builds every buffer: from a
+side piece per edge and a join piece per rounded or mitered corner, merged
+through the overlay engine and unioned with (growth) or subtracted from
+(erosion) the polygon (`buffer.rs`, `dissolve_offset`). That is what closes a
+notch into one valid polygon and pinches a thin neck off into separate ones.
 
 ## The recurring design principle: refuse, don't guess
 

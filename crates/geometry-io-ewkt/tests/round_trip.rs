@@ -441,3 +441,41 @@ fn a_type_mismatch_carries_the_wkt_crates_own_strings() {
         geometry_io_wkt::parse_linestring("POINT(1 2)").map_err(EwktError::Wkt)
     );
 }
+
+// ---- Sweeps over every kind -------------------------------------------
+
+/// Every proper prefix of a valid EWKT string — with and without a
+/// prefix, with and without a glued suffix — is an error, never a panic;
+/// trailing garbage is rejected.
+#[test]
+fn every_proper_prefix_is_an_error_with_and_without_a_prefix() {
+    for input in [
+        "POINTM(1 2 3)",
+        "SRID=4326;POINTZM(1 2 3 4)",
+        "SRID=4326;MULTIPOLYGONM(EMPTY,((0 0 1,1 0 1,1 1 1,0 0 1),(0.2 0.2 1,0.5 0.2 1,0.5 0.5 1,0.2 0.2 1)))",
+        "SRID=0;GEOMETRYCOLLECTIONM(POINTM(1 2 3),LINESTRING EMPTY)",
+        "srid=1;multipointm(1 2 3,4 5 6)",
+        "SRID=4294967295;MULTILINESTRINGZ(EMPTY,(1 2 3,4 5 6))",
+    ] {
+        let parsed = from_ewkt(input).unwrap_or_else(|e| panic!("{input:?}: {e}"));
+        let canonical = to_ewkt(&parsed.geometry, parsed.srid);
+        assert_eq!(
+            from_ewkt(&canonical),
+            Ok(parsed.clone()),
+            "canonical re-parse of {input:?}"
+        );
+        for text in [input, canonical.as_str()] {
+            for end in 0..text.len() {
+                let prefix = &text[..end];
+                assert!(
+                    from_ewkt(prefix).is_err(),
+                    "prefix {prefix:?} of {text:?} was accepted"
+                );
+            }
+            for garbage in [";", ")", " 1", " POINT(1 1)", "SRID=1;"] {
+                let s = format!("{text}{garbage}");
+                assert!(from_ewkt(&s).is_err(), "{s:?} was accepted");
+            }
+        }
+    }
+}

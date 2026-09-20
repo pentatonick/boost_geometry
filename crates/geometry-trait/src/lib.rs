@@ -39,7 +39,7 @@ pub use geometry::Geometry;
 pub use indexed_access::{IndexedAccess, corner};
 pub use linestring::Linestring;
 pub use multi::{MultiLinestring, MultiPoint, MultiPolygon};
-pub use point::{Point, PointMut, fold_dims};
+pub use point::{Point, PointMut, fold_dims, ordinate, set_ordinate};
 pub use point_order::PointOrder;
 pub use polygon::Polygon;
 pub use polyhedral::PolyhedralSurface;

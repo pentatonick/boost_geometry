@@ -260,6 +260,47 @@ where
     }
 }
 
+/// Read ordinate `dimension` of `point` by a runtime index.
+///
+/// The const-generic [`Point::get`] needs `D` at compile time, so a
+/// kernel walking every dimension from inside a [`fold_dims`] closure
+/// (which receives the index as a `usize`) dispatches through this
+/// match instead of repeating it. The arms track [`MAX_DIM`].
+///
+/// # Panics
+///
+/// Panics if `dimension` is at or past [`MAX_DIM`]; a `dimension` below
+/// `MAX_DIM` but at or past `P::DIM` is the point type's own
+/// out-of-range behaviour.
+#[inline]
+#[must_use]
+pub fn ordinate<P: Point>(point: &P, dimension: usize) -> P::Scalar {
+    match dimension {
+        0 => point.get::<0>(),
+        1 => point.get::<1>(),
+        2 => point.get::<2>(),
+        3 => point.get::<3>(),
+        _ => panic!("ordinate: dimension {dimension} exceeds MAX_DIM ({MAX_DIM})"),
+    }
+}
+
+/// Write ordinate `dimension` of `point` by a runtime index — the
+/// [`PointMut::set`] counterpart of [`ordinate`].
+///
+/// # Panics
+///
+/// Panics if `dimension` is at or past [`MAX_DIM`].
+#[inline]
+pub fn set_ordinate<P: PointMut>(point: &mut P, dimension: usize, value: P::Scalar) {
+    match dimension {
+        0 => point.set::<0>(value),
+        1 => point.set::<1>(value),
+        2 => point.set::<2>(value),
+        3 => point.set::<3>(value),
+        _ => panic!("set_ordinate: dimension {dimension} exceeds MAX_DIM ({MAX_DIM})"),
+    }
+}
+
 /// Largest `DIM` the const-recursive [`fold_dims`] supports on
 /// stable Rust. Raise this constant and add the corresponding
 /// `impl_recurse!` row below when a strategy needs more.

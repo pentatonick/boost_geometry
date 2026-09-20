@@ -335,4 +335,27 @@ mod tests {
         assert_eq!(SphericalArea::default().radius, 6_371_000.0);
         assert_eq!(SphericalPolygonArea::default().radius, 6_371_000.0);
     }
+
+    /// Holes contribute negatively: a polygon's area is its outer ring's
+    /// less its interior rings'.
+    #[test]
+    fn polygon_area_subtracts_holes() {
+        let outer = Ring::from_vec(vec![sp(0., 0.), sp(0., 90.), sp(90., 0.), sp(0., 0.)]);
+        let hole: Ring<Sp> =
+            Ring::from_vec(vec![sp(20., 20.), sp(40., 20.), sp(30., 40.), sp(20., 20.)]);
+        let hole_area = SphericalArea::UNIT.area(&hole);
+        assert!(
+            hole_area < 0.0,
+            "an oppositely wound hole has negative signed area"
+        );
+        let mut pg: Polygon<Sp> = Polygon::new(outer);
+        pg.inners.push(hole);
+        let got = SphericalPolygonArea::UNIT.area(&pg);
+        let expected = core::f64::consts::FRAC_PI_2 - hole_area.abs();
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "got {got} expected {expected}"
+        );
+        assert!(got < core::f64::consts::FRAC_PI_2 - 0.01);
+    }
 }

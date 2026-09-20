@@ -45,6 +45,8 @@ use geometry_trait::Point;
 use crate::distance::DistanceStrategy;
 
 #[cfg(feature = "std")]
+use crate::geographic::Meridian;
+#[cfg(feature = "std")]
 use crate::geographic::spheroid_calc::SpheroidCalc;
 #[cfg(feature = "std")]
 use crate::normalise::{HasAngularUnits, lonlat_radians};
@@ -66,17 +68,18 @@ use crate::normalise::{HasAngularUnits, lonlat_radians};
 /// (`EnableDistance = true`, all azimuth / reduced-length / scale
 /// flags false).
 ///
-/// # Antipodal / pole-to-pole limitation
+/// # Antipodal / pole-to-pole endpoints
 ///
-/// Like Boost's raw `thomas_inverse`, this strategy returns **`0.0`**
-/// for antipodal or pole-to-pole endpoints: at a central angle of `π`
-/// the series' `sin(d)` term vanishes and the formula degenerates
-/// (`formulas/thomas_inverse.hpp:120-125` returns a zero distance).
-/// Boost's higher-level geographic strategy masks this with a
-/// `meridian_inverse` fallback ladder; that fallback is deferred here,
-/// so a caller measuring a near-antipodal line with `Thomas` gets `0`
-/// silently. Use [`Andoyer`](super::Andoyer) (no such degeneracy) or
-/// [`Haversine`](crate::spherical::Haversine) for antipodal inputs.
+/// Boost's raw `thomas_inverse` returns `0.0` for antipodal or
+/// pole-to-pole endpoints: at a central angle of `π` the series'
+/// `sin(d)` term vanishes and the formula degenerates
+/// (`formulas/thomas_inverse.hpp:120-125`). Like Boost's geographic
+/// strategy, this one runs the `meridian_inverse` check first, so exact
+/// antipodes — which always lie on opposite meridians or pole to pole —
+/// take the meridian route over a pole. A *near*-antipodal pair off
+/// any meridian still reaches the degenerate formula; use
+/// [`Andoyer`](super::Andoyer) or
+/// [`Haversine`](crate::spherical::Haversine) there.
 #[derive(Debug, Clone, Copy)]
 pub struct Thomas {
     /// Reference ellipsoid the distance is measured on.
@@ -163,6 +166,20 @@ where
         // short-circuit at `formulas/thomas_inverse.hpp:70-73`.
         if lon1 == lon2 && lat1 == lat2 {
             return 0.0;
+        }
+
+        // Boost's `strategy::distance::geographic` runs
+        // `formula::meridian_inverse` before the general formula
+        // (`strategies/geographic/distance.hpp:91-112`): endpoints on one
+        // meridian, or on opposite meridians with the route over a pole,
+        // take the exact meridian-arc distance — the antipodal region
+        // where the general formula is least trustworthy.
+        let meridian = Meridian {
+            spheroid: self.spheroid,
+        }
+        .inverse(lon1, lat1, lon2, lat2);
+        if meridian.meridian {
+            return meridian.distance;
         }
 
         let f = calc.f;
@@ -264,7 +281,7 @@ mod tests {
 
     use super::Thomas;
     use crate::distance::DistanceStrategy;
-    use crate::geographic::Andoyer;
+    use crate::geographic::{Andoyer, Meridian};
     use geometry_adapt::{Adapt, WithCs};
     use geometry_cs::{Degree, Geographic};
 
@@ -368,5 +385,20 @@ mod tests {
     fn readonly_witness_computes_distance() {
         let d = _accepts_readonly_point(&Thomas::WGS84, &deg(4.0, 52.0), &deg(3.0, 40.0));
         assert!(d > 1_000_000.0, "≈1336 km, got {d}");
+    }
+
+    /// Exact antipodes and pole-to-pole endpoints take the meridian route
+    /// instead of the formula's degenerate `0`.
+    #[test]
+    fn antipodal_and_pole_to_pole_take_the_meridian_route() {
+        let polar_route = 2.0 * Meridian::WGS84.quarter_length();
+        for (a, b) in [
+            (deg(0.0, 0.0), deg(180.0, 0.0)),
+            (deg(10.0, 20.0), deg(-170.0, -20.0)),
+            (deg(0.0, 90.0), deg(0.0, -90.0)),
+        ] {
+            let d = Thomas::WGS84.distance(&a, &b);
+            assert!((d - polar_route).abs() < 1.0, "{d} m vs {polar_route} m");
+        }
     }
 }

@@ -60,17 +60,48 @@ where
     <B as Geometry>::Point: PointTrait<Scalar = T>,
     T: CoordinateScalar,
 {
-    // `get_indexed::<I, D>`: I = 0 is min-corner, I = 1 is max-corner.
-    let a_min_x = a.get_indexed::<0, 0>();
-    let a_min_y = a.get_indexed::<0, 1>();
-    let a_max_x = a.get_indexed::<1, 0>();
-    let a_max_y = a.get_indexed::<1, 1>();
-    let b_min_x = b.get_indexed::<0, 0>();
-    let b_min_y = b.get_indexed::<0, 1>();
-    let b_max_x = b.get_indexed::<1, 0>();
-    let b_max_y = b.get_indexed::<1, 1>();
+    (0..<A as Geometry>::Point::DIM).any(|d| separated_on_axis(a, b, d))
+}
 
-    a_max_x < b_min_x || b_max_x < a_min_x || a_max_y < b_min_y || b_max_y < a_min_y
+/// Are the two boxes separated along axis `d`? `get_indexed::<I, D>`:
+/// `I = 0` is the min corner, `I = 1` the max corner; one arm per
+/// dimension up to `MAX_DIM`.
+fn separated_on_axis<A, B, T>(a: &A, b: &B, d: usize) -> bool
+where
+    A: BoxTrait,
+    B: BoxTrait,
+    <A as Geometry>::Point: PointTrait<Scalar = T>,
+    <B as Geometry>::Point: PointTrait<Scalar = T>,
+    T: CoordinateScalar,
+{
+    let (a_min, a_max, b_min, b_max) = match d {
+        0 => (
+            a.get_indexed::<0, 0>(),
+            a.get_indexed::<1, 0>(),
+            b.get_indexed::<0, 0>(),
+            b.get_indexed::<1, 0>(),
+        ),
+        1 => (
+            a.get_indexed::<0, 1>(),
+            a.get_indexed::<1, 1>(),
+            b.get_indexed::<0, 1>(),
+            b.get_indexed::<1, 1>(),
+        ),
+        2 => (
+            a.get_indexed::<0, 2>(),
+            a.get_indexed::<1, 2>(),
+            b.get_indexed::<0, 2>(),
+            b.get_indexed::<1, 2>(),
+        ),
+        3 => (
+            a.get_indexed::<0, 3>(),
+            a.get_indexed::<1, 3>(),
+            b.get_indexed::<0, 3>(),
+            b.get_indexed::<1, 3>(),
+        ),
+        _ => panic!("disjoint_box_box: DIM exceeds MAX_DIM (4)"),
+    };
+    a_max < b_min || b_max < a_min
 }
 
 #[cfg(test)]
@@ -136,5 +167,67 @@ mod tests {
         // Touching edges count as *not* disjoint (closed boxes).
         let touch = Box::from_corners(P::new(2.0, 0.0), P::new(4.0, 2.0));
         assert!(!disjoint_box_box(&a, &touch));
+    }
+
+    /// `disjoint_box_box.hpp` loops over every dimension: boxes that
+    /// coincide in `x`/`y` but are separated along `z` are disjoint.
+    #[test]
+    fn box_box_three_d_separated_along_z_is_disjoint() {
+        use crate::disjoint::disjoint_box_box;
+        use geometry_model::{Box, Point3D};
+        type P3 = Point3D<f64, Cartesian>;
+        let a = Box::from_corners(P3::new(0.0, 0.0, 0.0), P3::new(1.0, 1.0, 1.0));
+        let b = Box::from_corners(P3::new(0.0, 0.0, 5.0), P3::new(1.0, 1.0, 6.0));
+        let c = Box::from_corners(P3::new(0.5, 0.5, 0.5), P3::new(2.0, 2.0, 2.0));
+        assert!(disjoint_box_box(&a, &b));
+        assert!(disjoint_box_box(&b, &a));
+        assert!(!disjoint_box_box(&a, &c));
+    }
+
+    /// A 4-D box built corner-wise, since `Point::new` stops at three
+    /// arguments.
+    fn box4(min: [f64; 4], max: [f64; 4]) -> geometry_model::Box<geometry_model::Point<f64, 4>> {
+        use geometry_trait::set_ordinate;
+        let corner = |v: [f64; 4]| {
+            let mut p = geometry_model::Point::<f64, 4>::default();
+            for (d, value) in v.into_iter().enumerate() {
+                set_ordinate(&mut p, d, value);
+            }
+            p
+        };
+        geometry_model::Box::from_corners(corner(min), corner(max))
+    }
+
+    /// The axis loop runs to `Point::DIM`, so the last row of the
+    /// dispatch table is only reached by a box of the largest arity the
+    /// table supports. Two boxes that coincide in x, y and z and are
+    /// separated only in the fourth are the one input that tells a
+    /// present row from a missing one.
+    #[test]
+    fn box_box_four_d_separated_along_the_last_axis_is_disjoint() {
+        use crate::disjoint::disjoint_box_box;
+
+        let a = box4([0.0; 4], [1.0, 1.0, 1.0, 1.0]);
+        let past_w = box4([0.0, 0.0, 0.0, 5.0], [1.0, 1.0, 1.0, 6.0]);
+        let overlapping = box4([0.5; 4], [2.0; 4]);
+
+        assert!(disjoint_box_box(&a, &past_w));
+        assert!(disjoint_box_box(&past_w, &a));
+        assert!(!disjoint_box_box(&a, &overlapping));
+
+        // Touching on the fourth axis is not disjoint, matching x/y.
+        let touching_w = box4([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 2.0]);
+        assert!(!disjoint_box_box(&a, &touching_w));
+    }
+
+    /// Past the last row the axis lookup must fail loudly. A silent
+    /// fall-through would compare the wrong axis and report a
+    /// separation that is not there.
+    #[test]
+    #[should_panic(expected = "disjoint_box_box: DIM exceeds MAX_DIM")]
+    fn separated_on_axis_panics_past_max_dim() {
+        let a = box4([0.0; 4], [1.0; 4]);
+        let b = box4([5.0; 4], [6.0; 4]);
+        let _ = super::separated_on_axis(&a, &b, 4);
     }
 }

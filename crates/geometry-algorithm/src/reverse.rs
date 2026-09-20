@@ -158,4 +158,25 @@ mod tests {
             .collect();
         assert_eq!(seconds, vec![4.0, 14.0]);
     }
+
+    /// The interior ring's vertices are reversed too, not just counted.
+    #[test]
+    fn reverse_polygon_reverses_interior_ring_vertices() {
+        let mut pg: geometry_model::Polygon<P> = polygon![
+            [(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (0.0, 0.0)],
+            [(1.0, 1.0), (1.0, 2.0), (2.0, 2.0), (2.0, 1.0), (1.0, 1.0)]
+        ];
+        reverse(&mut pg);
+        let hole: alloc::vec::Vec<(f64, f64)> = pg
+            .interiors()
+            .next()
+            .unwrap()
+            .points()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(
+            hole,
+            alloc::vec![(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0), (1.0, 1.0)]
+        );
+    }
 }

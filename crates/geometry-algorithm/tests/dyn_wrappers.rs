@@ -59,11 +59,15 @@ fn distance_dyn_point_to_single_vertex_linestring() {
     assert_eq!(distance_dyn(&p, &ls).unwrap(), 5.0);
 }
 
+/// An empty linestring has no point to measure to, so the distance is
+/// refused — `0` would read as "touching" while `is_empty` holds and
+/// `intersects` is false. Mirrors Boost's `empty_input_exception`.
 #[test]
-fn distance_dyn_point_to_empty_linestring_is_zero() {
+#[should_panic(expected = "empty linestring")]
+fn distance_dyn_point_to_empty_linestring_is_refused() {
     let p = DynGeometry::<S, Cartesian>::Point(Pt::new(3.0, 4.0));
     let ls = DynGeometry::<S, Cartesian>::LineString(linestring![]);
-    assert_eq!(distance_dyn(&p, &ls).unwrap(), 0.0);
+    let _ = distance_dyn(&p, &ls);
 }
 
 #[test]

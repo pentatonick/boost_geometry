@@ -716,6 +716,19 @@ where
 
 type TracedRing<P> = (Ring<P>, bool);
 
+/// Walk the result boundary into closed rings, one face at a time.
+///
+/// Every edge carries the result on its right. From each node the walk
+/// continues along the first unused edge counter-clockwise from the one it
+/// arrived on (`next_edge`), which keeps it against the face it is tracing,
+/// so two lobes of the result that touch — at one point or at several — come
+/// out as separate rings and the region between them is never walked. A walk
+/// that returns to a node before its seed has gone round a hole that touches
+/// the ring it is on; that loop is cut out as a ring of its own.
+///
+/// C++: `traverse`, whose `select_turn` picks the outgoing operation by
+/// `sort_by_side` where several meet, and whose rings `add_rings` then
+/// assembles by containment.
 fn trace_rings<P>(
     nodes: &[Node<P>],
     edges: &[Edge],
@@ -747,12 +760,14 @@ where
             along.push(edge);
 
             // A node the walk has already stood on closes a ring right here,
-            // not only when the walk returns to the seed. Where two lobes of
-            // the result meet at a single point, the traversal passes through
-            // that point twice; carrying on to the seed splices the lobes into
-            // one self-touching ring, which is not a valid polygon and is not
-            // what `boost::geometry::intersection` returns. Cut the loop out,
-            // keep the path up to that node, and carry on walking.
+            // not only when the walk returns to the seed. A face whose hole
+            // touches its outer ring at a point — or whose two holes touch —
+            // has one connected boundary, and the walk passes through that
+            // point twice; carrying on to the seed would splice the outer
+            // ring and the hole into one self-touching ring, which is not a
+            // valid polygon and is not what `boost::geometry::intersection`
+            // returns. Cut the loop out, keep the path up to that node, and
+            // carry on walking.
             if let Some(start) = node_indices[..node_indices.len() - 1]
                 .iter()
                 .position(|&index| index == edge.end)
@@ -944,20 +959,36 @@ fn push_ring<P>(
     ));
 }
 
+/// The edge the walk leaves a node along: the first unused one
+/// counter-clockwise from the edge it arrived on.
+///
+/// Every edge carries the result on its right, so the wedge immediately
+/// counter-clockwise of the arriving edge is filled and the next edge round
+/// bounds that same wedge. Leaving along it keeps the walk on the one face of
+/// the arrangement it started on. C++: `sort_by_side` ranks the operations at
+/// a turn by their angle round it, and `traversal::select_turn` continues
+/// along the one adjacent to the incoming segment on the side being
+/// traversed.
+///
+/// Any other exit — the smallest turn overall, say — carries the walk across
+/// to a lobe that merely touches this one. Where two result lobes meet at two
+/// or more points that splices them into one outline and leaves the region
+/// between them as a hole against its own outer ring, which is not a valid
+/// polygon and not what Boost returns.
 fn next_edge<P>(nodes: &[Node<P>], edges: &[Edge], used: &[bool], incoming: Edge) -> Option<usize>
 where
     P: Point,
 {
     let previous = nodes[incoming.start].coordinate;
     let vertex = nodes[incoming.end].coordinate;
-    let incoming_direction = (vertex.x - previous.x, vertex.y - previous.y);
+    let back = (previous.x - vertex.x, previous.y - vertex.y);
     edges
         .iter()
         .enumerate()
         .filter(|(index, edge)| !used[*index] && edge.start == incoming.end)
         .min_by(|(_, left), (_, right)| {
-            let left_turn = turn_angle(incoming_direction, vertex, nodes[left.end].coordinate);
-            let right_turn = turn_angle(incoming_direction, vertex, nodes[right.end].coordinate);
+            let left_turn = turn_angle(back, vertex, nodes[left.end].coordinate);
+            let right_turn = turn_angle(back, vertex, nodes[right.end].coordinate);
             left_turn.total_cmp(&right_turn)
         })
         .map(|(index, _)| index)

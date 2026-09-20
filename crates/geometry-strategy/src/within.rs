@@ -77,7 +77,7 @@ use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_tag::{BoxTag, PolygonTag, RingTag, SameAs};
 use geometry_trait::{
     Box as BoxTrait, Point as PointTrait, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
-    corner,
+    corner, fold_dims, ordinate,
 };
 
 /// A strategy for point-in-geometry containment.
@@ -144,24 +144,53 @@ where
 {
     #[inline]
     fn within(&self, p: &P, b: &G) -> bool {
-        let x = p.get::<0>();
-        let y = p.get::<1>();
-        let xmin = b.get_indexed::<{ corner::MIN }, 0>();
-        let ymin = b.get_indexed::<{ corner::MIN }, 1>();
-        let xmax = b.get_indexed::<{ corner::MAX }, 0>();
-        let ymax = b.get_indexed::<{ corner::MAX }, 1>();
-        xmin < x && x < xmax && ymin < y && y < ymax
+        fold_dims(true, p, |inside, p, d| {
+            inside && box_dimension_contains(p, b, d, true)
+        })
     }
 
     #[inline]
     fn covered_by(&self, p: &P, b: &G) -> bool {
-        let x = p.get::<0>();
-        let y = p.get::<1>();
-        let xmin = b.get_indexed::<{ corner::MIN }, 0>();
-        let ymin = b.get_indexed::<{ corner::MIN }, 1>();
-        let xmax = b.get_indexed::<{ corner::MAX }, 0>();
-        let ymax = b.get_indexed::<{ corner::MAX }, 1>();
-        xmin <= x && x <= xmax && ymin <= y && y <= ymax
+        fold_dims(true, p, |inside, p, d| {
+            inside && box_dimension_contains(p, b, d, false)
+        })
+    }
+}
+
+/// Does `p`'s ordinate `d` lie inside the box's `[min, max]` on that
+/// axis — strictly (`within`) or inclusively (`covered_by`)? One arm per
+/// dimension up to `MAX_DIM`, the per-dimension loop of
+/// `strategy/cartesian/point_in_box.hpp:55-93`.
+#[inline]
+fn box_dimension_contains<P, G>(p: &P, b: &G, d: usize, strict: bool) -> bool
+where
+    G: BoxTrait<Point = P>,
+    P: PointMut,
+{
+    let (min, max) = match d {
+        0 => (
+            b.get_indexed::<{ corner::MIN }, 0>(),
+            b.get_indexed::<{ corner::MAX }, 0>(),
+        ),
+        1 => (
+            b.get_indexed::<{ corner::MIN }, 1>(),
+            b.get_indexed::<{ corner::MAX }, 1>(),
+        ),
+        2 => (
+            b.get_indexed::<{ corner::MIN }, 2>(),
+            b.get_indexed::<{ corner::MAX }, 2>(),
+        ),
+        3 => (
+            b.get_indexed::<{ corner::MIN }, 3>(),
+            b.get_indexed::<{ corner::MAX }, 3>(),
+        ),
+        _ => unreachable!("fold_dims caps at MAX_DIM"),
+    };
+    let value = ordinate(p, d);
+    if strict {
+        min < value && value < max
+    } else {
+        min <= value && value <= max
     }
 }
 
@@ -624,5 +653,59 @@ mod tests {
         r.push(pt(2.0, 0.0));
         assert!(WithinRing.within(&pt(1.0, 1.0), &r));
         assert!(!WithinRing.within(&pt(3.0, 3.0), &r));
+    }
+
+    /// `point_in_box.hpp` loops over every dimension: a point above a
+    /// 3-D box is outside it even when its `x`/`y` fall inside.
+    #[test]
+    fn box_containment_reads_the_third_dimension() {
+        use geometry_model::Point3D;
+        type P3 = Point3D<f64, Cartesian>;
+        let b = Box::from_corners(P3::new(0.0, 0.0, 0.0), P3::new(2.0, 2.0, 2.0));
+        assert!(WithinBox.within(&P3::new(1.0, 1.0, 1.0), &b));
+        assert!(!WithinBox.within(&P3::new(1.0, 1.0, 10.0), &b));
+        assert!(!WithinBox.covered_by(&P3::new(1.0, 1.0, 10.0), &b));
+        assert!(WithinBox.covered_by(&P3::new(1.0, 1.0, 2.0), &b));
+        assert!(!WithinBox.within(&P3::new(1.0, 1.0, 2.0), &b));
+    }
+
+    /// A 4-D point built ordinate-wise, since `Point::new` stops at
+    /// three arguments.
+    fn p4(v: [f64; 4]) -> geometry_model::Point<f64, 4> {
+        use geometry_trait::set_ordinate;
+        let mut p = geometry_model::Point::<f64, 4>::default();
+        for (d, value) in v.into_iter().enumerate() {
+            set_ordinate(&mut p, d, value);
+        }
+        p
+    }
+
+    /// `fold_dims` runs to the point's own arity, so the last row of the
+    /// per-dimension lookup is only reached by a point of the largest
+    /// arity the table supports. A point inside on x, y and z and
+    /// outside on the fourth axis is the input that distinguishes a
+    /// present row from a missing one — and the strict/inclusive split
+    /// must hold on that axis exactly as it does on x.
+    #[test]
+    fn box_containment_reads_the_fourth_dimension() {
+        let b = Box::from_corners(p4([0.0; 4]), p4([2.0; 4]));
+
+        assert!(WithinBox.within(&p4([1.0; 4]), &b));
+        assert!(!WithinBox.within(&p4([1.0, 1.0, 1.0, 10.0]), &b));
+        assert!(!WithinBox.covered_by(&p4([1.0, 1.0, 1.0, 10.0]), &b));
+
+        // On the boundary of the fourth axis only: covered, not within.
+        assert!(WithinBox.covered_by(&p4([1.0, 1.0, 1.0, 2.0]), &b));
+        assert!(!WithinBox.within(&p4([1.0, 1.0, 1.0, 2.0]), &b));
+    }
+
+    /// Past the last row the lookup must fail loudly rather than fall
+    /// through to another axis, which would answer with a comparison
+    /// the caller never asked for.
+    #[test]
+    #[should_panic(expected = "fold_dims caps at MAX_DIM")]
+    fn box_dimension_contains_panics_past_max_dim() {
+        let b = Box::from_corners(p4([0.0; 4]), p4([2.0; 4]));
+        let _ = super::box_dimension_contains(&p4([1.0; 4]), &b, 4, true);
     }
 }

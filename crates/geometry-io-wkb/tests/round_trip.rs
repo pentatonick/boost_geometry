@@ -248,3 +248,222 @@ fn external_writer_uses_the_public_default_length_hint() {
     let bytes = to_wkb(&ExternalPointWriter, ByteOrder::LittleEndian);
     assert_eq!(from_wkb(&bytes), Ok(Dyn::Point(Pt::new(3.0, 4.0))));
 }
+
+// ---- Sweeps over every kind -------------------------------------------
+
+const BOTH_ORDERS: [ByteOrder; 2] = [ByteOrder::LittleEndian, ByteOrder::BigEndian];
+
+/// Every kind, with empty members, holes, and nesting — the corpus for
+/// the truncation sweep and the length-hint check.
+fn every_kind_corpus() -> Vec<Dyn> {
+    let empty_polygon = Polygon::<Pt>::new(Ring::new());
+    vec![
+        Dyn::Point(Pt::new(1.5, -2.25)),
+        Dyn::LineString(Linestring(vec![Pt::new(10.0, 10.0), Pt::new(20.0, 20.0)])),
+        Dyn::LineString(Linestring(vec![])),
+        Dyn::Polygon(sample_polygon()),
+        Dyn::Polygon(empty_polygon.clone()),
+        Dyn::Polygon(Polygon::with_inners(Ring::new(), vec![sample_hole()])),
+        Dyn::MultiPoint(MultiPoint(vec![Pt::new(10.0, 10.0), Pt::new(20.0, 20.0)])),
+        Dyn::MultiPoint(MultiPoint(vec![])),
+        Dyn::MultiLineString(MultiLinestring(vec![
+            Linestring(vec![]),
+            Linestring(vec![Pt::new(10.0, 10.0), Pt::new(20.0, 20.0)]),
+        ])),
+        Dyn::MultiPolygon(MultiPolygon(vec![empty_polygon, sample_polygon()])),
+        Dyn::GeometryCollection(vec![
+            Dyn::Point(Pt::new(10.0, 10.0)),
+            Dyn::LineString(Linestring(vec![])),
+            Dyn::GeometryCollection(vec![
+                Dyn::MultiPolygon(MultiPolygon(vec![sample_polygon()])),
+                Dyn::GeometryCollection(vec![]),
+            ]),
+        ]),
+        Dyn::GeometryCollection(vec![]),
+    ]
+}
+
+/// Every proper prefix of a valid record is `Err` and never a panic, in
+/// both byte orders; one extra byte is `TrailingBytes`.
+#[test]
+fn every_proper_prefix_is_an_error_and_never_a_panic() {
+    for g in every_kind_corpus() {
+        for order in BOTH_ORDERS {
+            let bytes = to_wkb(&g, order);
+            assert_eq!(from_wkb(&bytes), Ok(g.clone()), "{order:?} {g:?}");
+            for end in 0..bytes.len() {
+                assert!(
+                    from_wkb(&bytes[..end]).is_err(),
+                    "prefix of {end} bytes of {g:?} in {order:?} was accepted"
+                );
+            }
+            let mut trailing = bytes.clone();
+            trailing.push(0x00);
+            assert_eq!(from_wkb(&trailing), Err(WkbError::TrailingBytes), "{g:?}");
+        }
+    }
+}
+
+/// OGC 06-103r4 §8.2: every nested record carries its own byte-order
+/// flag, so a container may mix orders among its members. `to_wkb` only
+/// ever writes one order, so these buffers are assembled by hand.
+#[test]
+fn nested_records_may_each_declare_their_own_byte_order() {
+    let p1 = Pt::new(1.5, -2.25);
+    let p2 = Pt::new(3.0, 4.0);
+
+    // Big-endian MultiPoint header; members little- then big-endian.
+    let mut mp = vec![0x00];
+    mp.extend_from_slice(&4_u32.to_be_bytes());
+    mp.extend_from_slice(&2_u32.to_be_bytes());
+    mp.extend(to_wkb(&p1, ByteOrder::LittleEndian));
+    mp.extend(to_wkb(&p2, ByteOrder::BigEndian));
+    assert_eq!(from_wkb(&mp), Ok(Dyn::MultiPoint(MultiPoint(vec![p1, p2]))));
+
+    // Little-endian MultiPolygon header with a big-endian member.
+    let mut mpg = vec![0x01];
+    mpg.extend_from_slice(&6_u32.to_le_bytes());
+    mpg.extend_from_slice(&1_u32.to_le_bytes());
+    mpg.extend(to_wkb(&sample_polygon(), ByteOrder::BigEndian));
+    assert_eq!(
+        from_wkb(&mpg),
+        Ok(Dyn::MultiPolygon(MultiPolygon(vec![sample_polygon()])))
+    );
+
+    // Big-endian MultiLineString header with a little-endian member.
+    let ls = Linestring(vec![p1, p2]);
+    let mut mls = vec![0x00];
+    mls.extend_from_slice(&5_u32.to_be_bytes());
+    mls.extend_from_slice(&1_u32.to_be_bytes());
+    mls.extend(to_wkb(&ls, ByteOrder::LittleEndian));
+    assert_eq!(
+        from_wkb(&mls),
+        Ok(Dyn::MultiLineString(MultiLinestring(vec![ls.clone()])))
+    );
+
+    // Little-endian collection: big-endian linestring, little-endian
+    // polygon, and a big-endian nested collection holding a
+    // little-endian point.
+    let mut gc = vec![0x01];
+    gc.extend_from_slice(&7_u32.to_le_bytes());
+    gc.extend_from_slice(&3_u32.to_le_bytes());
+    gc.extend(to_wkb(&ls, ByteOrder::BigEndian));
+    gc.extend(to_wkb(&sample_polygon(), ByteOrder::LittleEndian));
+    gc.push(0x00);
+    gc.extend_from_slice(&7_u32.to_be_bytes());
+    gc.extend_from_slice(&1_u32.to_be_bytes());
+    gc.extend(to_wkb(&p2, ByteOrder::LittleEndian));
+    assert_eq!(
+        from_wkb(&gc),
+        Ok(Dyn::GeometryCollection(vec![
+            Dyn::LineString(ls),
+            Dyn::Polygon(sample_polygon()),
+            Dyn::GeometryCollection(vec![Dyn::Point(p2)]),
+        ]))
+    );
+}
+
+/// `WriteWkb::wkb_len` promises the *exact* encoded length for the
+/// built-in models; a wrong hint only changes allocation, so nothing but
+/// this comparison would notice it.
+#[test]
+fn wkb_len_is_the_exact_encoded_length_for_every_kind() {
+    for g in every_kind_corpus() {
+        for order in BOTH_ORDERS {
+            assert_eq!(g.wkb_len(), Some(to_wkb(&g, order).len()), "{g:?}");
+        }
+    }
+    let ring = sample_ring();
+    assert_eq!(
+        ring.wkb_len(),
+        Some(to_wkb(&ring, ByteOrder::LittleEndian).len())
+    );
+    let polygon = sample_polygon();
+    assert_eq!(
+        polygon.wkb_len(),
+        Some(to_wkb_polygon(&polygon, ByteOrder::LittleEndian).len())
+    );
+    let mp = MultiPoint(vec![
+        Pt::new(1.0, 2.0),
+        Pt::new(3.0, 4.0),
+        Pt::new(5.0, 6.0),
+    ]);
+    assert_eq!(mp.wkb_len(), Some(to_wkb(&mp, ByteOrder::BigEndian).len()));
+    let mls = MultiLinestring(vec![
+        Linestring(vec![Pt::new(1.0, 2.0)]),
+        Linestring(vec![]),
+    ]);
+    assert_eq!(
+        mls.wkb_len(),
+        Some(to_wkb(&mls, ByteOrder::BigEndian).len())
+    );
+    let mpg = MultiPolygon(vec![sample_polygon(), Polygon::new(Ring::new())]);
+    assert_eq!(
+        mpg.wkb_len(),
+        Some(to_wkb(&mpg, ByteOrder::BigEndian).len())
+    );
+}
+
+/// A container header claiming `u32::MAX` members followed by a partial
+/// member (16 bytes total) fails with `UnexpectedEof` — no reservation
+/// proportional to the claimed count, in either order.
+#[test]
+fn hostile_member_counts_with_a_partial_body_fail_with_eof() {
+    for code in [2_u32, 3, 4, 5, 6, 7] {
+        for order in BOTH_ORDERS {
+            let (flag, code_bytes, count_bytes) = match order {
+                ByteOrder::LittleEndian => (0x01, code.to_le_bytes(), u32::MAX.to_le_bytes()),
+                ByteOrder::BigEndian => (0x00, code.to_be_bytes(), u32::MAX.to_be_bytes()),
+            };
+            let mut bytes = vec![flag];
+            bytes.extend_from_slice(&code_bytes);
+            bytes.extend_from_slice(&count_bytes);
+            bytes.extend_from_slice(&[0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]);
+            assert_eq!(bytes.len(), 16);
+            assert_eq!(
+                from_wkb(&bytes),
+                Err(WkbError::UnexpectedEof),
+                "code {code} in {order:?}"
+            );
+        }
+    }
+    // A polygon whose ring count is hostile and whose first ring claims a
+    // hostile point count too.
+    let mut polygon = vec![0x01];
+    polygon.extend_from_slice(&3_u32.to_le_bytes());
+    polygon.extend_from_slice(&u32::MAX.to_le_bytes());
+    polygon.extend_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(from_wkb(&polygon), Err(WkbError::UnexpectedEof));
+}
+
+/// Unknown and flagged type tags are rejected inside containers too, and
+/// a zero tag is unknown rather than a dimension error.
+#[test]
+fn unknown_and_flagged_tags_inside_containers_are_rejected() {
+    let mut zero = vec![0x01];
+    zero.extend_from_slice(&0_u32.to_le_bytes());
+    assert_eq!(from_wkb(&zero), Err(WkbError::UnknownGeometryType(0)));
+
+    for (tag, want) in [
+        (0x8000_0001_u32, WkbError::UnsupportedDimension),
+        (0x2000_0001, WkbError::UnsupportedDimension),
+        (1001, WkbError::UnsupportedDimension),
+        (3007, WkbError::UnsupportedDimension),
+        (8, WkbError::UnknownGeometryType(8)),
+        (999, WkbError::UnknownGeometryType(999)),
+    ] {
+        let mut member = vec![0x01];
+        member.extend_from_slice(&tag.to_le_bytes());
+        member.extend_from_slice(&[0; 16]);
+        assert_eq!(
+            from_wkb(&little_endian_container(7, &member)),
+            Err(want.clone()),
+            "tag {tag:#x} inside a collection"
+        );
+        assert_eq!(
+            from_wkb(&little_endian_container(4, &member)),
+            Err(want),
+            "tag {tag:#x} inside a multipoint"
+        );
+    }
+}

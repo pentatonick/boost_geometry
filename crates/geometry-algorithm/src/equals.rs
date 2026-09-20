@@ -152,4 +152,21 @@ mod tests {
         let b: Polygon<P> = polygon![[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)]]; // square
         assert!(!equals(&a, &b));
     }
+
+    /// Boost's areal `equals` is topological: a redundant collinear
+    /// vertex does not change the point set.
+    #[test]
+    fn equals_polygon_with_redundant_collinear_vertex() {
+        let a: Polygon<P> = polygon![[(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (0.0, 0.0)]];
+        let b: Polygon<P> = polygon![[
+            (0.0, 0.0),
+            (0.0, 4.0),
+            (2.0, 4.0),
+            (4.0, 4.0),
+            (4.0, 0.0),
+            (0.0, 0.0)
+        ]];
+        assert!(equals(&a, &b), "same point set must be equal");
+        assert!(equals(&b, &a));
+    }
 }

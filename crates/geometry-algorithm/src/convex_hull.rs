@@ -87,15 +87,24 @@ mod tests {
     /// A 0-, 1-, or 2-point input passes through the degenerate guard
     /// unchanged.
     #[test]
-    fn hull_of_fewer_than_three_points_is_the_input() {
+    fn hull_of_fewer_than_three_points_is_the_input_closed() {
         let empty = MultiPoint::<Pt>(alloc::vec![]);
         assert_eq!(convex_hull(&empty).points().count(), 0);
         let one = MultiPoint(alloc::vec![Pt::new(3., 4.)]);
         let hull = convex_hull(&one);
-        assert_eq!(hull.points().count(), 1);
+        assert_eq!(hull.points().count(), 2);
         assert_eq!(hull.0[0].get::<0>(), 3.0);
+        assert_eq!(hull.0[1].get::<0>(), 3.0);
+        // Two points: the closed-declared ring still repeats its first
+        // vertex (Boost: `(0 0,1 1,0 0,0 0)` — closed either way).
         let two = MultiPoint(alloc::vec![Pt::new(0., 0.), Pt::new(1., 1.)]);
-        assert_eq!(convex_hull(&two).points().count(), 2);
+        let hull = convex_hull(&two);
+        let pts: alloc::vec::Vec<(f64, f64)> = hull
+            .0
+            .iter()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(pts, alloc::vec![(0., 0.), (1., 1.), (0., 0.)]);
     }
 
     /// The hull of a linestring: only its convex corners survive.
@@ -146,5 +155,23 @@ mod tests {
                 .iter()
                 .any(|p| p.get::<0>() == 1.0 && p.get::<1>() == 1.0)
         );
+    }
+
+    /// The hull is wound clockwise: positive signed area under Boost's
+    /// clockwise-positive convention, for a multi-point and a polygon.
+    #[test]
+    fn hull_is_wound_clockwise() {
+        use crate::area::ring_area;
+        let mp = MultiPoint(alloc::vec![
+            Pt::new(0., 0.),
+            Pt::new(4., 0.),
+            Pt::new(4., 4.),
+            Pt::new(0., 4.),
+            Pt::new(2., 2.),
+        ]);
+        assert_eq!(ring_area(&convex_hull(&mp)), 16.0);
+        let pg: Polygon<Pt> =
+            polygon![[(0., 0.), (4., 0.), (2., 1.), (4., 4.), (0., 4.), (0., 0.)]];
+        assert_eq!(ring_area(&convex_hull(&pg)), 16.0);
     }
 }

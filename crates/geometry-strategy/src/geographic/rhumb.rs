@@ -209,4 +209,32 @@ mod tests {
         let line = Linestring::from_vec(alloc::vec![start, east, P::new(2.0, 0.0)]);
         assert!((Rhumb::EARTH.length(&line) - 2.0 * distance).abs() < 1e-6);
     }
+
+    /// An oblique loxodrome exercises the isometric-latitude term that
+    /// equatorial and meridional fixtures leave inert: from the origin at
+    /// bearing 45° to latitude 45°, `Δλ = tan(α)·Δψ` and the length is
+    /// `Δφ / cos(α)` on the unit sphere.
+    #[test]
+    fn oblique_loxodrome_matches_the_closed_form() {
+        type P = Point2D<f64, Spherical<Degree>>;
+        let bearing = core::f64::consts::FRAC_PI_4;
+        let delta_psi = (core::f64::consts::FRAC_PI_4 + core::f64::consts::FRAC_PI_8)
+            .tan()
+            .ln();
+        let lon2 = (delta_psi * bearing.tan()).to_degrees();
+        let start = P::new(0.0, 0.0);
+        let end = P::new(lon2, 45.0);
+        let expected = core::f64::consts::FRAC_PI_4 / bearing.cos();
+        let distance = Rhumb::UNIT.distance(&start, &end);
+        assert!(
+            (distance - expected).abs() < 1e-9,
+            "distance {distance} expected {expected}"
+        );
+        let azimuth = Rhumb::UNIT.azimuth(&start, &end);
+        assert!((azimuth - bearing).abs() < 1e-9, "azimuth {azimuth}");
+        let destination = Rhumb::UNIT.destination(&start, bearing, expected);
+        let (lon, lat) = (destination.get::<0>(), destination.get::<1>());
+        assert!((lon - lon2).abs() < 1e-7, "lon {lon}");
+        assert!((lat - 45.0).abs() < 1e-7, "lat {lat}");
+    }
 }

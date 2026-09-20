@@ -55,21 +55,53 @@ impl<P: PointMut> Geometry for PointingSegment<'_, P> {
 impl<P: PointMut> IndexedAccess for PointingSegment<'_, P> {
     #[inline]
     fn get_indexed<const I: usize, const D: usize>(&self) -> P::Scalar {
-        if I == 0 {
-            self.start.get::<D>()
-        } else {
-            self.end.get::<D>()
+        match I {
+            0 => self.start.get::<D>(),
+            1 => self.end.get::<D>(),
+            _ => panic!("PointingSegment::get_indexed: endpoint index {I} is out of range"),
         }
     }
 
     #[inline]
     fn set_indexed<const I: usize, const D: usize>(&mut self, value: P::Scalar) {
-        if I == 0 {
-            self.start.set::<D>(value);
-        } else {
-            self.end.set::<D>(value);
+        match I {
+            0 => self.start.set::<D>(value),
+            1 => self.end.set::<D>(value),
+            _ => panic!("PointingSegment::set_indexed: endpoint index {I} is out of range"),
         }
     }
 }
 
 impl<P: PointMut> Segment for PointingSegment<'_, P> {}
+
+#[cfg(test)]
+mod tests {
+    //! An endpoint index past the second must fail loudly: the two-way
+    //! branch form silently aliased every out-of-range `I` onto `end`.
+
+    use geometry_cs::Cartesian;
+    use geometry_trait::IndexedAccess as _;
+
+    use super::PointingSegment;
+    use crate::Point2D;
+
+    type P = Point2D<f64, Cartesian>;
+
+    #[test]
+    #[should_panic(expected = "endpoint index 2 is out of range")]
+    fn reading_a_third_endpoint_panics_instead_of_aliasing_the_end() {
+        let mut start = P::new(1.0, 2.0);
+        let mut end = P::new(3.0, 4.0);
+        let segment = PointingSegment::new(&mut start, &mut end);
+        let _ = segment.get_indexed::<2, 0>();
+    }
+
+    #[test]
+    #[should_panic(expected = "endpoint index 2 is out of range")]
+    fn writing_a_third_endpoint_panics_instead_of_aliasing_the_end() {
+        let mut start = P::new(1.0, 2.0);
+        let mut end = P::new(3.0, 4.0);
+        let mut segment = PointingSegment::new(&mut start, &mut end);
+        segment.set_indexed::<2, 0>(9.0);
+    }
+}

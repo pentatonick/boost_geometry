@@ -467,4 +467,32 @@ mod tests {
             &[],
         ));
     }
+
+    /// Every output triangle is a clockwise, closed stock polygon with
+    /// three distinct vertices — positive signed area, not merely a
+    /// positive absolute one.
+    #[test]
+    fn triangles_are_clockwise_closed_and_non_degenerate() {
+        type P = Point2D<f64, Cartesian>;
+        let polygon: Polygon<P> = Polygon::new(Ring::from_vec(alloc::vec![
+            P::new(0.0, 0.0),
+            P::new(0.0, 2.0),
+            P::new(1.0, 1.0),
+            P::new(2.0, 2.0),
+            P::new(2.0, 0.0),
+            P::new(0.0, 0.0),
+        ]));
+        let triangles = triangulate_earcut(&polygon);
+        assert_eq!(triangles.len(), 3);
+        for triangle in &triangles {
+            let signed = area(triangle);
+            assert!(signed > 0.0, "not clockwise: signed area {signed}");
+            let v = &triangle.outer.0;
+            assert_eq!(v.len(), 4);
+            assert!(
+                !same_point(&v[0], &v[1]) && !same_point(&v[1], &v[2]) && !same_point(&v[0], &v[2])
+            );
+            assert!(same_point(&v[0], &v[3]));
+        }
+    }
 }

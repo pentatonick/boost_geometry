@@ -119,17 +119,21 @@ impl<T: CoordinateScalar + CoordNum> Point for GeoPoint<T> {
 
     #[inline]
     fn get<const D: usize>(&self) -> T {
-        if D == 0 { self.0.0.x } else { self.0.0.y }
+        match D {
+            0 => self.0.0.x,
+            1 => self.0.0.y,
+            _ => panic!("GeoPoint::get: dimension {D} is out of range for a 2-D point"),
+        }
     }
 }
 
 impl<T: CoordinateScalar + CoordNum> PointMut for GeoPoint<T> {
     #[inline]
     fn set<const D: usize>(&mut self, value: T) {
-        if D == 0 {
-            self.0.0.x = value;
-        } else {
-            self.0.0.y = value;
+        match D {
+            0 => self.0.0.x = value,
+            1 => self.0.0.y = value,
+            _ => panic!("GeoPoint::set: dimension {D} is out of range for a 2-D point"),
         }
     }
 }

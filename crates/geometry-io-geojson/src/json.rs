@@ -421,8 +421,11 @@ impl JsonParser<'_> {
         let text = core::str::from_utf8(slice)
             .expect("number tokens contain only ASCII bytes copied from valid UTF-8 input");
         match text.parse::<f64>() {
-            Ok(number) => Ok(number),
-            Err(_) => Err(GeoJsonError::Json(alloc::format!(
+            Ok(number) if number.is_finite() => Ok(number),
+            // RFC 8259 §6 has no spelling for an infinity or a NaN, so an
+            // exponent that overflows `f64` (`1e400`) is an invalid number
+            // rather than `inf`: the writer could never re-emit it as JSON.
+            _ => Err(GeoJsonError::Json(alloc::format!(
                 "invalid number {text:?}"
             ))),
         }

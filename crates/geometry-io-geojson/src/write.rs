@@ -12,7 +12,9 @@
 //! that is, `[x, y]` — with integer-valued `f64` printed without a
 //! trailing `.0` (`100`, not `100.0`) and everything else in Rust's
 //! shortest round-tripping form, so a value survives a
-//! `to_geojson` → `from_geojson` round-trip exactly.
+//! `to_geojson` → `from_geojson` round-trip exactly. A non-finite
+//! coordinate has no JSON spelling and is outside the format (see the
+//! debug assertion in the scalar writer).
 //!
 //! Reference: RFC 7946 §3 (geometry objects) and §3.1.1 (position order).
 
@@ -156,7 +158,23 @@ fn is_exact_integer(v: f64) -> bool {
     magnitude & fractional_mask == 0
 }
 
+/// # Non-finite coordinates
+///
+/// RFC 8259 §6 has no spelling for an infinity or a NaN, so a non-finite
+/// coordinate is outside this crate's domain and its output would not
+/// re-parse. The reader cannot produce one (an overflowing literal such
+/// as `1e400` is an invalid number), so reaching here non-finite means a
+/// caller built the geometry that way directly; the debug assertion
+/// surfaces that in tests rather than letting it reach a file. The guard
+/// sits here for the same reason as the sibling WKT writer's: the writers
+/// are generic over [`PointTrait`], so no invariant at the model's
+/// boundary can reach every input, and closing the hole outright would
+/// mean making [`to_geojson`] fallible.
 fn write_scalar<W: core::fmt::Write + ?Sized>(out: &mut W, v: f64) -> core::fmt::Result {
+    debug_assert!(
+        v.is_finite(),
+        "GeoJSON cannot represent a non-finite coordinate: {v}"
+    );
     if is_exact_integer(v) {
         #[allow(
             clippy::cast_possible_truncation,
@@ -503,9 +521,6 @@ mod tests {
             1.0e16,
             f64::MIN_POSITIVE,
             f64::MAX,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-            f64::NAN,
         ];
 
         for value in values {
