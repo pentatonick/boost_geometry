@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/geometry-model-v0.0.9...geometry-model-v0.0.10) - 2026-09-20
+
+### Fixed
+
+- *(adapt-geo-types,model)* refuse an out-of-range index instead of aliasing
+
 ## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/geometry-model-v0.0.8...geometry-model-v0.0.9) - 2026-09-05
 
 ### Other

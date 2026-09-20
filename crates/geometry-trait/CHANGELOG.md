@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/geometry-trait-v0.0.9...geometry-trait-v0.0.10) - 2026-09-20
+
+### Added
+
+- *(trait)* read and write an ordinate by runtime index
+
+### Other
+
+- *(trait,algorithm,strategy,overlay,adapt-geo-types)* reach the last row of every dimension table
+- *(adapt,trait)* cover the untested adapters and the whole arity dispatch
+
 ## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/geometry-trait-v0.0.8...geometry-trait-v0.0.9) - 2026-09-05
 
 ### Other

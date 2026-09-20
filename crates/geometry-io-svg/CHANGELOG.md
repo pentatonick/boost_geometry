@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/geometry-io-svg-v0.0.9...geometry-io-svg-v0.0.10) - 2026-09-20
+
+### Added
+
+- *(coords)* add a round primitive and give every I/O crate a libm feature
+
+### Other
+
+- *(rtree,io-svg)* pin combinator soundness, per-axis within, and the pixel transform
+
 ## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/geometry-io-svg-v0.0.8...geometry-io-svg-v0.0.9) - 2026-09-05
 
 ### Other
