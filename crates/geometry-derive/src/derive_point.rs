@@ -33,25 +33,38 @@ struct KernelPaths {
 }
 
 fn kernel_paths() -> KernelPaths {
-    let facade = match crate_name("boost_geometry") {
-        Ok(FoundCrate::Itself) => Some(quote! { ::boost_geometry }),
-        Ok(FoundCrate::Name(name)) => {
+    paths_for(crate_name("boost_geometry").ok())
+}
+
+/// The paths implied by a facade lookup, split from [`kernel_paths`] so
+/// the three outcomes can be decided without the ambient Cargo
+/// environment that `crate_name` reads.
+///
+/// [`FoundCrate::Itself`] means the facade is the package being
+/// compiled. That still names `::boost_geometry` rather than `crate`,
+/// because the targets that reach it — the facade's own examples,
+/// integration tests and benches — are separate crates that link the
+/// facade as an extern crate; `crate` there would be the example, not
+/// the facade.
+fn paths_for(facade: Option<FoundCrate>) -> KernelPaths {
+    let facade = match facade {
+        Some(FoundCrate::Itself) => quote! { ::boost_geometry },
+        Some(FoundCrate::Name(name)) => {
             let ident = syn::Ident::new(&name, Span::call_site());
-            Some(quote! { ::#ident })
+            quote! { ::#ident }
         }
-        Err(_) => None,
+        None => {
+            return KernelPaths {
+                trait_: quote! { ::geometry_trait },
+                tag: quote! { ::geometry_tag },
+                cs: quote! { ::geometry_cs },
+            };
+        }
     };
-    match facade {
-        Some(facade) => KernelPaths {
-            trait_: quote! { #facade::__private::geometry_trait },
-            tag: quote! { #facade::__private::geometry_tag },
-            cs: quote! { #facade::__private::geometry_cs },
-        },
-        None => KernelPaths {
-            trait_: quote! { ::geometry_trait },
-            tag: quote! { ::geometry_tag },
-            cs: quote! { ::geometry_cs },
-        },
+    KernelPaths {
+        trait_: quote! { #facade::__private::geometry_trait },
+        tag: quote! { #facade::__private::geometry_tag },
+        cs: quote! { #facade::__private::geometry_cs },
     }
 }
 
@@ -183,8 +196,53 @@ mod tests {
     //! each malformed input emits a `compile_error!` with a specific
     //! message.
 
-    use super::expand;
+    use super::{FoundCrate, KernelPaths, expand, paths_for};
     use quote::quote;
+
+    /// The three emitted paths, as source text.
+    fn rendered(paths: &KernelPaths) -> (String, String, String) {
+        (
+            paths.trait_.to_string(),
+            paths.tag.to_string(),
+            paths.cs.to_string(),
+        )
+    }
+
+    /// The facade's own package: its examples, integration tests and
+    /// benches are separate crates that link the facade under its real
+    /// name, so this arm spells that name absolutely. `crate` would name
+    /// the example instead, and `crate::__private` would not resolve —
+    /// which is what `examples/parcel_buffer.rs` compiles to prove.
+    #[test]
+    fn the_facade_package_is_named_absolutely() {
+        let (trait_, tag, cs) = rendered(&paths_for(Some(FoundCrate::Itself)));
+        assert_eq!(trait_, ":: boost_geometry :: __private :: geometry_trait");
+        assert_eq!(tag, ":: boost_geometry :: __private :: geometry_tag");
+        assert_eq!(cs, ":: boost_geometry :: __private :: geometry_cs");
+    }
+
+    /// A downstream crate that renamed the facade in its `Cargo.toml` gets
+    /// the name Cargo actually gave it, not the hard-coded package name —
+    /// the whole reason the lookup exists.
+    #[test]
+    fn a_renamed_facade_dependency_is_named_as_renamed() {
+        let found = FoundCrate::Name("bg".to_string());
+        let (trait_, tag, cs) = rendered(&paths_for(Some(found)));
+        assert_eq!(trait_, ":: bg :: __private :: geometry_trait");
+        assert_eq!(tag, ":: bg :: __private :: geometry_tag");
+        assert_eq!(cs, ":: bg :: __private :: geometry_cs");
+    }
+
+    /// No facade in the dependency graph: the caller pinned the kernel
+    /// crates directly, so the generated impls must name them directly —
+    /// routing through `__private` would not resolve.
+    #[test]
+    fn without_the_facade_the_kernel_crates_are_named_directly() {
+        let (trait_, tag, cs) = rendered(&paths_for(None));
+        assert_eq!(trait_, ":: geometry_trait");
+        assert_eq!(tag, ":: geometry_tag");
+        assert_eq!(cs, ":: geometry_cs");
+    }
 
     /// A well-formed struct with no `#[geometry]` attribute defaults to
     /// `Cartesian` / `f64` and emits all three impls plus the field's
