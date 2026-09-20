@@ -200,4 +200,18 @@ mod tests {
         ]);
         assert!(!is_convex(&r));
     }
+
+    /// Below two vertices there is no pair to compare for a closing
+    /// duplicate, so the seam-trimming step is skipped entirely. Both
+    /// degenerate rings still have to answer — convex, by the same
+    /// `len < 3` rule that covers the two-point ring — rather than
+    /// index into an empty sequence.
+    #[test]
+    fn rings_below_two_vertices_are_trivially_convex() {
+        let empty: Ring<Pt> = Ring::from_vec(alloc::vec![]);
+        assert!(is_convex(&empty));
+
+        let single: Ring<Pt> = Ring::from_vec(alloc::vec![Pt::new(3., 7.)]);
+        assert!(is_convex(&single));
+    }
 }

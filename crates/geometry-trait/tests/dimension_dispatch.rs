@@ -16,7 +16,8 @@
 use geometry_cs::Cartesian;
 use geometry_tag::{PointTag, SegmentTag};
 use geometry_trait::{
-    Geometry, IndexedAccess, Point, PointMut, Segment, fold_dims, segment_end, segment_start,
+    Geometry, IndexedAccess, Point, PointMut, Segment, fold_dims, ordinate, segment_end,
+    segment_start, set_ordinate,
 };
 
 /// A point of any arity, so one fixture covers the whole dispatch table
@@ -101,6 +102,61 @@ fn fold_dims_threads_the_accumulator_through_each_step() {
 fn fold_dims_panics_past_max_dim() {
     let p = NDim::<5>::default();
     let _ = fold_dims(0usize, &p, |acc, _p, i| acc + i);
+}
+
+/// `ordinate` is the read half of the same dispatch, and its rows carry
+/// the one error a hand-written `match` invites: a transposed or
+/// duplicated arm, which compiles and returns a neighbouring ordinate
+/// instead of failing. Distinct values per dimension turn that into a
+/// test failure, at every arity the table covers.
+#[test]
+fn ordinate_reads_the_dimension_it_is_asked_for() {
+    let p = NDim::<4> {
+        v: [10.0, 11.0, 12.0, 13.0],
+    };
+    assert_eq!(
+        (0..4).map(|d| ordinate(&p, d)).collect::<Vec<_>>(),
+        vec![10.0, 11.0, 12.0, 13.0]
+    );
+}
+
+/// The write half, held to the same standard: each call must land on its
+/// own slot and disturb no other, so a transposed arm shows up as two
+/// wrong ordinates rather than none.
+#[test]
+#[allow(
+    clippy::float_cmp,
+    reason = "the ordinates are exact integer-valued literals written straight back"
+)]
+fn set_ordinate_writes_only_the_dimension_it_is_asked_for() {
+    let mut p = NDim::<4>::default();
+    for (d, value) in [10.0, 11.0, 12.0, 13.0].into_iter().enumerate() {
+        set_ordinate(&mut p, d, value);
+    }
+    assert_eq!(p.v, [10.0, 11.0, 12.0, 13.0]);
+
+    // A single write leaves its neighbours alone.
+    let mut one = NDim::<4>::default();
+    set_ordinate(&mut one, 3, 99.0);
+    assert_eq!(one.v, [0.0, 0.0, 0.0, 99.0]);
+}
+
+/// Both halves document a `# Panics` clause past `MAX_DIM`. The fixture
+/// is 5-D, so the slot being asked for genuinely exists — only the
+/// dispatch table refuses it. Without this the guard could be a silent
+/// fall-through to dimension 0 and nothing would notice.
+#[test]
+#[should_panic(expected = "ordinate: dimension 4 exceeds MAX_DIM")]
+fn ordinate_panics_past_max_dim() {
+    let p = NDim::<5>::default();
+    let _ = ordinate(&p, 4);
+}
+
+#[test]
+#[should_panic(expected = "set_ordinate: dimension 4 exceeds MAX_DIM")]
+fn set_ordinate_panics_past_max_dim() {
+    let mut p = NDim::<5>::default();
+    set_ordinate(&mut p, 4, 1.0);
 }
 
 /// A segment of any arity, carrying its two endpoints as raw ordinates

@@ -2077,10 +2077,15 @@ mod tests {
     //! OVL7 done-when: buffered areas match the closed-form values.
     //! Mirrors `test/algorithms/buffer/`.
 
+    use super::{
+        BufferJoinStrategy, dissolve_offset, offset_rings_need_dissolving, push_piece,
+        push_ring_pieces,
+    };
     use super::{JoinStrategy, PointStrategy, buffer, buffer_convex_polygon, buffer_point};
+    use alloc::vec::Vec;
     use geometry_algorithm::ring_area;
     use geometry_cs::Cartesian;
-    use geometry_model::{Point2D, Polygon, polygon};
+    use geometry_model::{Point2D, Polygon, Ring, polygon};
     use geometry_trait::{MultiPolygon as _, Polygon as _};
 
     type P = Point2D<f64, Cartesian>;
@@ -2267,5 +2272,138 @@ mod tests {
             16.0,
             1e-9,
         );
+    }
+
+    // ---- The pieces path, at the edges the shaped inputs never reach ----
+    //
+    // `dissolve_offset` is only entered for a ring the offsetted ring gets
+    // wrong, and the area assertions above all go through the simple path.
+    // These drive the pieces builder and its gatekeeper directly, because
+    // the degenerate inputs they guard against cannot be produced by a
+    // well-shaped polygon — which is exactly why a missing guard here would
+    // surface as a malformed ring far downstream in the overlay engine.
+
+    const JOIN: BufferJoinStrategy = BufferJoinStrategy::Miter { limit: 5.0 };
+
+    fn ring(points: &[(f64, f64)]) -> Ring<P> {
+        Ring::from_vec(points.iter().map(|&(x, y)| P::new(x, y)).collect())
+    }
+
+    fn unit_square() -> Ring<P> {
+        ring(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)])
+    }
+
+    /// A ring below three distinct vertices encloses nothing, and a zero
+    /// distance moves nothing. Either way the ring must contribute no
+    /// piece rather than a zero-area sliver for the engine to dissolve.
+    #[test]
+    fn a_ring_that_encloses_nothing_contributes_no_piece() {
+        let mut pieces: Vec<Polygon<P>> = Vec::new();
+
+        push_ring_pieces(
+            &ring(&[(0.0, 0.0), (1.0, 0.0), (0.0, 0.0)]),
+            1.0,
+            JOIN,
+            &mut pieces,
+        );
+        assert!(pieces.is_empty(), "a two-vertex ring produced a piece");
+
+        push_ring_pieces(&ring(&[(0.0, 0.0)]), 1.0, JOIN, &mut pieces);
+        assert!(pieces.is_empty(), "a single vertex produced a piece");
+
+        push_ring_pieces(&unit_square(), 0.0, JOIN, &mut pieces);
+        assert!(pieces.is_empty(), "a zero distance produced a piece");
+    }
+
+    /// A ring may close on a repeated vertex more than once. Only one
+    /// repeat is dropped as the closure, so the rest have to be trimmed —
+    /// otherwise the last side is zero-length and its piece degenerate.
+    /// The trimmed ring must give exactly the pieces the clean one does.
+    #[test]
+    fn repeated_closing_vertices_are_trimmed_before_the_sides_are_cut() {
+        let mut clean: Vec<Polygon<P>> = Vec::new();
+        push_ring_pieces(&unit_square(), 1.0, JOIN, &mut clean);
+
+        let mut repeated: Vec<Polygon<P>> = Vec::new();
+        push_ring_pieces(
+            &ring(&[
+                (0.0, 0.0),
+                (1.0, 0.0),
+                (1.0, 1.0),
+                (0.0, 1.0),
+                (0.0, 0.0),
+                (0.0, 0.0),
+                (0.0, 0.0),
+            ]),
+            1.0,
+            JOIN,
+            &mut repeated,
+        );
+
+        assert!(!clean.is_empty(), "the square should cut into pieces");
+        assert_eq!(clean, repeated);
+    }
+
+    /// A piece is kept only if it encloses area. A boundary of fewer than
+    /// three points, or one whose points are collinear, bounds nothing and
+    /// must be dropped at the source.
+    #[test]
+    fn a_piece_bounding_no_area_is_dropped() {
+        let mut pieces: Vec<Polygon<P>> = Vec::new();
+
+        push_piece::<P>(&mut pieces, alloc::vec![(0.0, 0.0), (1.0, 0.0)]);
+        assert!(pieces.is_empty(), "a two-point boundary was kept");
+
+        push_piece::<P>(&mut pieces, alloc::vec![(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)]);
+        assert!(pieces.is_empty(), "a collinear boundary was kept");
+
+        // A boundary that does enclose area is kept and closed.
+        push_piece::<P>(&mut pieces, alloc::vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]);
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].exterior().0.len(), 4);
+    }
+
+    /// Whether the offsetted rings can stand, at the two hole outcomes
+    /// that separate erosion from growth. A hole that `offset_ring`
+    /// declined has collapsed; eroding, the hole is being filled in and a
+    /// collapsed one encloses nothing, so it is no reason to rebuild.
+    /// Growing, the same hole may have collapsed only in part, so it is.
+    #[test]
+    fn a_collapsed_hole_forces_the_pieces_path_only_when_growing() {
+        let outer = unit_square();
+        assert!(!offset_rings_need_dissolving(Some(&outer), &[None], -0.1));
+        assert!(offset_rings_need_dissolving(Some(&outer), &[None], 0.1));
+    }
+
+    /// A hole whose own offsetted ring crosses itself is not a usable
+    /// answer whichever way the buffer runs, so it goes to the pieces —
+    /// the hole-side counterpart of the exterior's self-crossing check.
+    #[test]
+    fn a_self_crossing_hole_forces_the_pieces_path() {
+        let outer = unit_square();
+        // A bow tie: the two diagonals cross.
+        let bow_tie = ring(&[(0.0, 0.0), (1.0, 1.0), (1.0, 0.0), (0.0, 1.0), (0.0, 0.0)]);
+        assert!(offset_rings_need_dissolving(
+            Some(&outer),
+            &[Some(bow_tie.clone())],
+            -0.1
+        ));
+        assert!(offset_rings_need_dissolving(
+            Some(&outer),
+            &[Some(bow_tie)],
+            0.1
+        ));
+    }
+
+    /// When every ring of the polygon is degenerate there are no pieces to
+    /// merge, and the dissolve must answer with an empty multi-polygon
+    /// rather than unioning the original back in — a zero-distance buffer
+    /// of a square is the square, but its *pieces* are nothing.
+    #[test]
+    fn a_dissolve_with_no_pieces_is_empty() {
+        let square: Polygon<P> =
+            polygon![[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]];
+        let dissolved = dissolve_offset(&square, 0.0, JOIN).expect("no pieces is not an error");
+        assert!(dissolved.0.is_empty());
     }
 }

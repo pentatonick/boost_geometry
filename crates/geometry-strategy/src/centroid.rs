@@ -799,10 +799,7 @@ mod tests {
         let c = CartesianMultiPointCentroid.centroid(&mp);
         assert!((c.get::<0>() - 1.0).abs() < 1e-12);
         assert!((c.get::<1>() - 1.0).abs() < 1e-12);
-        assert!(
-            (c.get::<2>() - 11.0).abs() < 1e-12,
-            "z mean should be 11, got {}",
-            c.get::<2>()
-        );
+        let z = c.get::<2>();
+        assert!((z - 11.0).abs() < 1e-12, "z mean should be 11, got {z}");
     }
 }

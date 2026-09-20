@@ -485,11 +485,8 @@ mod tests {
         let triangles = triangulate_earcut(&polygon);
         assert_eq!(triangles.len(), 3);
         for triangle in &triangles {
-            assert!(
-                area(triangle) > 0.0,
-                "not clockwise: signed area {}",
-                area(triangle)
-            );
+            let signed = area(triangle);
+            assert!(signed > 0.0, "not clockwise: signed area {signed}");
             let v = &triangle.outer.0;
             assert_eq!(v.len(), 4);
             assert!(

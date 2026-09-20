@@ -553,6 +553,39 @@ fn geo_rect_get_indexed_rejects_a_third_dimension() {
     let _ = rect.get_indexed::<1, 2>();
 }
 
+// The write half of the same guard. A getter that refuses an
+// out-of-range index while its setter aliases onto `y`/`end` is the
+// worse of the two failures: the read is loud, the write silently
+// corrupts a neighbouring ordinate and is only noticed much later.
+
+#[test]
+#[should_panic(expected = "dimension 2 is out of range")]
+fn geo_point_set_rejects_a_third_dimension() {
+    let mut p = GeoPoint::new(GtPoint::new(3.0_f64, 4.0));
+    p.set::<2>(9.0);
+}
+
+#[test]
+#[should_panic(expected = "dimension 2 is out of range")]
+fn geo_line_set_indexed_rejects_a_third_dimension() {
+    let mut line = GeoLine::new(Line::new((0.0_f64, 1.0), (2.0, 3.0)));
+    line.set_indexed::<0, 2>(9.0);
+}
+
+#[test]
+#[should_panic(expected = "endpoint index 2 is out of range")]
+fn geo_line_set_indexed_rejects_a_third_endpoint() {
+    let mut line = GeoLine::new(Line::new((0.0_f64, 1.0), (2.0, 3.0)));
+    line.set_indexed::<2, 0>(9.0);
+}
+
+#[test]
+#[should_panic(expected = "dimension 2 is out of range")]
+fn geo_rect_set_indexed_rejects_a_third_dimension() {
+    let mut rect = GeoRect::new(Rect::new((0.0_f64, 1.0), (3.0, 4.0)));
+    rect.set_indexed::<1, 2>(9.0);
+}
+
 /// The kernel `Polygon` that `to_dyn_geometry` builds for a `Rect` is the
 /// model default — declared clockwise — so its ring must wind clockwise
 /// for the kernel's signed area (Boost's clockwise-positive convention,

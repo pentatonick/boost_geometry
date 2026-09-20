@@ -233,15 +233,8 @@ mod tests {
         let azimuth = Rhumb::UNIT.azimuth(&start, &end);
         assert!((azimuth - bearing).abs() < 1e-9, "azimuth {azimuth}");
         let destination = Rhumb::UNIT.destination(&start, bearing, expected);
-        assert!(
-            (destination.get::<0>() - lon2).abs() < 1e-7,
-            "lon {}",
-            destination.get::<0>()
-        );
-        assert!(
-            (destination.get::<1>() - 45.0).abs() < 1e-7,
-            "lat {}",
-            destination.get::<1>()
-        );
+        let (lon, lat) = (destination.get::<0>(), destination.get::<1>());
+        assert!((lon - lon2).abs() < 1e-7, "lon {lon}");
+        assert!((lat - 45.0).abs() < 1e-7, "lat {lat}");
     }
 }

@@ -668,4 +668,44 @@ mod tests {
         assert!(WithinBox.covered_by(&P3::new(1.0, 1.0, 2.0), &b));
         assert!(!WithinBox.within(&P3::new(1.0, 1.0, 2.0), &b));
     }
+
+    /// A 4-D point built ordinate-wise, since `Point::new` stops at
+    /// three arguments.
+    fn p4(v: [f64; 4]) -> geometry_model::Point<f64, 4> {
+        use geometry_trait::set_ordinate;
+        let mut p = geometry_model::Point::<f64, 4>::default();
+        for (d, value) in v.into_iter().enumerate() {
+            set_ordinate(&mut p, d, value);
+        }
+        p
+    }
+
+    /// `fold_dims` runs to the point's own arity, so the last row of the
+    /// per-dimension lookup is only reached by a point of the largest
+    /// arity the table supports. A point inside on x, y and z and
+    /// outside on the fourth axis is the input that distinguishes a
+    /// present row from a missing one — and the strict/inclusive split
+    /// must hold on that axis exactly as it does on x.
+    #[test]
+    fn box_containment_reads_the_fourth_dimension() {
+        let b = Box::from_corners(p4([0.0; 4]), p4([2.0; 4]));
+
+        assert!(WithinBox.within(&p4([1.0; 4]), &b));
+        assert!(!WithinBox.within(&p4([1.0, 1.0, 1.0, 10.0]), &b));
+        assert!(!WithinBox.covered_by(&p4([1.0, 1.0, 1.0, 10.0]), &b));
+
+        // On the boundary of the fourth axis only: covered, not within.
+        assert!(WithinBox.covered_by(&p4([1.0, 1.0, 1.0, 2.0]), &b));
+        assert!(!WithinBox.within(&p4([1.0, 1.0, 1.0, 2.0]), &b));
+    }
+
+    /// Past the last row the lookup must fail loudly rather than fall
+    /// through to another axis, which would answer with a comparison
+    /// the caller never asked for.
+    #[test]
+    #[should_panic(expected = "fold_dims caps at MAX_DIM")]
+    fn box_dimension_contains_panics_past_max_dim() {
+        let b = Box::from_corners(p4([0.0; 4]), p4([2.0; 4]));
+        let _ = super::box_dimension_contains(&p4([1.0; 4]), &b, 4, true);
+    }
 }
