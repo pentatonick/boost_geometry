@@ -26,7 +26,7 @@
 //! whitespace anywhere inside the prefix, and no sign.
 
 use crate::ewkt_error::EwktError;
-use crate::srid::Srid;
+use geometry_srid::Srid;
 
 /// What the scanner found at the head of the input.
 #[derive(Debug, PartialEq)]
@@ -127,7 +127,7 @@ pub(crate) fn scan(input: &str) -> Result<Scanned, EwktError> {
 mod tests {
     use super::{Scanned, scan};
     use crate::ewkt_error::EwktError;
-    use crate::srid::Srid;
+    use geometry_srid::Srid;
 
     /// The scanner's error for `input`, which must be claimed.
     fn err(input: &str) -> EwktError {

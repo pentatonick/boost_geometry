@@ -26,8 +26,8 @@ use geometry_trait::{Geometry, Point as PointTrait, Polygon as PolygonTrait};
 
 use crate::dimension_suffix;
 use crate::ewkt_error::EwktError;
-use crate::srid::Srid;
 use crate::srid_prefix::{self, Scanned};
+use geometry_srid::Srid;
 
 /// A concrete 2D Cartesian point — the coordinate type every parsed
 /// geometry is built from, as in the WKT crate's parser.
@@ -405,7 +405,7 @@ mod tests {
     use geometry_model::{Linestring, Point2D};
 
     use super::{Ewkt, to_ewkt, write_ewkt};
-    use crate::srid::Srid;
+    use geometry_srid::Srid;
 
     /// The point every writer row is written from.
     fn point() -> Point2D<f64, Cartesian> {

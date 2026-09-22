@@ -15,7 +15,7 @@
 //! `Z`/`M` markers in both encodings the wild uses: the EWKB/OGC high
 //! bits (`0x8000_0000` = Z, `0x4000_0000` = M) and the ISO SQL/MM
 //! ranges (`1000`+ = Z, `2000`+ = M, `3000`+ = ZM). Any such marker is
-//! **rejected** with [`WkbError::UnsupportedDimension`] rather than
+//! **rejected** with [`WkbError::HigherDimension`] rather than
 //! silently dropping the extra ordinates — a WKB reader cannot re-emit
 //! bytes it discarded, so a lossy read would break round-trip parity.
 //! Only the seven base codes `1..=7` are accepted.
@@ -80,16 +80,31 @@ fn dyn_code(g: &DynGeometry<f64, Cartesian>) -> u32 {
 ///   SRID), and
 /// * ISO SQL/MM code ranges (`1000`+ Z, `2000`+ M, `3000`+ ZM).
 fn base_type_code(tag: u32) -> Result<u32, WkbError> {
-    // Any EWKB Z/M flag → higher dimension, unsupported. An SRID flag
-    // would also prefix extra bytes this 2D reader does not consume.
-    if tag & (EWKB_Z | EWKB_M | EWKB_SRID) != 0 {
-        return Err(WkbError::UnsupportedDimension);
+    // An EWKB Z/M flag is a dimension this 2D reader refuses. Tested
+    // first so a record carrying both Z and an SRID reports the
+    // dimension, matching the order the EWKB dialect reader documents.
+    if tag & (EWKB_Z | EWKB_M) != 0 {
+        return Err(WkbError::HigherDimension { type_word: tag });
     }
-    // ISO SQL/MM: strip the thousands digit; anything above the 2D
-    // range (base + 1000/2000/3000) carries Z and/or M.
+    // An SRID flag is not a dimension: the buffer is EWKB, and it
+    // prefixes the body with four bytes this reader does not consume.
+    if tag & EWKB_SRID != 0 {
+        return Err(WkbError::UnexpectedSridFlag { type_word: tag });
+    }
+    // ISO SQL/MM encodes Z/M/ZM as the 1000 / 2000 / 3000 ranges.
+    // Anything else above the 2D range — an EWKB bounding-box bit, an
+    // undefined high bit — is a type word this reader cannot classify,
+    // which is a different fact from "this is 3D".
     let base = tag % 1000;
     if tag != base {
-        return Err(WkbError::UnsupportedDimension);
+        // Only 21 words are real ISO dimension codes: {1,2,3} thousands
+        // over a base of 1..=7. `1500` or `2000` are as unclassifiable
+        // as `999` is, and calling them dimensions would reinstate the
+        // very mislabelling this split exists to remove.
+        return Err(match (tag / 1000, base) {
+            (1..=3, 1..=7) => WkbError::HigherDimension { type_word: tag },
+            _ => WkbError::UnrecognisedTypeWord { type_word: tag },
+        });
     }
     Ok(base)
 }
@@ -110,8 +125,9 @@ const POINT_BYTES: usize = 16;
 
 /// Smallest number of bytes a nested WKB record occupies: a one-byte
 /// byte-order flag plus a 4-byte type tag (§8.2.3–8.2.4). A multi /
-/// collection count cannot describe more members than `remaining / 5`.
-const MIN_RECORD_BYTES: usize = 5;
+/// collection count cannot describe more members than
+/// `remaining / RECORD_HEADER_LEN`.
+use crate::header::RECORD_HEADER_LEN as MIN_RECORD_BYTES;
 
 /// Pre-reserve capacity for `count` elements, but never more than the
 /// remaining buffer could actually contain (`remaining / min_elem_bytes`).
@@ -161,13 +177,10 @@ impl<'a> Parser<'a> {
             let y_bytes: [u8; 8] = point[8..]
                 .try_into()
                 .expect("a point chunk contains its y ordinate");
-            let (x, y) = match order {
-                ByteOrder::LittleEndian => {
-                    (f64::from_le_bytes(x_bytes), f64::from_le_bytes(y_bytes))
-                }
-                ByteOrder::BigEndian => (f64::from_be_bytes(x_bytes), f64::from_be_bytes(y_bytes)),
-            };
-            pts.push(Point2D::new(x, y));
+            pts.push(Point2D::new(
+                order.read_f64(x_bytes),
+                order.read_f64(y_bytes),
+            ));
         }
         Ok(pts)
     }
@@ -308,8 +321,20 @@ impl<'a> Parser<'a> {
         if depth >= MAX_DEPTH {
             return Err(WkbError::NestingTooDeep);
         }
-        let order = self.cursor.read_byte_order()?;
-        let tag = self.cursor.read_u32(order)?;
+        let header = self.cursor.read_header()?;
+        self.parse_body(header.byte_order, header.type_word, depth)
+    }
+
+    /// Parse a record whose header has already been consumed.
+    ///
+    /// Shared by [`from_wkb`]'s recursive descent and by
+    /// [`from_wkb_parts`], so both drive one parser.
+    fn parse_body(
+        &mut self,
+        order: ByteOrder,
+        tag: u32,
+        depth: usize,
+    ) -> Result<DynGeometry<f64, Cartesian>, WkbError> {
         let code = base_type_code(tag)?;
         match code {
             WKB_POINT => self.read_point_body(order),
@@ -338,7 +363,7 @@ impl<'a> Parser<'a> {
 ///
 /// This reader is strictly 2D. A type tag carrying a `Z`/`M`/`ZM`
 /// marker (EWKB flag bits or ISO SQL/MM `1000`+ codes) is **rejected**
-/// with [`WkbError::UnsupportedDimension`]; extra ordinates are never
+/// with [`WkbError::HigherDimension`]; extra ordinates are never
 /// silently dropped.
 ///
 /// # Errors
@@ -346,8 +371,9 @@ impl<'a> Parser<'a> {
 /// Returns a [`WkbError`] on a truncated buffer
 /// ([`WkbError::UnexpectedEof`]), an invalid byte-order flag
 /// ([`WkbError::InvalidByteOrder`]), an unknown or higher-dimension type
-/// tag ([`WkbError::UnknownGeometryType`] /
-/// [`WkbError::UnsupportedDimension`]), trailing bytes after the
+/// tag ([`WkbError::UnknownGeometryType`], [`WkbError::HigherDimension`],
+/// [`WkbError::UnexpectedSridFlag`] or [`WkbError::UnrecognisedTypeWord`]),
+/// trailing bytes after the
 /// top-level geometry ([`WkbError::TrailingBytes`]), or multi/collection
 /// nesting past the recursion limit ([`WkbError::NestingTooDeep`]).
 ///
@@ -370,6 +396,55 @@ impl<'a> Parser<'a> {
 pub fn from_wkb(bytes: &[u8]) -> Result<DynGeometry<f64, Cartesian>, WkbError> {
     let mut parser = Parser::new(bytes);
     let g = parser.parse_geometry(0)?;
+    if parser.cursor.is_empty() {
+        Ok(g)
+    } else {
+        Err(WkbError::TrailingBytes)
+    }
+}
+
+/// Parse a WKB record whose header has already been consumed.
+///
+/// The counterpart to [`crate::split_header`]. Together they let a caller read
+/// a record without this crate re-reading a header the caller has
+/// already inspected, and without the caller copying the body to
+/// rebuild a record [`from_wkb`] would accept.
+///
+/// `body` must contain exactly one record body and nothing after it.
+///
+/// `order` must be the byte order that decoded `type_code` — the pair
+/// [`crate::split_header`] returned together. Passing the other order is not
+/// detectable here and silently yields byte-swapped ordinates rather
+/// than an error.
+///
+/// # Errors
+///
+/// The same errors [`from_wkb`] returns for a body, including
+/// [`WkbError::TrailingBytes`] if `body` extends past the record.
+///
+/// # Examples
+///
+/// ```
+/// use geometry_io_wkb::{from_wkb, split_header, from_wkb_parts};
+///
+/// let bytes = [
+///     0x01, 0x01, 0x00, 0x00, 0x00,
+///     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x3F,
+///     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40,
+/// ];
+/// let header = split_header(&bytes).unwrap();
+/// assert_eq!(
+///     from_wkb_parts(header.byte_order, header.type_word, header.body),
+///     from_wkb(&bytes),
+/// );
+/// ```
+pub fn from_wkb_parts(
+    order: ByteOrder,
+    type_code: u32,
+    body: &[u8],
+) -> Result<DynGeometry<f64, Cartesian>, WkbError> {
+    let mut parser = Parser::new(body);
+    let g = parser.parse_body(order, type_code, 0)?;
     if parser.cursor.is_empty() {
         Ok(g)
     } else {
@@ -461,14 +536,48 @@ mod tests {
     fn z_dimension_rejected() {
         // Type tag 0x8000_0001 (EWKB Point Z).
         let b = vec![0x01, 0x01, 0x00, 0x00, 0x80];
-        assert_eq!(from_wkb(&b).unwrap_err(), WkbError::UnsupportedDimension);
+        assert_eq!(
+            from_wkb(&b).unwrap_err(),
+            WkbError::HigherDimension {
+                type_word: 0x8000_0001
+            }
+        );
     }
 
     #[test]
     fn iso_z_dimension_rejected() {
         // ISO SQL/MM Point Z = 1001.
         let b = vec![0x01, 0xE9, 0x03, 0x00, 0x00];
-        assert_eq!(from_wkb(&b).unwrap_err(), WkbError::UnsupportedDimension);
+        assert_eq!(
+            from_wkb(&b).unwrap_err(),
+            WkbError::HigherDimension { type_word: 1001 }
+        );
+    }
+
+    #[test]
+    fn ewkb_srid_flag_is_not_reported_as_a_dimension() {
+        // Type tag 0x2000_0001 (EWKB Point with an SRID prefix).
+        let b = vec![0x01, 0x01, 0x00, 0x00, 0x20];
+        assert_eq!(
+            from_wkb(&b).unwrap_err(),
+            WkbError::UnexpectedSridFlag {
+                type_word: 0x2000_0001
+            }
+        );
+    }
+
+    #[test]
+    fn bbox_bit_is_unrecognised_not_a_dimension() {
+        // Type tag 0x1000_0001 (EWKB bounding-box bit). Before the
+        // split this reported `UnsupportedDimension` by falling through
+        // the ISO modulo branch, which was never about dimensions.
+        let b = vec![0x01, 0x01, 0x00, 0x00, 0x10];
+        assert_eq!(
+            from_wkb(&b).unwrap_err(),
+            WkbError::UnrecognisedTypeWord {
+                type_word: 0x1000_0001
+            }
+        );
     }
 
     #[test]

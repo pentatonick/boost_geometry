@@ -98,9 +98,11 @@ mod header;
 mod parse;
 mod write;
 
-pub use header::{ByteOrder, WkbError};
+pub use header::{ByteOrder, WkbError, WkbHeader};
 // feature-group: I/O — Well-Known Binary
 // feature-desc: Parse and write the OGC WKB format
-pub use parse::from_wkb;
+pub use header::split_header;
 // feature-group: I/O — Well-Known Binary
-pub use write::{WriteWkb, to_wkb, to_wkb_polygon};
+pub use parse::{from_wkb, from_wkb_parts};
+// feature-group: I/O — Well-Known Binary
+pub use write::{WriteWkb, polygon_wkb_len, to_wkb, to_wkb_polygon, write_wkb_polygon};

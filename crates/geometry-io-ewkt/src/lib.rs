@@ -45,14 +45,13 @@ extern crate alloc;
 mod dimension_suffix;
 mod ewkt;
 mod ewkt_error;
-mod srid;
 mod srid_prefix;
 
 pub use ewkt_error::EwktError;
 pub use geometry_io_wkt::WktError;
 #[doc(hidden)]
 pub use geometry_io_wkt::WriteWkt;
-pub use srid::Srid;
+pub use geometry_srid::Srid;
 // feature-group: I/O — Extended Well-Known Text
 // feature-desc: Parse and write PostGIS EWKT (WKT with an SRID prefix)
 pub use ewkt::{

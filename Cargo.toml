@@ -15,6 +15,8 @@ members = [
     "crates/geometry-io-wkt",
     "crates/geometry-io-ewkt",
     "crates/geometry-io-wkb",
+    "crates/geometry-io-ewkb",
+    "crates/geometry-srid",
     "crates/geometry-io-geojson",
     "crates/geometry-io-svg",
     "crates/geometry-overlay",

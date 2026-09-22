@@ -1,6 +1,6 @@
 # `geometry-io-ewkt`
 
-**I/O peer, consumes `geometry-io-wkt` and `geometry-model`.**
+**I/O peer, consumes `geometry-io-wkt`, `geometry-srid`, and `geometry-model`.**
 `#![no_std]` + `alloc`.
 
 Not part of Boost.Geometry — Boost has no notion of an SRID prefix.
@@ -19,7 +19,6 @@ only the prefix and the spelling.
 
 | File | Contents |
 |---|---|
-| `src/srid.rs` | `Srid` — the newtype over the prefix's integer, and `Srid::UNKNOWN` |
 | `src/srid_prefix.rs` | `scan` — the `SRID=<digits>;` prefix scanner, and where the body starts |
 | `src/dimension_suffix.rs` | `normalise` — blanks a glued `Z`/`M`/`ZM` suffix in place, preserving every byte offset |
 | `src/ewkt_error.rs` | `EwktError` — `InvalidSrid { reason, pos }` or a wrapped `WktError` |
@@ -29,12 +28,13 @@ only the prefix and the spelling.
 
 `from_ewkt` returns an `Ewkt<DynGeometry>` — the geometry plus
 `Option<Srid>`, which is `None` exactly when the input carried no prefix.
-The typed `parse_*` functions mirror the WKT crate's, wrapping the same
-return types in `Ewkt`. On the write side `to_ewkt` takes the SRID as an
-`Option<Srid>` argument rather than reading it off the geometry, because
-the model types carry no SRID; passing `None` produces output byte-identical
-to `geometry-io-wkt`'s. Every error position indexes the caller's original
-string, prefix included.
+`Srid` itself is `geometry-srid`'s newtype, re-exported here rather than
+defined locally. The typed `parse_*` functions mirror the WKT crate's,
+wrapping the same return types in `Ewkt`. On the write side `to_ewkt`
+takes the SRID as an `Option<Srid>` argument rather than reading it off
+the geometry, because the model types carry no SRID; passing `None`
+produces output byte-identical to `geometry-io-wkt`'s. Every error
+position indexes the caller's original string, prefix included.
 
 ## Who depends on this
 

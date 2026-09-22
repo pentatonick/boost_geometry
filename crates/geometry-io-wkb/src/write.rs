@@ -47,8 +47,7 @@ const WKB_MULTIPOLYGON: u32 = 6;
 /// OGC base type code for `GeometryCollection`.
 const WKB_GEOMETRYCOLLECTION: u32 = 7;
 
-/// Bytes in every WKB byte-order flag plus type header.
-const HEADER_LEN: usize = 5;
+use crate::header::RECORD_HEADER_LEN as HEADER_LEN;
 /// Bytes in every WKB element count.
 const COUNT_LEN: usize = 4;
 /// Bytes in one 2D point body.
@@ -64,6 +63,11 @@ const POINT_LEN: usize = 16;
 /// `Z`/`M` flag bits are set and the output re-parses through
 /// [`crate::from_wkb`]. Mirrors the write path implied by OGC 06-103r4
 /// §8.2.
+///
+/// Empty polygons have zero rings on the wire. Other ring structures
+/// are written as supplied: this function does not validate or repair
+/// closure, point counts, or holes without an exterior. Consumers may
+/// reject such malformed geometries.
 ///
 /// # Examples
 ///
@@ -89,19 +93,79 @@ pub fn to_wkb<G: Geometry + WriteWkb>(g: &G, order: ByteOrder) -> Vec<u8> {
 /// This is the bring-your-own-type counterpart to [`to_wkb`]. It reads the
 /// polygon through the public geometry traits, including its interior rings,
 /// and writes a complete 2D Polygon record in the requested byte order.
+/// An empty exterior with no interiors is encoded as zero rings. Other
+/// ring structures are preserved without validation, as in [`to_wkb`].
 #[must_use]
 pub fn to_wkb_polygon<Pg>(polygon: &Pg, order: ByteOrder) -> Vec<u8>
 where
     Pg: PolygonTrait,
     Pg::Point: PointTrait<Scalar = f64>,
 {
-    let capacity = polygon_body_len(polygon)
-        .and_then(|body_len| HEADER_LEN.checked_add(body_len))
-        .unwrap_or(0);
+    let capacity = polygon_wkb_len(polygon).unwrap_or(0);
     let mut out = Vec::with_capacity(capacity);
-    write_header(WKB_POLYGON, order, &mut out);
-    write_polygon_body(polygon, order, &mut out);
+    write_wkb_polygon(polygon, order, &mut out);
     out
+}
+
+/// Append a complete 2D Polygon record for `polygon` to `out`.
+///
+/// The appending counterpart to [`to_wkb_polygon`], for a caller that is
+/// already building a buffer and does not want an intermediate `Vec` and
+/// a copy out of it. Size the buffer with [`polygon_wkb_len`].
+///
+/// # Examples
+///
+/// ```
+/// use geometry_io_wkb::{ByteOrder, to_wkb_polygon, write_wkb_polygon};
+/// use geometry_model::{Polygon, Ring, Point2D};
+/// use geometry_cs::Cartesian;
+///
+/// type Pt = Point2D<f64, Cartesian>;
+/// let pg = Polygon::<Pt>::new(Ring::from_vec(vec![
+///     Pt::new(0.0, 0.0), Pt::new(0.0, 1.0), Pt::new(1.0, 1.0), Pt::new(0.0, 0.0),
+/// ]));
+///
+/// let mut buf = Vec::new();
+/// write_wkb_polygon(&pg, ByteOrder::LittleEndian, &mut buf);
+/// assert_eq!(buf, to_wkb_polygon(&pg, ByteOrder::LittleEndian));
+/// ```
+pub fn write_wkb_polygon<Pg>(polygon: &Pg, order: ByteOrder, out: &mut Vec<u8>)
+where
+    Pg: PolygonTrait,
+    Pg::Point: PointTrait<Scalar = f64>,
+{
+    write_header(WKB_POLYGON, order, out);
+    write_polygon_body(polygon, order, out);
+}
+
+/// The exact byte length of the record [`write_wkb_polygon`] appends, or
+/// `None` if it would overflow `usize`.
+///
+/// Mirrors [`WriteWkb::wkb_len`] for the bring-your-own-polygon path:
+/// like it, this is the **whole record** including the five-byte header,
+/// not the body alone.
+///
+/// # Examples
+///
+/// ```
+/// use geometry_io_wkb::{ByteOrder, polygon_wkb_len, to_wkb_polygon};
+/// use geometry_model::{Polygon, Ring, Point2D};
+/// use geometry_cs::Cartesian;
+///
+/// type Pt = Point2D<f64, Cartesian>;
+/// let pg = Polygon::<Pt>::new(Ring::from_vec(vec![Pt::new(0.0, 0.0)]));
+/// assert_eq!(
+///     polygon_wkb_len(&pg),
+///     Some(to_wkb_polygon(&pg, ByteOrder::LittleEndian).len()),
+/// );
+/// ```
+#[must_use]
+pub fn polygon_wkb_len<Pg>(polygon: &Pg) -> Option<usize>
+where
+    Pg: PolygonTrait,
+    Pg::Point: PointTrait<Scalar = f64>,
+{
+    HEADER_LEN.checked_add(polygon_body_len(polygon)?)
 }
 
 /// The per-kind WKB emitter, implemented for every concrete model type
@@ -130,11 +194,20 @@ fn point_run_len(point_count: usize) -> Option<usize> {
     COUNT_LEN.checked_add(point_count.checked_mul(POINT_LEN)?)
 }
 
+/// Only the canonical empty model omits the exterior from the wire.
+/// Retain an empty exterior when interiors exist so no holes are lost.
+fn polygon_has_no_rings<Pg: PolygonTrait>(pg: &Pg) -> bool {
+    pg.exterior().points().len() == 0 && pg.interiors().len() == 0
+}
+
 fn polygon_body_len<Pg>(pg: &Pg) -> Option<usize>
 where
     Pg: PolygonTrait,
     Pg::Point: PointTrait<Scalar = f64>,
 {
+    if polygon_has_no_rings(pg) {
+        return Some(COUNT_LEN);
+    }
     let mut len = COUNT_LEN.checked_add(point_run_len(pg.exterior().points().len())?)?;
     for ring in pg.interiors() {
         len = len.checked_add(point_run_len(ring.points().len())?)?;
@@ -144,19 +217,12 @@ where
 
 /// Append the one-byte endianness flag (OGC 06-103r4 §8.2.3).
 fn write_byte_order(order: ByteOrder, out: &mut Vec<u8>) {
-    out.push(match order {
-        ByteOrder::LittleEndian => 0x01,
-        ByteOrder::BigEndian => 0x00,
-    });
+    out.push(order.flag());
 }
 
 /// Append a `uint32` in the given byte order.
 fn write_u32(v: u32, order: ByteOrder, out: &mut Vec<u8>) {
-    let b = match order {
-        ByteOrder::LittleEndian => v.to_le_bytes(),
-        ByteOrder::BigEndian => v.to_be_bytes(),
-    };
-    out.extend_from_slice(&b);
+    out.extend_from_slice(&order.to_bytes(v));
 }
 
 /// Append the record header: byte-order flag + 32-bit type tag.
@@ -223,6 +289,10 @@ where
     Pg: PolygonTrait,
     Pg::Point: PointTrait<Scalar = f64>,
 {
+    if polygon_has_no_rings(pg) {
+        write_u32(0, order, out);
+        return;
+    }
     #[allow(
         clippy::cast_possible_truncation,
         reason = "WKB counts are 32-bit per OGC 06-103r4 §8.2"
@@ -264,15 +334,22 @@ impl<P: PointTrait<Scalar = f64>> WriteWkb for Linestring<P> {
 // writer. A ring's serialisation does not depend on those flags.
 impl<P: PointTrait<Scalar = f64>> WriteWkb for Ring<P, true, true> {
     fn wkb_len(&self) -> Option<usize> {
+        if self.points().len() == 0 {
+            return Some(HEADER_LEN + COUNT_LEN);
+        }
         HEADER_LEN
             .checked_add(COUNT_LEN)?
             .checked_add(point_run_len(self.points().len())?)
     }
 
     fn write_wkb(&self, order: ByteOrder, out: &mut Vec<u8>) {
-        // A bare ring serialises as a single-ring polygon — WKB has no
-        // standalone ring type code.
+        // WKB has no standalone ring kind. An empty ring represents
+        // an empty polygon; any other ring is its exterior.
         write_header(WKB_POLYGON, order, out);
+        if self.points().len() == 0 {
+            write_u32(0, order, out);
+            return;
+        }
         write_u32(1, order, out);
         write_point_run(self.points(), order, out);
     }

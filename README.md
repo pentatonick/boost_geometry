@@ -331,7 +331,7 @@ accessors.
 Every capability below is a free function you call on your own registered
 types — no conversion step. Adding the single `boost_geometry` crate brings
 in every row whose crate the facade re-exports; the I/O and reprojection
-formats (the WKT, EWKT, WKB, GeoJSON, SVG, and reprojection rows) are
+formats (the WKT, EWKT, WKB, EWKB, GeoJSON, SVG, and reprojection rows) are
 separate crates, so a default build stays lean. The **Docs** link opens the rustdoc for that
 item; the `no_std` column is the status of the crate the function lives in
 (see the [full matrix](#no_std-support) below).
@@ -424,8 +424,13 @@ plus a `_with` companion that takes an explicit strategy.
 | `from_ewkt` / `parse_linestring` / `parse_multi_linestring` / `parse_multi_point` / `parse_multi_polygon` / `parse_point` / `parse_polygon` | ✅ | [→](https://docs.rs/geometry-io-ewkt) |
 | `to_ewkt` / `to_ewkt_polygon` / `write_ewkt` | ✅ | [→](https://docs.rs/geometry-io-ewkt) |
 | **I/O — Well-Known Binary** — Parse and write the OGC WKB format |||
-| `from_wkb` | ✅ | [→](https://docs.rs/geometry-io-wkb) |
-| `to_wkb` / `to_wkb_polygon` | ✅ | [→](https://docs.rs/geometry-io-wkb) |
+| `from_wkb` / `from_wkb_parts` | ✅ | [→](https://docs.rs/geometry-io-wkb) |
+| `polygon_wkb_len` / `to_wkb` / `to_wkb_polygon` / `write_wkb_polygon` | ✅ | [→](https://docs.rs/geometry-io-wkb) |
+| `split_header` | ✅ | [→](https://docs.rs/geometry-io-wkb) |
+| **I/O — Extended Well-Known Binary** — Parse and write PostGIS EWKB (WKB with an SRID header), binary and hex |||
+| `from_ewkb` | ✅ | [→](https://docs.rs/geometry-io-ewkb) |
+| `from_ewkb_hex` / `to_ewkb_hex` | ✅ | [→](https://docs.rs/geometry-io-ewkb) |
+| `to_ewkb` / `to_ewkb_polygon` | ✅ | [→](https://docs.rs/geometry-io-ewkb) |
 | **I/O — GeoJSON** — Parse and write GeoJSON (RFC 7946) |||
 | `from_geojson` | ✅ | [→](https://docs.rs/geometry-io-geojson) |
 | `to_geojson` / `to_geojson_polygon` | ✅ | [→](https://docs.rs/geometry-io-geojson) |
@@ -448,10 +453,10 @@ to their own docs.rs pages.
 
 ## Workspace layout
 
-Twenty crates form a dependency spine from foundational tag/coords
+Twenty-two crates form a dependency spine from foundational tag/coords
 crates up through traits, models, strategies, and algorithms to the
 `boost_geometry` facade — plus adapters (nalgebra, geo-types), IO
-(WKT, EWKT, WKB, GeoJSON, SVG), an R-tree, overlay operations, and
+(WKT, EWKT, WKB, EWKB, GeoJSON, SVG), an R-tree, overlay operations, and
 projections. `boost_geometry` re-exports everything; depend on it alone
 unless you need a slimmer build.
 
@@ -475,6 +480,7 @@ that need a libm-backed `Float` impl) and is checked in CI:
 | `geometry-coords` | ✅ |
 | `geometry-cs` | ✅ |
 | `geometry-derive` | ✅ |
+| `geometry-io-ewkb` | ✅ |
 | `geometry-io-ewkt` | ✅ |
 | `geometry-io-geojson` | ✅ |
 | `geometry-io-svg` | ✅ |
@@ -484,6 +490,7 @@ that need a libm-backed `Float` impl) and is checked in CI:
 | `geometry-overlay` | ✅ |
 | `geometry-proj` | ✅ |
 | `geometry-rtree` | ✅ |
+| `geometry-srid` | ✅ |
 | `geometry-strategy` | ✅ |
 | `geometry-tag` | ✅ |
 | `geometry-trait` | ✅ |

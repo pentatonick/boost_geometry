@@ -9,6 +9,16 @@
 //!
 //! Reference: OGC 06-103r4 §8.2 (Well-Known Binary representation).
 
+/// Bytes in a WKB record header: a one-byte order flag plus a 32-bit
+/// type word (OGC 06-103r4 §8.2.3-8.2.4). The aggregate that owns the
+/// header owns its width; `parse` and `write` both point here rather
+/// than spelling `5` a second and third time.
+pub(crate) const RECORD_HEADER_LEN: usize = 5;
+/// Bytes in the 32-bit type word — the other half of
+/// [`RECORD_HEADER_LEN`], the first being the order flag.
+pub(crate) const TYPE_WORD_LEN: usize = 4;
+const _: () = assert!(RECORD_HEADER_LEN == 1 + TYPE_WORD_LEN);
+
 /// The two byte orders a WKB record may declare.
 ///
 /// The leading byte of every WKB record is `0x00` for big-endian
@@ -21,6 +31,130 @@ pub enum ByteOrder {
     LittleEndian,
     /// `0x00` — most-significant byte first (XDR / network order).
     BigEndian,
+}
+
+impl ByteOrder {
+    /// The order a WKB record's leading flag byte declares, or `None`
+    /// when the byte is neither `0x00` nor `0x01` (OGC 06-103r4 §8.2.3).
+    ///
+    /// ```
+    /// use geometry_io_wkb::ByteOrder;
+    ///
+    /// assert_eq!(ByteOrder::from_flag(0x01), Some(ByteOrder::LittleEndian));
+    /// assert_eq!(ByteOrder::from_flag(0x00), Some(ByteOrder::BigEndian));
+    /// assert_eq!(ByteOrder::from_flag(0x02), None);
+    /// ```
+    #[must_use]
+    pub const fn from_flag(byte: u8) -> Option<Self> {
+        match byte {
+            0x00 => Some(Self::BigEndian),
+            0x01 => Some(Self::LittleEndian),
+            _ => None,
+        }
+    }
+
+    /// The flag byte that declares this order.
+    ///
+    /// Crate-internal: no decision authorised it as public API, and no
+    /// consumer needs it — a reader gets the order from
+    /// [`ByteOrder::from_flag`], and a writer gets the flag byte from
+    /// the record `write_wkb` already produced.
+    pub(crate) const fn flag(self) -> u8 {
+        match self {
+            Self::LittleEndian => 0x01,
+            Self::BigEndian => 0x00,
+        }
+    }
+
+    /// Decode a WKB `uint32` held in this order.
+    ///
+    /// ```
+    /// use geometry_io_wkb::ByteOrder;
+    ///
+    /// assert_eq!(ByteOrder::LittleEndian.read_u32([0x01, 0, 0, 0]), 1);
+    /// assert_eq!(ByteOrder::BigEndian.read_u32([0, 0, 0, 0x01]), 1);
+    /// ```
+    #[must_use]
+    pub const fn read_u32(self, bytes: [u8; 4]) -> u32 {
+        match self {
+            Self::LittleEndian => u32::from_le_bytes(bytes),
+            Self::BigEndian => u32::from_be_bytes(bytes),
+        }
+    }
+
+    /// Encode a WKB `uint32` in this order.
+    ///
+    /// ```
+    /// use geometry_io_wkb::ByteOrder;
+    ///
+    /// assert_eq!(ByteOrder::LittleEndian.to_bytes(1), [0x01, 0, 0, 0]);
+    /// assert_eq!(ByteOrder::BigEndian.read_u32(ByteOrder::BigEndian.to_bytes(4326)), 4326);
+    /// ```
+    #[must_use]
+    pub const fn to_bytes(self, value: u32) -> [u8; 4] {
+        match self {
+            Self::LittleEndian => value.to_le_bytes(),
+            Self::BigEndian => value.to_be_bytes(),
+        }
+    }
+
+    /// Decode a WKB `float64` held in this order.
+    ///
+    /// Crate-internal, deliberately: a public `f64` **decoder** with no
+    /// matching encoder would be an incoherent surface, and nothing
+    /// outside this crate needs either.
+    pub(crate) const fn read_f64(self, bytes: [u8; 8]) -> f64 {
+        match self {
+            Self::LittleEndian => f64::from_le_bytes(bytes),
+            Self::BigEndian => f64::from_be_bytes(bytes),
+        }
+    }
+}
+
+/// A decoded WKB header with a borrowed slice of the remaining record.
+///
+/// The type word is preserved without interpretation so dialect readers
+/// can handle their flags before parsing the body.
+///
+/// ```
+/// use geometry_io_wkb::{ByteOrder, WkbHeader, split_header};
+///
+/// let bytes = [1, 3, 0, 0, 0, 0, 0, 0, 0];
+/// let header: WkbHeader<'_> = split_header(&bytes).unwrap();
+/// assert_eq!(header.byte_order, ByteOrder::LittleEndian);
+/// assert_eq!(header.type_word, 3);
+/// assert_eq!(header.body, &[0, 0, 0, 0]);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WkbHeader<'a> {
+    /// The byte order declared by the record.
+    pub byte_order: ByteOrder,
+    /// The uninterpreted 32-bit geometry type word.
+    pub type_word: u32,
+    /// All bytes after the five-byte header, borrowed from the input.
+    pub body: &'a [u8],
+}
+
+/// Read the byte order and raw type word, borrowing the remaining bytes.
+///
+/// No body or type-code validation is performed. A dialect reader may
+/// consume additional fields before calling [`crate::from_wkb_parts`].
+///
+/// # Errors
+///
+/// Returns [`WkbError::UnexpectedEof`] for a truncated header or
+/// [`WkbError::InvalidByteOrder`] for an invalid first byte. The order
+/// flag is checked first, including when the rest of the header is missing.
+///
+/// ```
+/// use geometry_io_wkb::{WkbError, split_header};
+///
+/// assert_eq!(split_header(&[]), Err(WkbError::UnexpectedEof));
+/// assert_eq!(split_header(&[2]), Err(WkbError::InvalidByteOrder(2)));
+/// assert_eq!(split_header(&[1, 1, 0, 0, 0]).unwrap().type_word, 1);
+/// ```
+pub fn split_header(bytes: &[u8]) -> Result<WkbHeader<'_>, WkbError> {
+    Cursor::new(bytes).read_header()
 }
 
 /// Everything that can go wrong reading WKB.
@@ -40,10 +174,30 @@ pub enum WkbError {
     /// codes (`1`..=`7`).
     UnknownGeometryType(u32),
     /// The geometry-type tag carried a `Z`, `M`, or `ZM` dimension flag
-    /// (high bits `0x8000_0000` / `0x4000_0000`, or the ISO `1000`+
-    /// ranges). This is a strictly-2D port and rejects higher
-    /// dimensions rather than silently dropping ordinates.
-    UnsupportedDimension,
+    /// — the EWKB high bits `0x8000_0000` / `0x4000_0000`, or the ISO
+    /// SQL/MM `1000` / `2000` / `3000` ranges. This is a strictly-2D
+    /// port and rejects higher dimensions rather than silently dropping
+    /// ordinates.
+    HigherDimension {
+        /// The whole 32-bit type word, for diagnosis.
+        type_word: u32,
+    },
+    /// The geometry-type tag carried the EWKB SRID flag
+    /// (`0x2000_0000`), which prefixes the body with four bytes this
+    /// OGC reader does not consume. Nothing about the dimension is
+    /// wrong; the buffer is EWKB, not WKB.
+    UnexpectedSridFlag {
+        /// The whole 32-bit type word, for diagnosis.
+        type_word: u32,
+    },
+    /// The geometry-type tag is above the 2D range but is neither a
+    /// dimension encoding nor an SRID flag — an EWKB bounding-box bit,
+    /// or an undefined high bit. The reader cannot classify it, which
+    /// is a different fact from "this is 3D".
+    UnrecognisedTypeWord {
+        /// The whole 32-bit type word, for diagnosis.
+        type_word: u32,
+    },
     /// The top-level geometry was parsed successfully but bytes remained
     /// in the buffer afterwards.
     TrailingBytes,
@@ -73,9 +227,18 @@ impl core::fmt::Display for WkbError {
                 )
             }
             WkbError::UnknownGeometryType(t) => write!(f, "unknown WKB geometry type {t}"),
-            WkbError::UnsupportedDimension => {
-                f.write_str("unsupported WKB dimension (Z/M ordinates); this reader is 2D only")
-            }
+            WkbError::HigherDimension { type_word } => write!(
+                f,
+                "type word {type_word:#010x} carries a Z/M dimension; this reader is 2D only"
+            ),
+            WkbError::UnexpectedSridFlag { type_word } => write!(
+                f,
+                "type word {type_word:#010x} sets the EWKB SRID flag; this is an OGC WKB reader"
+            ),
+            WkbError::UnrecognisedTypeWord { type_word } => write!(
+                f,
+                "type word {type_word:#010x} is above the 2D range and is neither a dimension nor an SRID flag"
+            ),
             WkbError::TrailingBytes => f.write_str("trailing bytes after WKB geometry"),
             WkbError::NestingTooDeep => {
                 f.write_str("WKB nesting too deep; exceeded the reader's recursion limit")
@@ -162,11 +325,7 @@ impl<'a> Cursor<'a> {
     ///
     /// [`WkbError::UnexpectedEof`] if fewer than four bytes remain.
     pub(crate) fn read_u32(&mut self, order: ByteOrder) -> Result<u32, WkbError> {
-        let b = self.read_array::<4>()?;
-        Ok(match order {
-            ByteOrder::LittleEndian => u32::from_le_bytes(b),
-            ByteOrder::BigEndian => u32::from_be_bytes(b),
-        })
+        Ok(order.read_u32(self.read_array::<4>()?))
     }
 
     /// Read a 64-bit IEEE-754 float in the given byte order.
@@ -175,10 +334,17 @@ impl<'a> Cursor<'a> {
     ///
     /// [`WkbError::UnexpectedEof`] if fewer than eight bytes remain.
     pub(crate) fn read_f64(&mut self, order: ByteOrder) -> Result<f64, WkbError> {
-        let b = self.read_array::<8>()?;
-        Ok(match order {
-            ByteOrder::LittleEndian => f64::from_le_bytes(b),
-            ByteOrder::BigEndian => f64::from_be_bytes(b),
+        Ok(order.read_f64(self.read_array::<8>()?))
+    }
+
+    /// Consume one header, leaving the cursor at its body.
+    pub(crate) fn read_header(&mut self) -> Result<WkbHeader<'a>, WkbError> {
+        let byte_order = self.read_byte_order()?;
+        let type_word = self.read_u32(byte_order)?;
+        Ok(WkbHeader {
+            byte_order,
+            type_word,
+            body: &self.bytes[self.pos..],
         })
     }
 
@@ -190,11 +356,8 @@ impl<'a> Cursor<'a> {
     /// [`WkbError::UnexpectedEof`] at end of input, or
     /// [`WkbError::InvalidByteOrder`] for any other flag byte.
     pub(crate) fn read_byte_order(&mut self) -> Result<ByteOrder, WkbError> {
-        match self.read_u8()? {
-            0x00 => Ok(ByteOrder::BigEndian),
-            0x01 => Ok(ByteOrder::LittleEndian),
-            other => Err(WkbError::InvalidByteOrder(other)),
-        }
+        let flag = self.read_u8()?;
+        ByteOrder::from_flag(flag).ok_or(WkbError::InvalidByteOrder(flag))
     }
 }
 
@@ -204,6 +367,37 @@ mod tests {
     //! 06-103r4 §8.2.
 
     use super::*;
+
+    #[test]
+    fn flag_round_trips_both_orders() {
+        assert_eq!(ByteOrder::LittleEndian.flag(), 0x01);
+        assert_eq!(ByteOrder::BigEndian.flag(), 0x00);
+        for o in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+            assert_eq!(ByteOrder::from_flag(o.flag()), Some(o));
+        }
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "the value comes from an exact byte literal, not from arithmetic"
+    )]
+    fn read_f64_decodes_in_both_orders() {
+        assert_eq!(ByteOrder::LittleEndian.read_f64(1.5f64.to_le_bytes()), 1.5);
+        assert_eq!(ByteOrder::BigEndian.read_f64(1.5f64.to_be_bytes()), 1.5);
+    }
+
+    #[test]
+    fn to_bytes_is_byte_exact_in_both_orders() {
+        // Asserted at byte level, not by round-trip: a round-trip would
+        // pass even if both directions were swapped together.
+        assert_eq!(ByteOrder::LittleEndian.to_bytes(1), [0x01, 0, 0, 0]);
+        assert_eq!(ByteOrder::BigEndian.to_bytes(1), [0, 0, 0, 0x01]);
+        assert_eq!(
+            ByteOrder::BigEndian.to_bytes(4326),
+            [0x00, 0x00, 0x10, 0xE6]
+        );
+    }
 
     #[test]
     fn reads_le_u32() {
@@ -266,8 +460,33 @@ mod tests {
             "unknown WKB geometry type 9"
         );
         assert!(
-            format!("{}", WkbError::UnsupportedDimension).contains("2D only"),
+            format!(
+                "{}",
+                WkbError::HigherDimension {
+                    type_word: 0x8000_0001
+                }
+            )
+            .contains("2D only"),
             "dimension message"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                WkbError::UnexpectedSridFlag {
+                    type_word: 0x2000_0001
+                }
+            ),
+            "type word 0x20000001 sets the EWKB SRID flag; this is an OGC WKB reader"
+        );
+        assert!(
+            format!(
+                "{}",
+                WkbError::UnrecognisedTypeWord {
+                    type_word: 0x1000_0001
+                }
+            )
+            .contains("neither a dimension nor an SRID flag"),
+            "unrecognised message"
         );
         assert_eq!(
             format!("{}", WkbError::TrailingBytes),
