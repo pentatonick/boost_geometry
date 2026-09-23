@@ -13,15 +13,15 @@ use geometry_io_wkt::WktError;
 /// ```
 /// use geometry_io_ewkt::{EwktError, from_ewkt};
 ///
-/// let e = from_ewkt("SRID=-1;POINT(1 2)").unwrap_err();
+/// let e = from_ewkt("SRID=+1;POINT(1 2)").unwrap_err();
 /// assert_eq!(
 ///     e,
 ///     EwktError::InvalidSrid {
-///         reason: "sign not allowed",
+///         reason: "leading '+' not allowed",
 ///         pos: 5,
 ///     }
 /// );
-/// assert_eq!(e.to_string(), "invalid SRID prefix: sign not allowed at byte 5");
+/// assert_eq!(e.to_string(), "invalid SRID prefix: leading '+' not allowed at byte 5");
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum EwktError {
@@ -29,19 +29,16 @@ pub enum EwktError {
     /// letters that uppercases to `SRID`, but the prefix is malformed.
     InvalidSrid {
         /// Why the scanner stopped at `pos`: one of
-        /// "expected '='", "expected digits", "sign not allowed",
-        /// "value exceeds u32", "expected ';'".
+        /// "expected '='", "expected digits", "leading '+' not allowed",
+        /// "value exceeds i32", "expected ';'".
         reason: &'static str,
         /// Byte offset, in the caller's original string, of the first
-        /// byte that does not fit the prefix grammar or its `u32` bound,
+        /// byte that does not fit the prefix grammar or its signed `i32` bound,
         /// or `input.len()` when the input ended inside the prefix.
         pos: usize,
     },
     /// The geometry body failed to parse as WKT. Positions index the
-    /// caller's original string; an `UnexpectedToken.found` payload
-    /// names the token as the WKT crate saw it *after* the glued
-    /// dimension-suffix normalisation (so a stray `POINTM` is reported
-    /// as `POINT`).
+    /// caller's original string; the body is never rewritten.
     Wkt(WktError),
 }
 

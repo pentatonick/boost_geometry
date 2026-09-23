@@ -418,11 +418,12 @@ plus a `_with` companion that takes an explicit strategy.
 | `and` / `not` / `satisfies` | ✅ | [→](https://docs.rs/boost_geometry/latest/boost_geometry/rtree/fn.and.html) |
 | `Rtree` | ✅ | [→](https://docs.rs/boost_geometry/latest/boost_geometry/rtree/struct.Rtree.html) |
 | **I/O — Well-Known Text** — Parse and write the OGC WKT format |||
-| `from_wkt` / `parse_linestring` / `parse_multi_linestring` / `parse_multi_point` / `parse_multi_polygon` / `parse_point` / `parse_polygon` | ✅ | [→](https://docs.rs/geometry-io-wkt) |
-| `to_wkt` / `to_wkt_polygon` / `write_wkt` | ✅ | [→](https://docs.rs/geometry-io-wkt) |
+| `from_wkt` / `from_wkt_2d` / `parse_linestring` / `parse_multi_linestring` / `parse_multi_point` / `parse_multi_polygon` / `parse_point` / `parse_polygon` | ✅ | [→](https://docs.rs/geometry-io-wkt) |
+| `to_wkt` / `to_wkt_polygon` / `write_wkt` / `write_wkt_polygon` | ✅ | [→](https://docs.rs/geometry-io-wkt) |
+| `trim_wkt_start` | ✅ | [→](https://docs.rs/geometry-io-wkt) |
 | **I/O — Extended Well-Known Text** — Parse and write PostGIS EWKT (WKT with an SRID prefix) |||
-| `from_ewkt` / `parse_linestring` / `parse_multi_linestring` / `parse_multi_point` / `parse_multi_polygon` / `parse_point` / `parse_polygon` | ✅ | [→](https://docs.rs/geometry-io-ewkt) |
-| `to_ewkt` / `to_ewkt_polygon` / `write_ewkt` | ✅ | [→](https://docs.rs/geometry-io-ewkt) |
+| `from_ewkt` / `from_ewkt_2d` / `parse_linestring` / `parse_multi_linestring` / `parse_multi_point` / `parse_multi_polygon` / `parse_point` / `parse_polygon` | ✅ | [→](https://docs.rs/geometry-io-ewkt) |
+| `to_ewkt` / `to_ewkt_polygon` / `write_ewkt` / `write_ewkt_polygon` | ✅ | [→](https://docs.rs/geometry-io-ewkt) |
 | **I/O — Well-Known Binary** — Parse and write the OGC WKB format |||
 | `from_wkb` / `from_wkb_parts` | ✅ | [→](https://docs.rs/geometry-io-wkb) |
 | `polygon_wkb_len` / `to_wkb` / `to_wkb_polygon` / `write_wkb_polygon` | ✅ | [→](https://docs.rs/geometry-io-wkb) |

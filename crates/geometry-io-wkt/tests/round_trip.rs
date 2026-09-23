@@ -38,7 +38,7 @@ impl fmt::Write for FailingSink {
 /// are equal.
 fn assert_round_trip(s: &str) {
     let first = from_wkt(s).unwrap_or_else(|e| panic!("first parse of {s:?} failed: {e}"));
-    let text = to_wkt(&first);
+    let text = to_wkt(&first).unwrap();
     let second = from_wkt(&text).unwrap_or_else(|e| panic!("re-parse of {text:?} failed: {e}"));
     assert_eq!(
         first, second,
@@ -121,12 +121,12 @@ fn public_typed_parsers_accept_their_geometry_kinds() {
         2
     );
     assert_eq!(
-        parse_polygon("POLYGON ((0 0, 1 0, 0 0))")
+        parse_polygon("POLYGON ((0 0, 1 0, 1 1, 0 0))")
             .unwrap()
             .outer
             .0
             .len(),
-        3
+        4
     );
     assert_eq!(
         parse_multi_point("MULTIPOINT (0 0, 1 1)").unwrap().0.len(),
@@ -140,7 +140,7 @@ fn public_typed_parsers_accept_their_geometry_kinds() {
         1
     );
     assert_eq!(
-        parse_multi_polygon("MULTIPOLYGON (((0 0, 1 0, 0 0)))")
+        parse_multi_polygon("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)))")
             .unwrap()
             .0
             .len(),
@@ -150,11 +150,11 @@ fn public_typed_parsers_accept_their_geometry_kinds() {
 
 #[test]
 fn public_parser_contract_covers_dimensions_unicode_and_errors() {
-    assert_round_trip("POINT Z (1 2 3)");
-    assert_round_trip("POINT M (1 2 3)");
-    assert_round_trip("POINT ZM (1 2 3 4)");
-    assert_round_trip("POINT\u{2003}(1 2)");
-    assert_round_trip("MULTIPOLYGON (((0 0, 1 0, 0 0)), ((2 2, 3 2, 2 2)))");
+    assert!(from_wkt("POINT Z (1 2 3)").is_err());
+    assert!(from_wkt("POINT M (1 2 3)").is_err());
+    assert!(from_wkt("POINT ZM (1 2 3 4)").is_err());
+    assert!(from_wkt("POINT\u{2003}(1 2)").is_err());
+    assert_round_trip("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)), ((2 2, 3 2, 3 3, 2 2)))");
     assert_round_trip("POINT (18446744073709551616 0)");
 
     let cases = [
@@ -169,12 +169,20 @@ fn public_parser_contract_covers_dimensions_unicode_and_errors() {
         ),
         (
             "POINT (1)",
-            WktError::UnexpectedToken {
-                expected: "number",
-                found: "RightParen".into(),
+            WktError::CoordinateCount {
+                pos: 8,
+                expected: 2,
+                found: 1,
             },
         ),
-        ("POINT (1", WktError::UnexpectedEof),
+        (
+            "POINT (1",
+            WktError::CoordinateCount {
+                pos: 8,
+                expected: 2,
+                found: 1,
+            },
+        ),
         ("POINT (1.2.3 0)", WktError::InvalidNumber("1.2.3".into())),
         ("CURVE (0 0)", WktError::UnknownGeometryType("CURVE".into())),
     ];
@@ -219,18 +227,16 @@ fn public_writer_covers_rings_scalars_and_every_dynamic_kind() {
     let ring = Ring::from_vec(vec![
         Pt::new(0.0, 0.0),
         Pt::new(1.0, 0.0),
+        Pt::new(1.0, 1.0),
         Pt::new(0.0, 0.0),
     ]);
-    assert_eq!(to_wkt(&ring), "POLYGON((0 0,1 0,0 0))");
-    assert_eq!(to_wkt(&Ring::<Pt>::new()), "POLYGON EMPTY");
+    assert_eq!(to_wkt(&ring).unwrap(), "POLYGON((0 0,1 0,1 1,0 0))");
+    assert_eq!(to_wkt(&Ring::<Pt>::new()).unwrap(), "POLYGON EMPTY");
     assert_eq!(
-        to_wkt(&Pt::new(-1.0e20, 1.0e-20)),
+        to_wkt(&Pt::new(-1.0e20, 1.0e-20)).unwrap(),
         "POINT(-100000000000000000000 0.00000000000000000001)"
     );
-    // This once pinned `POINT(inf -inf)`. That string does not re-parse
-    // — WKT has no spelling for an infinity — so non-finite coordinates
-    // are now outside the crate's domain, guarded by a debug assertion in
-    // the writer and unreachable from the reader.
+    // Infinity rejection is covered separately in both build profiles.
 
     let polygon = Polygon::new(ring.clone());
     let all = Dyn::GeometryCollection(vec![
@@ -238,11 +244,14 @@ fn public_writer_covers_rings_scalars_and_every_dynamic_kind() {
         Dyn::LineString(Linestring(vec![Pt::new(0.0, 0.0), Pt::new(1.0, 1.0)])),
         Dyn::Polygon(polygon.clone()),
         Dyn::MultiPoint(MultiPoint(vec![Pt::new(3.0, 4.0)])),
-        Dyn::MultiLineString(MultiLinestring(vec![Linestring(vec![Pt::new(5.0, 6.0)])])),
+        Dyn::MultiLineString(MultiLinestring(vec![Linestring(vec![
+            Pt::new(5.0, 6.0),
+            Pt::new(7.0, 8.0),
+        ])])),
         Dyn::MultiPolygon(MultiPolygon(vec![polygon])),
         Dyn::GeometryCollection(vec![Dyn::Point(Pt::new(7.0, 8.0))]),
     ]);
-    assert_round_trip(&to_wkt(&all));
+    assert_round_trip(&to_wkt(&all).unwrap());
 
     assert!(write_wkt(&Pt::new(1.0, 2.0), &mut FailingSink).is_err());
 }
@@ -255,26 +264,23 @@ impl Geometry for ExternalWkt {
 }
 
 impl WriteWkt for ExternalWkt {
-    fn write_wkt(&self, out: &mut dyn fmt::Write) -> fmt::Result {
-        out.write_str("POINT(9 10)")
+    fn write_wkt(&self, out: &mut dyn fmt::Write) -> Result<(), geometry_io_wkt::WktWriteError> {
+        Ok(out.write_str("POINT(9 10)")?)
     }
 }
 
 #[test]
 fn external_public_writer_uses_default_extension_methods() {
-    assert_eq!(to_wkt(&ExternalWkt), "POINT(9 10)");
+    assert_eq!(to_wkt(&ExternalWkt).unwrap(), "POINT(9 10)");
 }
 
 // ---- Sweeps over every kind -------------------------------------------
 
 /// Valid inputs covering every kind, `EMPTY` members, holes, both
-/// `MULTIPOINT` spellings, the three dimension suffixes, lowercase, and
+/// `MULTIPOINT` spellings, lowercase, and
 /// nesting — the corpus for the truncation sweep.
-const EVERY_KIND_CORPUS: [&str; 15] = [
+const EVERY_KIND_CORPUS: [&str; 12] = [
     "POINT (10 10)",
-    "POINT Z (1 2 3)",
-    "POINT M (1 2 3)",
-    "POINT ZM (1 2 3 4)",
     "point(1.5 -2.25)",
     "LINESTRING (10 10, 20 20, 30 40)",
     "LINESTRING EMPTY",
@@ -294,7 +300,7 @@ const EVERY_KIND_CORPUS: [&str; 15] = [
 fn every_proper_prefix_is_an_error_and_trailing_tokens_are_rejected() {
     for input in EVERY_KIND_CORPUS {
         let parsed = from_wkt(input).unwrap_or_else(|e| panic!("{input:?}: {e}"));
-        let canonical = to_wkt(&parsed);
+        let canonical = to_wkt(&parsed).unwrap();
         assert_eq!(
             from_wkt(&canonical),
             Ok(parsed.clone()),
@@ -326,7 +332,7 @@ fn numeric_literal_forms_parse_to_their_values_or_are_rejected() {
         ("1e-3", 0.001),
         (".5", 0.5),
         ("5.", 5.0),
-        ("+1", 1.0),
+        ("1", 1.0),
         ("-0", 0.0),
         ("007", 7.0),
         ("1.25e2", 125.0),
@@ -341,8 +347,8 @@ fn numeric_literal_forms_parse_to_their_values_or_are_rejected() {
         );
     }
     for literal in [
-        "0x10", "1_000", "NaN", "inf", "-inf", "infinity", "1.0.0", "1e", "1e+", "--1", "1-2", ".",
-        "+", "-", "1..2", "e5", "1e400", "1,5",
+        "0x10", "1_000", "+1", "-NaN", "1.e2", "inf", "-inf", "infinity", "1.0.0", "1e", "1e+",
+        "--1", "1-2", ".", "+", "-", "1..2", "e5", "1e400", "1,5",
     ] {
         let s = format!("POINT({literal} 0)");
         assert!(
@@ -375,32 +381,26 @@ fn extreme_finite_scalars_round_trip_bit_exactly() {
         -0.0,
     ] {
         let p = Pt::new(v, -v);
-        let text = to_wkt(&p);
+        let text = to_wkt(&p).unwrap();
         let back = parse_point(&text).unwrap_or_else(|e| panic!("{text}: {e}"));
         assert_eq!(back, p, "{text}");
-        if v != 0.0 {
-            assert_eq!(back.get::<0>().to_bits(), v.to_bits(), "{text}");
-            assert_eq!(back.get::<1>().to_bits(), (-v).to_bits(), "{text}");
-        }
+        assert_eq!(back.get::<0>().to_bits(), v.to_bits(), "{text}");
+        assert_eq!(back.get::<1>().to_bits(), (-v).to_bits(), "{text}");
     }
 }
 
-/// `write_scalar` documents a debug assertion as the tripwire for a
-/// non-finite coordinate ("the debug assertion surfaces that in tests").
-/// Debug-only: `cargo test --release` compiles the assertion out.
-#[cfg(debug_assertions)]
+/// Infinity is rejected in both debug and release builds.
 #[test]
-#[should_panic(expected = "WKT cannot represent a non-finite coordinate")]
-fn non_finite_point_coordinate_trips_the_writer_guard() {
-    let _ = to_wkt(&Pt::new(f64::NAN, 0.0));
+fn infinite_point_coordinate_returns_an_error() {
+    assert_eq!(
+        to_wkt(&Pt::new(f64::INFINITY, 0.0)),
+        Err(geometry_io_wkt::WktWriteError::InfiniteCoordinate)
+    );
 }
 
-/// The same tripwire fires for a non-finite ordinate buried in a hole of a
-/// `MULTIPOLYGON` member, since every ordinate flows through `write_scalar`.
-#[cfg(debug_assertions)]
+/// Infinity is also rejected when buried in a multipolygon hole.
 #[test]
-#[should_panic(expected = "WKT cannot represent a non-finite coordinate")]
-fn non_finite_hole_coordinate_trips_the_writer_guard() {
+fn infinite_hole_coordinate_returns_an_error() {
     let outer = Ring::<Pt>::from_vec(vec![
         Pt::new(0.0, 0.0),
         Pt::new(0.0, 10.0),
@@ -413,5 +413,8 @@ fn non_finite_hole_coordinate_trips_the_writer_guard() {
         Pt::new(2.0, 2.0),
         Pt::new(1.0, 1.0),
     ]);
-    let _ = to_wkt(&MultiPolygon(vec![Polygon::with_inners(outer, vec![hole])]));
+    assert_eq!(
+        to_wkt(&MultiPolygon(vec![Polygon::with_inners(outer, vec![hole])])),
+        Err(geometry_io_wkt::WktWriteError::InfiniteCoordinate)
+    );
 }

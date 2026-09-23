@@ -25,7 +25,7 @@ use geometry_io_ewkt::{
     parse_multi_point, parse_multi_polygon, parse_point, parse_polygon, to_ewkt, to_ewkt_polygon,
 };
 use geometry_io_wkt::{from_wkt, to_wkt, to_wkt_polygon};
-use geometry_model::{DynGeometry, Linestring, MultiPoint, Point2D, Polygon, Ring};
+use geometry_model::{DynGeometry, Point2D, Polygon, Ring};
 
 type Pt = Point2D<f64, Cartesian>;
 type Dyn = DynGeometry<f64, Cartesian>;
@@ -65,15 +65,12 @@ fn trailing(found: &str) -> EwktError {
 /// manual §4.2.1 EWKT examples restricted to the seven OGC kinds; entry 8
 /// is OGC SFA-1 (06-103r4) §7.2.6, Table 6.
 ///
-/// All but one are projected to 2D, because this crate discards every
-/// ordinate past the second. The exception is entry 2, which keeps the
-/// manual's third ordinate so that its glued spelling exercises the
-/// normaliser's allocating path rather than the borrowed fast path.
+/// Examples use XY coordinates; no implicit projection is permitted.
 const CORPUS: [&str; 8] = [
     // 1 — manual §4.2.1 `POINT(0 0 0)` / `SRID=32632;POINT(0 0)`
     "POINT(0 0)",
     // 2 — manual §4.2.1 `POINTM(0 0 0)`, the glued spelling `ST_AsEWKT` emits
-    "POINTM(0 0 0)",
+    "POINT(-0 0)",
     // 3 — manual §4.2.1 `SRID=4326;MULTIPOINTM(0 0 0,1 2 1)`
     "MULTIPOINT(0 0,1 2)",
     // 4 — manual §4.2.1 `MULTILINESTRING`
@@ -98,7 +95,7 @@ fn assert_corpus_round_trip(body: &str, srid: Option<Srid>) {
     };
     let first = from_ewkt(&input).unwrap_or_else(|e| panic!("parse of {input:?} failed: {e}"));
     assert_eq!(first.srid, srid, "srid of {input:?}");
-    let text = to_ewkt(&first.geometry, first.srid);
+    let text = to_ewkt(&first.geometry, first.srid).unwrap();
     assert_eq!(from_ewkt(&text), Ok(first), "round-trip via {text:?}");
 }
 
@@ -127,7 +124,7 @@ fn success_rows_prefix_forms() {
     );
     assert_eq!(
         from_ewkt("\u{a0}SRID=4326;POINT(1 2)"),
-        Ok(ok(Some(4326), point(1.0, 2.0)))
+        Err(at(0, '\u{a0}'))
     );
     assert_eq!(
         from_ewkt("SRID=4326;\nPOINT(1 2)"),
@@ -145,52 +142,50 @@ fn success_rows_prefix_forms() {
         Ok(ok(Some(4326), point(1.0, 2.0)))
     );
     assert_eq!(
-        from_ewkt("SRID=4294967295;POINT(1 2)"),
-        Ok(ok(Some(u32::MAX), point(1.0, 2.0)))
+        from_ewkt("SRID=2147483647;POINT(1 2)"),
+        Ok(ok(Some(999_280), point(1.0, 2.0)))
     );
     assert_eq!(
         from_ewkt("SRID=4326;POINT(1 2 3)"),
-        Ok(ok(Some(4326), point(1.0, 2.0)))
+        Err(wkt(WktError::CoordinateCount {
+            pos: 20,
+            expected: 2,
+            found: 3
+        }))
     );
     assert_eq!(
         from_ewkt("SRID=4326;POINT M (1 2 3)"),
-        Ok(ok(Some(4326), point(1.0, 2.0)))
+        Err(wkt(WktError::UnsupportedDimension {
+            pos: 16,
+            qualifier: "M".into()
+        }))
     );
 }
 
 #[test]
-fn success_rows_glued_suffixes() {
-    let prefixed = Ok(ok(Some(4326), point(1.0, 2.0)));
-    assert_eq!(from_ewkt("POINTM(1 2 3)"), Ok(ok(None, point(1.0, 2.0))));
-    assert_eq!(from_ewkt("SRID=4326;POINTM(1 2 3)"), prefixed);
-    assert_eq!(from_ewkt("SRID=4326;POINTM(1 2)"), prefixed);
-    assert_eq!(from_ewkt("SRID=4326;POINTZ(1 2 3)"), prefixed);
-    assert_eq!(from_ewkt("SRID=4326;POINTZM(1 2 3 4)"), prefixed);
-    assert_eq!(from_ewkt("SRID=4326;POINTZ M (1 2 3 4)"), prefixed);
-    assert_eq!(
-        from_ewkt("SRID=4326;MULTIPOINTM(1 2 3,4 5 6)"),
-        Ok(ok(
-            Some(4326),
-            DynGeometry::MultiPoint(MultiPoint(vec![
-                Point2D::new(1.0, 2.0),
-                Point2D::new(4.0, 5.0),
-            ])),
-        ))
-    );
-    assert_eq!(
-        from_ewkt("SRID=4326;GEOMETRYCOLLECTIONM(POINTM(1 2 3))"),
-        Ok(ok(
-            Some(4326),
-            DynGeometry::GeometryCollection(vec![point(1.0, 2.0)]),
-        ))
-    );
-    assert_eq!(
-        from_ewkt("SRID=4326;LINESTRINGM EMPTY"),
-        Ok(ok(
-            Some(4326),
-            DynGeometry::LineString(Linestring::<Pt>::new()),
-        ))
-    );
+fn glued_and_nested_suffixes_are_rejected() {
+    for body in [
+        "POINTM(1 2 3)",
+        "POINTM(1 2)",
+        "POINTZ(1 2 3)",
+        "POINTZM(1 2 3 4)",
+        "POINTZ M (1 2 3 4)",
+        "MULTIPOINTM(1 2 3,4 5 6)",
+        "GEOMETRYCOLLECTIONM(POINTM(1 2 3))",
+        "LINESTRINGM EMPTY",
+        "GEOMETRYCOLLECTION(POINTM EMPTY)",
+    ] {
+        for prefix in ["", "SRID=4326;"] {
+            let input = format!("{prefix}{body}");
+            assert!(
+                matches!(
+                    from_ewkt(&input),
+                    Err(EwktError::Wkt(WktError::UnsupportedDimension { .. }))
+                ),
+                "{input}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -208,17 +203,27 @@ fn body_error_rows() {
     );
     assert_eq!(
         from_ewkt("POINT(1 2 3)POINTM"),
-        Err(trailing("Ident(\"POINT\")"))
+        Err(wkt(WktError::CoordinateCount {
+            pos: 10,
+            expected: 2,
+            found: 3
+        }))
     );
-    let empty_point = Err(wkt(WktError::TypeMismatch {
-        expected: "POINT with coordinates",
-        found: "POINT EMPTY",
-    }));
+    let empty_point = Err(wkt(WktError::EmptyPoint(geometry_model::EmptyPointError)));
     assert_eq!(from_ewkt("SRID=4326;POINT EMPTY"), empty_point);
-    assert_eq!(from_ewkt("SRID=4326;POINTM EMPTY"), empty_point);
+    assert_eq!(
+        from_ewkt("SRID=4326;POINTM EMPTY"),
+        Err(wkt(WktError::UnsupportedDimension {
+            pos: 15,
+            qualifier: "M".into()
+        }))
+    );
     assert_eq!(
         from_ewkt("SRID=4326;POINTMM(1 2 3)"),
-        Err(wkt(WktError::UnknownGeometryType("POINTMM".to_string())))
+        Err(wkt(WktError::UnsupportedDimension {
+            pos: 15,
+            qualifier: "M".into()
+        }))
     );
     assert_eq!(
         from_ewkt("SRID=4326;CIRCULARSTRING(1 2,3 4,5 6)"),
@@ -233,17 +238,17 @@ fn body_error_rows() {
 #[test]
 fn prefix_error_rows_through_from_ewkt() {
     assert_eq!(
-        from_ewkt("SRID=-1;POINT(1 2)"),
+        from_ewkt("SRID=+1;POINT(1 2)"),
         Err(EwktError::InvalidSrid {
-            reason: "sign not allowed",
+            reason: "leading '+' not allowed",
             pos: 5,
         })
     );
     assert_eq!(
-        from_ewkt("SRID=4326 ;POINT(1 2)"),
+        from_ewkt("SRID=4326 x;POINT(1 2)"),
         Err(EwktError::InvalidSrid {
             reason: "expected ';'",
-            pos: 9,
+            pos: 10,
         })
     );
 }
@@ -297,7 +302,7 @@ fn parity_with_the_wkt_crate() {
 #[test]
 fn writer_parity_with_the_wkt_crate() {
     let p = Point2D::<f64, Cartesian>::new(1.0, 2.0);
-    assert_eq!(to_ewkt(&p, None), to_wkt(&p));
+    assert_eq!(to_ewkt(&p, None).unwrap(), to_wkt(&p).unwrap());
 
     let ring = Ring::<Pt>::from_vec(vec![
         Point2D::new(0.0, 0.0),
@@ -306,10 +311,13 @@ fn writer_parity_with_the_wkt_crate() {
         Point2D::new(0.0, 0.0),
     ]);
     let pg = Polygon::<Pt>::new(ring);
-    assert_eq!(to_ewkt_polygon(&pg, None), to_wkt_polygon(&pg));
     assert_eq!(
-        to_ewkt_polygon(&pg, Some(Srid::new(4326))),
-        format!("SRID=4326;{}", to_wkt_polygon(&pg))
+        to_ewkt_polygon(&pg, None).unwrap(),
+        to_wkt_polygon(&pg).unwrap()
+    );
+    assert_eq!(
+        to_ewkt_polygon(&pg, Some(Srid::new(4326))).unwrap(),
+        format!("SRID=4326;{}", to_wkt_polygon(&pg).unwrap())
     );
 }
 
@@ -319,7 +327,7 @@ fn a_megabyte_of_digits_overflows_at_the_first_offending_digit() {
     assert_eq!(
         from_ewkt(&input),
         Err(EwktError::InvalidSrid {
-            reason: "value exceeds u32",
+            reason: "value exceeds i32",
             pos: 14,
         })
     );
@@ -334,10 +342,10 @@ fn a_megabyte_of_zeros_scans_linearly_to_zero() {
 }
 
 #[test]
-fn thousands_of_glued_tokens_stay_linear() {
-    let members = vec!["POINTM(1 2 3)"; 2000].join(",");
+fn thousands_of_members_stay_linear() {
+    let members = vec!["POINT(1 2)"; 2000].join(",");
     let input = format!("SRID=4326;GEOMETRYCOLLECTION({members})");
-    let e = from_ewkt(&input).expect("a flat collection of measured points parses");
+    let e = from_ewkt(&input).expect("a flat collection of XY points parses");
     assert_eq!(e.srid, Some(Srid::new(4326)));
     match e.geometry {
         DynGeometry::GeometryCollection(c) => assert_eq!(c.len(), 2000),
@@ -347,7 +355,7 @@ fn thousands_of_glued_tokens_stay_linear() {
 
 #[test]
 fn offsets_after_a_prefix_index_the_original_string() {
-    assert_eq!(from_ewkt("SRID=4294967295;POINT(1 2)$"), Err(at(26, '$')));
+    assert_eq!(from_ewkt("SRID=2147483647;POINT(1 2)$"), Err(at(26, '$')));
 }
 
 #[test]
@@ -357,18 +365,14 @@ fn a_non_ascii_body_byte_keeps_its_offset() {
     assert_eq!(from_ewkt(input), Err(at(15, 'é')));
 }
 
-/// Each typed parser on its success path, through the two things this
-/// crate adds to a WKT body: the `SRID=` prefix and a glued dimension
-/// suffix. Every one of these had a doc example and nothing else — and
-/// `cargo llvm-cov` does not count doctests, so five of the six read as
-/// entirely uncovered.
+/// Each typed parser accepts its XY geometry kind with an SRID prefix.
 #[test]
 fn public_typed_parsers_accept_their_geometry_kinds() {
-    let e = parse_point("SRID=4326;POINTM(1 2 3)").unwrap();
+    let e = parse_point("SRID=4326;POINT(1 2)").unwrap();
     assert_eq!(e.srid, Some(Srid::new(4326)));
     assert_eq!(e.geometry, Point2D::new(1.0, 2.0));
 
-    let e = parse_linestring("SRID=4326;LINESTRINGZ(0 0 1,1 1 2)").unwrap();
+    let e = parse_linestring("SRID=4326;LINESTRING(0 0,1 1)").unwrap();
     assert_eq!(e.srid, Some(Srid::new(4326)));
     assert_eq!(e.geometry.0.len(), 2);
 
@@ -420,16 +424,16 @@ fn typed_parsers_accept_a_prefixless_body() {
 #[test]
 fn typed_parsers_report_a_malformed_prefix() {
     let expected = EwktError::InvalidSrid {
-        reason: "sign not allowed",
+        reason: "leading '+' not allowed",
         pos: 5,
     };
-    assert_eq!(parse_point("SRID=-1;POINT(1 2)").unwrap_err(), expected);
+    assert_eq!(parse_point("SRID=+1;POINT(1 2)").unwrap_err(), expected);
     assert_eq!(
-        parse_polygon("SRID=-1;POLYGON((0 0,1 0,1 1,0 0))").unwrap_err(),
+        parse_polygon("SRID=+1;POLYGON((0 0,1 0,1 1,0 0))").unwrap_err(),
         expected
     );
     assert_eq!(
-        parse_multi_point("SRID=-1;MULTIPOINT(0 0)").unwrap_err(),
+        parse_multi_point("SRID=+1;MULTIPOINT(0 0)").unwrap_err(),
         expected
     );
 }
@@ -445,20 +449,20 @@ fn a_type_mismatch_carries_the_wkt_crates_own_strings() {
 // ---- Sweeps over every kind -------------------------------------------
 
 /// Every proper prefix of a valid EWKT string — with and without a
-/// prefix, with and without a glued suffix — is an error, never a panic;
+/// prefix — is an error, never a panic;
 /// trailing garbage is rejected.
 #[test]
 fn every_proper_prefix_is_an_error_with_and_without_a_prefix() {
     for input in [
-        "POINTM(1 2 3)",
-        "SRID=4326;POINTZM(1 2 3 4)",
-        "SRID=4326;MULTIPOLYGONM(EMPTY,((0 0 1,1 0 1,1 1 1,0 0 1),(0.2 0.2 1,0.5 0.2 1,0.5 0.5 1,0.2 0.2 1)))",
-        "SRID=0;GEOMETRYCOLLECTIONM(POINTM(1 2 3),LINESTRING EMPTY)",
-        "srid=1;multipointm(1 2 3,4 5 6)",
-        "SRID=4294967295;MULTILINESTRINGZ(EMPTY,(1 2 3,4 5 6))",
+        "POINT(1 2)",
+        "SRID=4326;POINT(1 2)",
+        "SRID=4326;MULTIPOLYGON(EMPTY,((0 0,1 0,1 1,0 0),(0.2 0.2,0.5 0.2,0.5 0.5,0.2 0.2)))",
+        "SRID=0;GEOMETRYCOLLECTION(POINT(1 2),LINESTRING EMPTY)",
+        "srid=1;multipoint(1 2,4 5)",
+        "SRID=2147483647;MULTILINESTRING(EMPTY,(1 2,4 5))",
     ] {
         let parsed = from_ewkt(input).unwrap_or_else(|e| panic!("{input:?}: {e}"));
-        let canonical = to_ewkt(&parsed.geometry, parsed.srid);
+        let canonical = to_ewkt(&parsed.geometry, parsed.srid).unwrap();
         assert_eq!(
             from_ewkt(&canonical),
             Ok(parsed.clone()),
@@ -477,5 +481,108 @@ fn every_proper_prefix_is_an_error_with_and_without_a_prefix() {
                 assert!(from_ewkt(&s).is_err(), "{s:?} was accepted");
             }
         }
+    }
+}
+
+#[test]
+fn signed_prefixes_retain_effective_postgis_srid() {
+    for (literal, expected) in [
+        ("-2147483648", 0),
+        ("-1", 0),
+        ("-0", 0),
+        ("0", 0),
+        ("1", 1),
+        ("999999", 999_999),
+        ("1000000", 999_001),
+        ("2147483647", 999_280),
+    ] {
+        let parsed = from_ewkt(format!(" \tSRID={literal} \r\n;POINT(1 2)")).unwrap();
+        assert_eq!(parsed.srid, Some(Srid::new(expected)));
+        assert_eq!(
+            from_ewkt(to_ewkt(&parsed.geometry, parsed.srid).unwrap()).unwrap(),
+            parsed
+        );
+    }
+    for literal in ["-2147483649", "2147483648", "+1", "-", " 1", "--1"] {
+        assert!(matches!(
+            from_ewkt(format!("SRID={literal};POINT(1 2)")),
+            Err(EwktError::InvalidSrid { .. })
+        ));
+    }
+}
+
+#[test]
+fn checked_writers_reject_srid_and_custom_body_errors() {
+    use geometry_io_ewkt::{EwktWriteError, WriteWkt, write_ewkt};
+    use geometry_io_wkt::WktWriteError;
+    struct Refuses;
+    impl WriteWkt for Refuses {
+        fn write_wkt(&self, _: &mut dyn core::fmt::Write) -> Result<(), WktWriteError> {
+            Err(WktWriteError::InfiniteCoordinate)
+        }
+    }
+    assert_eq!(
+        to_ewkt(&Refuses, None),
+        Err(EwktWriteError::Wkt(WktWriteError::InfiniteCoordinate))
+    );
+    let mut out = String::new();
+    assert_eq!(
+        write_ewkt(&Refuses, Some(Srid::new(4326)), &mut out),
+        Err(EwktWriteError::Wkt(WktWriteError::InfiniteCoordinate))
+    );
+    assert_eq!(out, "SRID=4326;");
+    for srid in [1_000_000, u32::MAX] {
+        assert_eq!(
+            to_ewkt(&point(1.0, 2.0), Some(Srid::new(srid))),
+            Err(EwktWriteError::SridOutOfRange { srid })
+        );
+    }
+}
+
+#[test]
+fn lossless_empty_and_nan_states_and_original_offsets() {
+    use geometry_io_ewkt::from_ewkt_2d;
+    use geometry_model::GeometryValue;
+    let empty = from_ewkt_2d("SRID=-1;POINTEMPTY").unwrap();
+    assert!(matches!(empty.geometry, GeometryValue::Point(None)));
+    assert_eq!(
+        to_ewkt(&empty.geometry, empty.srid).unwrap(),
+        "SRID=0;POINT EMPTY"
+    );
+    let nan = from_ewkt_2d("SRID=4326;POINT(NaN NaN)").unwrap();
+    assert!(matches!(nan.geometry, GeometryValue::Point(Some(_))));
+    assert_eq!(
+        to_ewkt(&nan.geometry, nan.srid).unwrap(),
+        "SRID=4326;POINT(NaN NaN)"
+    );
+    for (text, expected) in [
+        (
+            "SRID=1;POINTZ EMPTY",
+            WktError::UnsupportedDimension {
+                pos: 12,
+                qualifier: "Z".into(),
+            },
+        ),
+        (
+            "SRID=1;POINT(1 2 3)",
+            WktError::CoordinateCount {
+                pos: 17,
+                expected: 2,
+                found: 3,
+            },
+        ),
+        (
+            "SRID=1;POINT(1e400 0)",
+            WktError::NumberOutOfRange {
+                pos: 13,
+                literal: "1e400".into(),
+            },
+        ),
+        (
+            "SRID=1;POINT(1 é)",
+            WktError::UnexpectedChar { pos: 15, ch: 'é' },
+        ),
+    ] {
+        assert_eq!(from_ewkt_2d(text), Err(EwktError::Wkt(expected)));
     }
 }
