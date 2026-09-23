@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/v0.0.9...v0.0.10) - 2026-09-20
+
+### Added
+
+- *(coords)* add a round primitive and give every I/O crate a libm feature
+- *(io-ewkt)* add EWKT reader and writer crate
+
+### Fixed
+
+- *(overlay)* split lobes at any pinch and dissolve self-intersecting offsets
+- *(overlay)* relate through the topology engine, hole coverage, merge pairs, arc direction
+- *(strategy)* cover every dimension, refuse integer projection, route meridians
+- *(derive,geometry)* make the facade a sufficient dependency
+- *(coords)* subtract directly and tell overflow from invalid when parsing
+
+### Other
+
+- *(rtree,io-svg)* pin combinator soundness, per-axis within, and the pixel transform
+- *(overlay)* cover the collinear joins and cross-ring turns of buffer(0)
+
 ## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/v0.0.8...v0.0.9) - 2026-09-05
 
 ### Added

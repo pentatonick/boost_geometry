@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/geometry-derive-v0.0.7...geometry-derive-v0.0.10) - 2026-09-20
+
+### Fixed
+
+- *(derive,geometry)* make the facade a sufficient dependency
+
+### Other
+
+- *(derive)* split the facade lookup from the paths it implies
+
 ## [0.0.7](https://github.com/pentatonick/boost_geometry/compare/geometry-derive-v0.0.6...geometry-derive-v0.0.7) - 2026-07-14
 
 ### Fixed

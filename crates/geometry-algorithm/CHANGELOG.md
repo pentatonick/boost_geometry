@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/geometry-algorithm-v0.0.9...geometry-algorithm-v0.0.10) - 2026-09-20
+
+### Fixed
+
+- *(algorithm)* seam convexity, box conversions, n-D disjoint, Boost parity
+- *(strategy)* cover every dimension, refuse integer projection, route meridians
+
+### Other
+
+- *(trait,algorithm,strategy,overlay,adapt-geo-types)* reach the last row of every dimension table
+
 ## [0.0.9](https://github.com/pentatonick/boost_geometry/compare/geometry-algorithm-v0.0.8...geometry-algorithm-v0.0.9) - 2026-09-05
 
 ### Fixed
