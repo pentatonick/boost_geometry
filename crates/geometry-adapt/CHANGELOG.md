@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/pentatonick/boost_geometry/compare/geometry-adapt-v0.0.10...geometry-adapt-v0.0.11) - 2026-09-23
+
+### Other
+
+- release v0.0.11
+
 ## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/geometry-adapt-v0.0.9...geometry-adapt-v0.0.10) - 2026-09-20
 
 ### Other
