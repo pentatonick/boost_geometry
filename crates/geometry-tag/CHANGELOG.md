@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/pentatonick/boost_geometry/compare/geometry-tag-v0.0.10...geometry-tag-v0.0.11) - 2026-09-23
+
+### Other
+
+- release v0.0.11
+
 ## [0.0.7](https://github.com/pentatonick/boost_geometry/compare/geometry-tag-v0.0.6...geometry-tag-v0.0.7) - 2026-07-14
 
 ### Fixed
