@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/pentatonick/boost_geometry/compare/geometry-io-wkb-v0.0.10...geometry-io-wkb-v0.0.11) - 2026-09-23
+
+### Added
+
+- *(io-ewkb)* [**breaking**] add 2D EWKB support and canonical empty polygons
+
+### Other
+
+- merge main and align codec versions with 0.0.10
+
 ## [0.0.10](https://github.com/pentatonick/boost_geometry/compare/geometry-io-wkb-v0.0.9...geometry-io-wkb-v0.0.10) - 2026-09-20
 
 ### Added
