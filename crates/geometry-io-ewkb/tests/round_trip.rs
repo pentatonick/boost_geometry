@@ -799,3 +799,38 @@ fn hex_reader_never_panics() {
     }
     assert!(from_ewkb_hex(&good).is_ok());
 }
+
+#[test]
+fn read_error_messages_preserve_type_words_and_offsets() {
+    for (error, message) in [
+        (
+            EwkbError::BoundingBoxFlag {
+                type_word: 0x1000_0001,
+            },
+            "type word 0x10000001 sets the bounding-box flag: this reader does not skip a bounding box",
+        ),
+        (
+            EwkbError::TruncatedSrid {
+                type_word: 0x2000_0001,
+            },
+            "type word 0x20000001 sets the SRID flag but fewer than four bytes follow it",
+        ),
+        (
+            EwkbError::DimensionFlag {
+                type_word: 0x8000_0001,
+            },
+            "type word 0x80000001 sets the Z or M flag: this reader is 2D only",
+        ),
+        (
+            EwkbError::InvalidHex { index: 7 },
+            "invalid hex input at byte 7",
+        ),
+    ] {
+        assert_eq!(error.to_string(), message);
+    }
+    let body = from_wkb(&[]).unwrap_err();
+    assert_eq!(
+        EwkbError::from(body.clone()).to_string(),
+        format!("invalid WKB body: {body}")
+    );
+}

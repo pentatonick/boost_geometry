@@ -586,3 +586,25 @@ fn lossless_empty_and_nan_states_and_original_offsets() {
         assert_eq!(from_ewkt_2d(text), Err(EwktError::Wkt(expected)));
     }
 }
+
+#[test]
+fn write_errors_identify_the_prefix_body_or_sink() {
+    use geometry_io_ewkt::EwktWriteError as Error;
+    use geometry_io_wkt::WktWriteError;
+    for (error, message) in [
+        (
+            Error::SridOutOfRange { srid: 1_000_000 },
+            "SRID 1000000 is outside PostGIS's 0..=999999 text range",
+        ),
+        (
+            Error::from(WktWriteError::InfiniteCoordinate),
+            "invalid WKT output: infinity has no PostGIS text spelling",
+        ),
+        (
+            Error::from(core::fmt::Error),
+            "EWKT prefix output failed: an error occurred when formatting an argument",
+        ),
+    ] {
+        assert_eq!(error.to_string(), message);
+    }
+}

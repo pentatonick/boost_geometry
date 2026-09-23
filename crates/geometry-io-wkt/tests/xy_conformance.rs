@@ -341,3 +341,79 @@ fn public_errors_implement_std_error() {
     error::<GeometryStructureError>();
     error::<geometry_model::EmptyPointError>();
 }
+
+#[test]
+fn structural_errors_explain_the_invalid_shape() {
+    use geometry_io_wkt::GeometryStructureError as Error;
+    for (error, message) in [
+        (
+            Error::TooFewPoints {
+                minimum: 4,
+                actual: 2,
+            },
+            "expected at least 4 points, found 2",
+        ),
+        (Error::UnclosedRing, "polygon ring is not closed"),
+        (
+            Error::MissingExterior,
+            "polygon has holes without an exterior",
+        ),
+        (Error::EmptyInterior, "polygon has an empty interior ring"),
+    ] {
+        assert_eq!(error.to_string(), message);
+    }
+}
+
+#[test]
+fn read_errors_explain_rejected_input_and_original_offsets() {
+    for (input, message) in [
+        (
+            "POINT(1e999 0)",
+            "number \"1e999\" at byte 6 exceeds finite f64 range",
+        ),
+        (
+            "POINT Z EMPTY",
+            "unsupported Z dimension at byte 6: this reader is XY only",
+        ),
+        ("POINT(1)", "expected 2 ordinates at byte 7, found 1"),
+        (
+            "LINESTRING(0 0)",
+            "invalid geometry at byte 10: expected at least 2 points, found 1",
+        ),
+        (
+            "POINT EMPTY",
+            "the destination geometry cannot represent an empty point",
+        ),
+    ] {
+        assert_eq!(from_wkt(input).unwrap_err().to_string(), message, "{input}");
+    }
+}
+
+#[test]
+fn write_errors_explain_geometry_and_sink_failures() {
+    use geometry_io_wkt::{GeometryStructureError, WktWriteError as Error};
+    for (error, message) in [
+        (
+            Error::UnsupportedDimension { dimensions: 3 },
+            "expected XY point coordinates, found 3 ordinates",
+        ),
+        (
+            Error::NestingTooDeep,
+            "WKT nesting exceeds the supported depth",
+        ),
+        (
+            Error::InfiniteCoordinate,
+            "infinity has no PostGIS text spelling",
+        ),
+        (
+            Error::from(GeometryStructureError::UnclosedRing),
+            "invalid WKT geometry: polygon ring is not closed",
+        ),
+        (
+            Error::from(core::fmt::Error),
+            "WKT output failed: an error occurred when formatting an argument",
+        ),
+    ] {
+        assert_eq!(error.to_string(), message);
+    }
+}

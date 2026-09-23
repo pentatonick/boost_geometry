@@ -165,11 +165,8 @@ mod tests {
         // `é` is two bytes; the reported index is its first, so a
         // caller slicing `&s[..index]` cannot panic.
         let s = "0é";
-        let Err(EwkbError::InvalidHex { index }) = decode(s) else {
-            panic!("expected InvalidHex")
-        };
-        assert_eq!(index, 1);
-        assert!(s.is_char_boundary(index));
+        assert_eq!(decode(s), Err(EwkbError::InvalidHex { index: 1 }));
+        assert_eq!(s.get(..1), Some("0"));
     }
 
     #[test]

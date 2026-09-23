@@ -92,3 +92,19 @@ pub(crate) fn ring<'a, P: Point<Scalar = f64> + 'a>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_coordinate_sequence_is_not_a_ring() {
+        assert_eq!(
+            ring(core::iter::empty::<&geometry_model::Point2D<f64>>()),
+            Err(GeometryStructureError::TooFewPoints {
+                minimum: 4,
+                actual: 0
+            })
+        );
+    }
+}

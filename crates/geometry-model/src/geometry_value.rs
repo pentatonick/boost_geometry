@@ -188,7 +188,7 @@ mod tests {
         let point = Pt::new(1.0, 2.0);
         let line = Linestring(vec![point, Pt::new(3.0, 4.0)]);
         let polygon = Polygon::new(Ring::<Pt>::new());
-        let original = DynGeometry::GeometryCollection(vec![
+        let members = vec![
             DynGeometry::Point(point),
             DynGeometry::LineString(line.clone()),
             DynGeometry::Polygon(polygon.clone()),
@@ -196,7 +196,25 @@ mod tests {
             DynGeometry::MultiLineString(MultiLinestring(vec![line])),
             DynGeometry::MultiPolygon(MultiPolygon(vec![polygon])),
             DynGeometry::GeometryCollection(vec![DynGeometry::GeometryCollection(vec![])]),
-        ]);
+        ];
+        assert_eq!(
+            members
+                .iter()
+                .cloned()
+                .map(GeometryValue::from)
+                .map(|g| g.kind())
+                .collect::<Vec<_>>(),
+            vec![
+                DynKind::Point,
+                DynKind::LineString,
+                DynKind::Polygon,
+                DynKind::MultiPoint,
+                DynKind::MultiLineString,
+                DynKind::MultiPolygon,
+                DynKind::GeometryCollection
+            ]
+        );
+        let original = DynGeometry::GeometryCollection(members);
         let value = GeometryValue::from(original.clone());
         assert_eq!(value.kind(), DynKind::GeometryCollection);
         assert_eq!(DynGeometry::try_from(value), Ok(original));

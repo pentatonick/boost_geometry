@@ -970,16 +970,13 @@ mod tests {
     fn non_number_ordinate_is_reported() {
         // The second "ordinate" is a `)`, not a number.
         let err = from_wkt("POINT (10 )").unwrap_err();
-        assert!(
-            matches!(
-                &err,
-                WktError::CoordinateCount {
-                    expected: 2,
-                    found: 1,
-                    ..
-                }
-            ),
-            "got {err:?}"
+        assert_eq!(
+            err,
+            WktError::CoordinateCount {
+                pos: 10,
+                expected: 2,
+                found: 1
+            }
         );
     }
 
