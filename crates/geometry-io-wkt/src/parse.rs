@@ -15,10 +15,13 @@ use alloc::vec::Vec;
 
 use geometry_cs::Cartesian;
 use geometry_model::{
-    DynGeometry, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D, Polygon, Ring,
+    DynGeometry, GeometryValue, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D,
+    Polygon, Ring,
 };
 
-use crate::lexer::{Lexer, Token, WktError};
+use crate::geometry_structure;
+use crate::lexer::{Lexer, Token};
+use crate::wkt_error::WktError;
 
 /// A concrete 2D Cartesian point — the coordinate type every parsed
 /// geometry is built from.
@@ -32,20 +35,26 @@ type Pt = Point2D<f64, Cartesian>;
 /// A bounded depth turns that denial-of-service into a recoverable
 /// [`WktError::NestingTooDeep`]. `128` mirrors the sibling WKB / `GeoJSON`
 /// readers' cap; real WKT nests only a few levels deep.
-const MAX_DEPTH: usize = 128;
+use crate::geometry_structure::MAX_DEPTH;
 
 /// A one-token lookahead cursor over the input. Every `parse_*` method
 /// advances it, and tokens are scanned only as the grammar consumes them.
 struct Parser<'a> {
     lexer: Lexer<'a>,
     current: Token,
+    pos: usize,
 }
 
 impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Result<Self, WktError> {
         let mut lexer = Lexer::new(input);
         let current = lexer.next_token()?;
-        Ok(Self { lexer, current })
+        let pos = lexer.token_start();
+        Ok(Self {
+            lexer,
+            current,
+            pos,
+        })
     }
 
     /// Borrow the current token without consuming it.
@@ -59,6 +68,7 @@ impl<'a> Parser<'a> {
     /// running off the end of the stream.
     fn next(&mut self) -> Result<Token, WktError> {
         let next = self.lexer.next_token()?;
+        self.pos = self.lexer.token_start();
         Ok(core::mem::replace(&mut self.current, next))
     }
 
@@ -88,41 +98,40 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Consume one `f64` numeric token, or fail.
-    fn expect_number(&mut self) -> Result<f64, WktError> {
-        match self.next()? {
-            Token::Number(n) => Ok(n),
-            Token::Eof => Err(WktError::UnexpectedEof),
-            other => Err(WktError::UnexpectedToken {
-                expected: "number",
-                found: format!("{other:?}"),
-            }),
-        }
-    }
-
-    /// Skip the optional OGC dimension suffix (`Z`, `M`, or `ZM`) that
-    /// may follow the type keyword. This 2D port ignores the extra
-    /// ordinates; the suffix is consumed so it does not confuse the
-    /// coordinate scan. Mirrors Boost's handling of the dimension in
-    /// `boost/geometry/io/wkt/read.hpp` (it likewise reads only the
-    /// coordinates its point type declares).
-    fn skip_dimension_suffix(&mut self) -> Result<(), WktError> {
+    /// Reject dimensions this value cannot retain, including empty geometries.
+    fn reject_dimension_suffix(&self) -> Result<(), WktError> {
         match self.peek() {
-            Token::Ident(word) if word == "Z" || word == "M" || word == "ZM" => self.advance(),
+            Token::Ident(word) if word == "Z" || word == "M" || word == "ZM" => {
+                Err(WktError::UnsupportedDimension {
+                    pos: self.pos,
+                    qualifier: word.clone(),
+                })
+            }
             _ => Ok(()),
         }
     }
 
-    /// Read exactly two ordinates into a 2D point. Any further ordinates
-    /// (from a `Z`/`M` input) are consumed and discarded.
     fn parse_point_coords(&mut self) -> Result<Pt, WktError> {
-        let x = self.expect_number()?;
-        let y = self.expect_number()?;
-        // Discard trailing Z / M ordinates for this 2D port.
-        while let Token::Number(_) = self.peek() {
+        let mut coordinates = [0.0; 2];
+        for (found, coordinate) in coordinates.iter_mut().enumerate() {
+            let Token::Number(value) = self.peek() else {
+                return Err(WktError::CoordinateCount {
+                    pos: self.pos,
+                    expected: 2,
+                    found,
+                });
+            };
+            *coordinate = *value;
             self.advance()?;
         }
-        Ok(Point2D::new(x, y))
+        if matches!(self.peek(), Token::Number(_)) {
+            return Err(WktError::CoordinateCount {
+                pos: self.pos,
+                expected: 2,
+                found: 3,
+            });
+        }
+        Ok(Point2D::new(coordinates[0], coordinates[1]))
     }
 
     /// Parse a parenthesised, comma-separated list of coordinate pairs:
@@ -151,7 +160,11 @@ impl<'a> Parser<'a> {
         self.expect_left_paren()?;
         let mut rings = Vec::new();
         loop {
-            rings.push(self.parse_coord_list()?);
+            let pos = self.pos;
+            let points = self.parse_coord_list()?;
+            geometry_structure::ring(points.iter())
+                .map_err(|reason| WktError::InvalidGeometry { pos, reason })?;
+            rings.push(points);
             match self.peek() {
                 Token::Comma => {
                     self.advance()?;
@@ -163,35 +176,37 @@ impl<'a> Parser<'a> {
         Ok(rings)
     }
 
-    /// `POINT` body: `(x y)`. `POINT EMPTY` is rejected — see the crate
-    /// docs — because a 2D `Point` cannot represent "no coordinate".
-    fn parse_point_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
+    /// `POINT` body: a populated coordinate or an explicit empty point.
+    fn parse_point_body(&mut self) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
         if let Token::Empty = self.peek() {
-            return Err(WktError::TypeMismatch {
-                expected: "POINT with coordinates",
-                found: "POINT EMPTY",
-            });
+            self.advance()?;
+            return Ok(GeometryValue::Point(None));
         }
         self.expect_left_paren()?;
         let p = self.parse_point_coords()?;
         self.expect_right_paren()?;
-        Ok(DynGeometry::Point(p))
+        Ok(GeometryValue::Point(Some(p)))
     }
 
     /// `LINESTRING` body: `(x y, …)` or `EMPTY`.
-    fn parse_linestring_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
+    fn parse_linestring_body(
+        &mut self,
+    ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
         if let Token::Empty = self.peek() {
             self.advance()?;
-            return Ok(DynGeometry::LineString(Linestring(Vec::new())));
+            return Ok(GeometryValue::LineString(Linestring(Vec::new())));
         }
+        let pos = self.pos;
         let pts = self.parse_coord_list()?;
-        Ok(DynGeometry::LineString(Linestring(pts)))
+        geometry_structure::linestring_count(pts.len())
+            .map_err(|reason| WktError::InvalidGeometry { pos, reason })?;
+        Ok(GeometryValue::LineString(Linestring(pts)))
     }
 
     /// `POLYGON` body: `((outer), (hole1), …)` or `EMPTY`. The first
     /// ring is the exterior; the rest are holes.
-    fn parse_polygon_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
-        Ok(DynGeometry::Polygon(self.parse_polygon_value()?))
+    fn parse_polygon_body(&mut self) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
+        Ok(GeometryValue::Polygon(self.parse_polygon_value()?))
     }
 
     /// The shared `POLYGON` value builder, reused by `MULTIPOLYGON`.
@@ -210,22 +225,27 @@ impl<'a> Parser<'a> {
     /// `MULTIPOINT (1 1, 2 2)` and the parenthesised form
     /// `MULTIPOINT ((1 1), (2 2))`; this reader accepts either by
     /// peeking past the outer `(` for a nested `(`.
-    fn parse_multipoint_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
+    fn parse_multipoint_body(
+        &mut self,
+    ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
         if let Token::Empty = self.peek() {
             self.advance()?;
-            return Ok(DynGeometry::MultiPoint(MultiPoint(Vec::new())));
+            return Ok(GeometryValue::MultiPoint(Vec::new()));
         }
         self.expect_left_paren()?;
         let mut pts = Vec::new();
         loop {
-            if let Token::LeftParen = self.peek() {
+            if let Token::Empty = self.peek() {
+                self.advance()?;
+                pts.push(None);
+            } else if let Token::LeftParen = self.peek() {
                 // Parenthesised member: `(x y)`.
                 self.advance()?;
-                pts.push(self.parse_point_coords()?);
+                pts.push(Some(self.parse_point_coords()?));
                 self.expect_right_paren()?;
             } else {
                 // Bare member: `x y`.
-                pts.push(self.parse_point_coords()?);
+                pts.push(Some(self.parse_point_coords()?));
             }
             match self.peek() {
                 Token::Comma => {
@@ -235,7 +255,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect_right_paren()?;
-        Ok(DynGeometry::MultiPoint(MultiPoint(pts)))
+        Ok(GeometryValue::MultiPoint(pts))
     }
 
     /// `MULTILINESTRING` body: `((x y, …), …)` or `EMPTY`. An
@@ -245,10 +265,12 @@ impl<'a> Parser<'a> {
     /// members itself rather than going through
     /// [`Parser::parse_coord_list_list`], which has no per-member
     /// `EMPTY` branch. Mirrors [`Parser::parse_multipolygon_body`].
-    fn parse_multilinestring_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
+    fn parse_multilinestring_body(
+        &mut self,
+    ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
         if let Token::Empty = self.peek() {
             self.advance()?;
-            return Ok(DynGeometry::MultiLineString(MultiLinestring(Vec::new())));
+            return Ok(GeometryValue::MultiLineString(MultiLinestring(Vec::new())));
         }
         self.expect_left_paren()?;
         let mut lines = Vec::new();
@@ -257,7 +279,11 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 lines.push(Linestring(Vec::new()));
             } else {
-                lines.push(Linestring(self.parse_coord_list()?));
+                let pos = self.pos;
+                let points = self.parse_coord_list()?;
+                geometry_structure::linestring_count(points.len())
+                    .map_err(|reason| WktError::InvalidGeometry { pos, reason })?;
+                lines.push(Linestring(points));
             }
             match self.peek() {
                 Token::Comma => {
@@ -267,14 +293,16 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect_right_paren()?;
-        Ok(DynGeometry::MultiLineString(MultiLinestring(lines)))
+        Ok(GeometryValue::MultiLineString(MultiLinestring(lines)))
     }
 
     /// `MULTIPOLYGON` body: `(((ring), …), …)` or `EMPTY`.
-    fn parse_multipolygon_body(&mut self) -> Result<DynGeometry<f64, Cartesian>, WktError> {
+    fn parse_multipolygon_body(
+        &mut self,
+    ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
         if let Token::Empty = self.peek() {
             self.advance()?;
-            return Ok(DynGeometry::MultiPolygon(MultiPolygon(Vec::new())));
+            return Ok(GeometryValue::MultiPolygon(MultiPolygon(Vec::new())));
         }
         self.expect_left_paren()?;
         let mut polys = Vec::new();
@@ -288,7 +316,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect_right_paren()?;
-        Ok(DynGeometry::MultiPolygon(MultiPolygon(polys)))
+        Ok(GeometryValue::MultiPolygon(MultiPolygon(polys)))
     }
 
     /// `GEOMETRYCOLLECTION` body: `(<geometry>, …)` or `EMPTY`. Recurses
@@ -297,10 +325,10 @@ impl<'a> Parser<'a> {
     fn parse_collection_body(
         &mut self,
         depth: usize,
-    ) -> Result<DynGeometry<f64, Cartesian>, WktError> {
+    ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
         if let Token::Empty = self.peek() {
             self.advance()?;
-            return Ok(DynGeometry::GeometryCollection(Vec::new()));
+            return Ok(GeometryValue::GeometryCollection(Vec::new()));
         }
         self.expect_left_paren()?;
         let mut items = Vec::new();
@@ -314,7 +342,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect_right_paren()?;
-        Ok(DynGeometry::GeometryCollection(items))
+        Ok(GeometryValue::GeometryCollection(items))
     }
 
     /// Parse one geometry: a leading type keyword, an optional dimension
@@ -323,7 +351,10 @@ impl<'a> Parser<'a> {
     /// `GEOMETRYCOLLECTION` recursion against [`MAX_DEPTH`] so adversarial
     /// nesting fails with a recoverable error instead of overflowing the
     /// stack.
-    fn parse_geometry(&mut self, depth: usize) -> Result<DynGeometry<f64, Cartesian>, WktError> {
+    fn parse_geometry(
+        &mut self,
+        depth: usize,
+    ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
         if depth >= MAX_DEPTH {
             return Err(WktError::NestingTooDeep);
         }
@@ -337,7 +368,7 @@ impl<'a> Parser<'a> {
                 });
             }
         };
-        self.skip_dimension_suffix()?;
+        self.reject_dimension_suffix()?;
         match keyword.as_str() {
             "POINT" => self.parse_point_body(),
             "LINESTRING" => self.parse_linestring_body(),
@@ -351,63 +382,29 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Parse a WKT string into a runtime-tagged [`DynGeometry`].
+/// Read `PostGIS`-compatible XY text, preserving empty points and members.
 ///
-/// Implements the OGC kinds `POINT`, `LINESTRING`, `POLYGON`,
-/// `MULTIPOINT`, `MULTILINESTRING`, `MULTIPOLYGON`, and
-/// `GEOMETRYCOLLECTION` (`POLYHEDRALSURFACE` has no concrete model type
-/// yet — see `geometry_model::DynGeometry`). Mirrors the read path in
-/// `boost/geometry/io/wkt/read.hpp`.
-///
-/// # `EMPTY` handling
-///
-/// The collection kinds accept `EMPTY` and yield an empty container
-/// (`LINESTRING EMPTY` → an empty [`geometry_model::Linestring`],
-/// `GEOMETRYCOLLECTION EMPTY` → an empty `Vec`, and so on). `POINT
-/// EMPTY` is rejected with [`WktError::TypeMismatch`]: a 2D
-/// [`geometry_model::Point`] has no representation for "no coordinate".
-///
-/// An individual *member* of a `MULTIPOLYGON` or `MULTILINESTRING` may
-/// also be `EMPTY` — those productions are lists of `<polygon text>` /
-/// `<linestring text>`, each of which admits `<empty set>` (OGC SFA-1
-/// 06-103r4 §7.2.2) — so `MULTIPOLYGON(EMPTY,((0 0,1 0,1 1,0 0)))`
-/// parses to a two-member multipolygon whose first member is empty.
-/// This is the form [`to_wkt`](crate::to_wkt) emits. `MULTIPOINT`
-/// members cannot be empty, for the same reason `POINT EMPTY` is
-/// rejected.
-///
-/// # Coordinate range
-///
-/// A numeric literal must denote a finite `f64`. An exponent that
-/// overflows the type is rejected with [`WktError::InvalidNumber`]
-/// rather than silently yielding an infinity, which WKT could not spell
-/// on the way back out. Underflow is not an error: it rounds to zero.
-///
-/// # `MULTIPOINT` forms
-///
-/// Both OGC spellings are accepted: the bare `MULTIPOINT (1 1, 2 2)`
-/// and the parenthesised `MULTIPOINT ((1 1), (2 2))`.
+/// Exactly two ordinates are required. NaN is supported; infinity, numeric
+/// overflow, extra dimensions and malformed line/ring structures are rejected.
+/// This checks ingestion structure, not topological validity.
 ///
 /// # Errors
 ///
-/// Returns a [`WktError`] on a lexer failure, a token that does not fit
-/// the grammar, an unknown leading keyword, or `POINT EMPTY`.
-///
-/// # Examples
+/// Returns [`WktError`] for malformed tokens, unsupported dimensions/types,
+/// incorrect coordinate counts, invalid structures, excessive nesting or trailing input.
 ///
 /// ```
-/// use geometry_io_wkt::from_wkt;
-/// use geometry_model::DynKind;
-///
-/// let g = from_wkt("POINT (10 10)").unwrap();
-/// assert_eq!(g.kind(), DynKind::Point);
+/// use geometry_io_wkt::from_wkt_2d;
+/// use geometry_model::GeometryValue;
+/// assert_eq!(from_wkt_2d("POINT EMPTY").unwrap(), GeometryValue::Point(None));
 /// ```
-pub fn from_wkt<S: AsRef<str>>(input: S) -> Result<DynGeometry<f64, Cartesian>, WktError> {
+pub fn from_wkt_2d<S: AsRef<str>>(
+    input: S,
+) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
     let mut parser = Parser::new(input.as_ref())?;
-    let g = parser.parse_geometry(0)?;
-    // Reject trailing garbage after a complete geometry.
+    let geometry = parser.parse_geometry(0)?;
     match parser.peek() {
-        Token::Eof => Ok(g),
+        Token::Eof => Ok(geometry),
         other => Err(WktError::UnexpectedToken {
             expected: "end of input",
             found: format!("{other:?}"),
@@ -415,16 +412,36 @@ pub fn from_wkt<S: AsRef<str>>(input: S) -> Result<DynGeometry<f64, Cartesian>, 
     }
 }
 
+/// Read XY text into the legacy geometry model.
+///
+/// Use [`from_wkt_2d`] to retain empty points. Populated points with NaN
+/// coordinates are retained as populated points; no sentinel conversion occurs.
+///
+/// # Errors
+///
+/// Returns the errors of [`from_wkt_2d`], or [`WktError::EmptyPoint`] when
+/// conversion would lose an empty point or empty multipoint member.
+///
+/// ```
+/// use geometry_io_wkt::from_wkt;
+/// use geometry_model::DynKind;
+/// assert_eq!(from_wkt("POINT(1 2)").unwrap().kind(), DynKind::Point);
+/// assert!(from_wkt("POINT EMPTY").is_err());
+/// ```
+pub fn from_wkt<S: AsRef<str>>(input: S) -> Result<DynGeometry<f64, Cartesian>, WktError> {
+    from_wkt_2d(input)?.try_into().map_err(WktError::EmptyPoint)
+}
+
 /// The domain-noun name of a parsed geometry, for [`WktError::TypeMismatch`].
-fn kind_name(g: &DynGeometry<f64, Cartesian>) -> &'static str {
+fn kind_name(g: &GeometryValue<Point2D<f64, Cartesian>>) -> &'static str {
     match g {
-        DynGeometry::Point(_) => "POINT",
-        DynGeometry::LineString(_) => "LINESTRING",
-        DynGeometry::Polygon(_) => "POLYGON",
-        DynGeometry::MultiPoint(_) => "MULTIPOINT",
-        DynGeometry::MultiLineString(_) => "MULTILINESTRING",
-        DynGeometry::MultiPolygon(_) => "MULTIPOLYGON",
-        DynGeometry::GeometryCollection(_) => "GEOMETRYCOLLECTION",
+        GeometryValue::Point(_) => "POINT",
+        GeometryValue::LineString(_) => "LINESTRING",
+        GeometryValue::Polygon(_) => "POLYGON",
+        GeometryValue::MultiPoint(_) => "MULTIPOINT",
+        GeometryValue::MultiLineString(_) => "MULTILINESTRING",
+        GeometryValue::MultiPolygon(_) => "MULTIPOLYGON",
+        GeometryValue::GeometryCollection(_) => "GEOMETRYCOLLECTION",
     }
 }
 
@@ -449,9 +466,9 @@ fn kind_name(g: &DynGeometry<f64, Cartesian>) -> &'static str {
 /// assert_eq!(p.get::<0>(), 10.0);
 /// ```
 pub fn parse_point(s: &str) -> Result<Pt, WktError> {
-    let g = from_wkt(s)?;
+    let g = from_wkt_2d(s)?;
     match g {
-        DynGeometry::Point(p) => Ok(p),
+        GeometryValue::Point(p) => p.ok_or(WktError::EmptyPoint(geometry_model::EmptyPointError)),
         other => Err(WktError::TypeMismatch {
             expected: "POINT",
             found: kind_name(&other),
@@ -478,9 +495,9 @@ pub fn parse_point(s: &str) -> Result<Pt, WktError> {
 /// assert_eq!(ls.points().len(), 3);
 /// ```
 pub fn parse_linestring(s: &str) -> Result<Linestring<Pt>, WktError> {
-    let g = from_wkt(s)?;
+    let g = from_wkt_2d(s)?;
     match g {
-        DynGeometry::LineString(ls) => Ok(ls),
+        GeometryValue::LineString(ls) => Ok(ls),
         other => Err(WktError::TypeMismatch {
             expected: "LINESTRING",
             found: kind_name(&other),
@@ -507,9 +524,9 @@ pub fn parse_linestring(s: &str) -> Result<Linestring<Pt>, WktError> {
 /// assert_eq!(p.exterior().points().len(), 5);
 /// ```
 pub fn parse_polygon(s: &str) -> Result<Polygon<Pt>, WktError> {
-    let g = from_wkt(s)?;
+    let g = from_wkt_2d(s)?;
     match g {
-        DynGeometry::Polygon(p) => Ok(p),
+        GeometryValue::Polygon(p) => Ok(p),
         other => Err(WktError::TypeMismatch {
             expected: "POLYGON",
             found: kind_name(&other),
@@ -537,9 +554,14 @@ pub fn parse_polygon(s: &str) -> Result<Polygon<Pt>, WktError> {
 /// assert_eq!(mp.points().len(), 2);
 /// ```
 pub fn parse_multi_point(s: &str) -> Result<MultiPoint<Pt>, WktError> {
-    let g = from_wkt(s)?;
+    let g = from_wkt_2d(s)?;
     match g {
-        DynGeometry::MultiPoint(mp) => Ok(mp),
+        GeometryValue::MultiPoint(points) => Ok(MultiPoint(
+            points
+                .into_iter()
+                .map(|p| p.ok_or(WktError::EmptyPoint(geometry_model::EmptyPointError)))
+                .collect::<Result<_, _>>()?,
+        )),
         other => Err(WktError::TypeMismatch {
             expected: "MULTIPOINT",
             found: kind_name(&other),
@@ -567,9 +589,9 @@ pub fn parse_multi_point(s: &str) -> Result<MultiPoint<Pt>, WktError> {
 /// assert_eq!(mls.linestrings().len(), 2);
 /// ```
 pub fn parse_multi_linestring(s: &str) -> Result<MultiLinestring<Linestring<Pt>>, WktError> {
-    let g = from_wkt(s)?;
+    let g = from_wkt_2d(s)?;
     match g {
-        DynGeometry::MultiLineString(mls) => Ok(mls),
+        GeometryValue::MultiLineString(mls) => Ok(mls),
         other => Err(WktError::TypeMismatch {
             expected: "MULTILINESTRING",
             found: kind_name(&other),
@@ -597,9 +619,9 @@ pub fn parse_multi_linestring(s: &str) -> Result<MultiLinestring<Linestring<Pt>>
 /// assert_eq!(mpg.polygons().len(), 1);
 /// ```
 pub fn parse_multi_polygon(s: &str) -> Result<MultiPolygon<Polygon<Pt>>, WktError> {
-    let g = from_wkt(s)?;
+    let g = from_wkt_2d(s)?;
     match g {
-        DynGeometry::MultiPolygon(mpg) => Ok(mpg),
+        GeometryValue::MultiPolygon(mpg) => Ok(mpg),
         other => Err(WktError::TypeMismatch {
             expected: "MULTIPOLYGON",
             found: kind_name(&other),
@@ -617,6 +639,7 @@ mod tests {
     )]
 
     use super::*;
+    use alloc::vec;
     use geometry_trait::{
         Linestring as _, MultiLinestring as _, MultiPoint as _, MultiPolygon as _, Point as _,
         Polygon as _, Ring as _,
@@ -783,7 +806,7 @@ mod tests {
     #[test]
     fn point_empty_is_rejected() {
         let err = from_wkt("POINT EMPTY").unwrap_err();
-        assert!(matches!(err, WktError::TypeMismatch { .. }));
+        assert!(matches!(err, WktError::EmptyPoint(_)));
     }
 
     #[test]
@@ -805,17 +828,24 @@ mod tests {
     }
 
     #[test]
-    fn dimension_suffix_is_skipped() {
-        // The Z ordinate is dropped; the 2D coordinates survive.
-        let g = from_wkt("POINT Z (10 10 5)").unwrap();
-        assert_eq!(g, DynGeometry::Point(Pt::new(10.0, 10.0)));
+    fn dimension_suffix_is_rejected() {
+        assert_eq!(
+            from_wkt("POINT Z (10 10 5)"),
+            Err(WktError::UnsupportedDimension {
+                pos: 6,
+                qualifier: "Z".into()
+            })
+        );
     }
 
     #[test]
     fn malformed_token_after_dimension_suffix_is_reported() {
         assert_eq!(
             from_wkt("POINT Z @"),
-            Err(WktError::UnexpectedChar { pos: 8, ch: '@' })
+            Err(WktError::UnsupportedDimension {
+                pos: 6,
+                qualifier: "Z".into()
+            })
         );
     }
 
@@ -865,7 +895,10 @@ mod tests {
     fn overflowing_coordinate_is_rejected() {
         assert_eq!(
             from_wkt("POINT(1e400 1)").unwrap_err(),
-            WktError::InvalidNumber("1e400".into())
+            WktError::NumberOutOfRange {
+                pos: 6,
+                literal: "1e400".into()
+            }
         );
     }
 
@@ -921,7 +954,14 @@ mod tests {
     #[test]
     fn missing_ordinate_hits_eof() {
         let err = from_wkt("POINT (10").unwrap_err();
-        assert_eq!(err, WktError::UnexpectedEof);
+        assert_eq!(
+            err,
+            WktError::CoordinateCount {
+                pos: 9,
+                expected: 2,
+                found: 1
+            }
+        );
     }
 
     /// A non-number where an ordinate is expected fails `expect_number`
@@ -930,9 +970,13 @@ mod tests {
     fn non_number_ordinate_is_reported() {
         // The second "ordinate" is a `)`, not a number.
         let err = from_wkt("POINT (10 )").unwrap_err();
-        assert!(
-            matches!(&err, WktError::UnexpectedToken { expected, .. } if *expected == "number"),
-            "got {err:?}"
+        assert_eq!(
+            err,
+            WktError::CoordinateCount {
+                pos: 10,
+                expected: 2,
+                found: 1
+            }
         );
     }
 

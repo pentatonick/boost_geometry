@@ -2,13 +2,14 @@
 
 A Rust port of [Boost.Geometry](https://www.boost.org/doc/libs/release/libs/geometry/):
 dimension-agnostic, coordinate-system-agnostic, bring-your-own-type,
-strategy-pluggable. 20 crates, ~76k lines of Rust, 68 test files. Every
+strategy-pluggable. 22 crates, ~83k lines of Rust, 89 test files. Every
 public item carries a `///` doc comment; in the crates that port Boost it
 names the exact header it mirrors, and in the crates with no Boost
-counterpart (`geometry-io-wkb`, `geometry-io-geojson`, `geometry-io-ewkt`,
-`geometry-proj`) it names the format specification or upstream reference
-instead — this documentation set is a *map* on top of that existing
-rustdoc, not a replacement for it. When in doubt, the crate's own
+counterpart (`geometry-io-wkb`, `geometry-io-ewkb`, `geometry-io-geojson`,
+`geometry-io-ewkt`, `geometry-srid`, `geometry-proj`) it names the format
+specification or upstream reference instead — this documentation set is
+a *map* on top of that existing rustdoc, not a replacement for it. When
+in doubt, the crate's own
 `src/lib.rs` doc comment is the primary source; these pages tell you which
 file to open.
 
@@ -16,7 +17,7 @@ file to open.
 
 New to this codebase? Read in this order:
 
-1. **[Architecture](01-architecture.md)** — the 20-crate dependency spine,
+1. **[Architecture](01-architecture.md)** — the 22-crate dependency spine,
    what each layer owns, why the shape is acyclic by construction. The map
    of the whole workspace.
 2. **[The tag-dispatch pattern](02-tag-dispatch-pattern.md)** — the one
@@ -39,6 +40,7 @@ depends on it. Ordered by dependency layer (foundation first):
 | 0 | [`geometry-tag`](crates/geometry-tag.md) | Kind tags + tag-hierarchy marker traits |
 | 0 | [`geometry-coords`](crates/geometry-coords.md) | Coordinate scalar trait, type promotion, comparable-distance |
 | 0 | [`geometry-cs`](crates/geometry-cs.md) | Cartesian / Spherical / Geographic / Polar coordinate systems |
+| 0 | [`geometry-srid`](crates/geometry-srid.md) | PostGIS spatial-reference id (`Srid`) |
 | 1 | [`geometry-trait`](crates/geometry-trait.md) | The concepts: `Geometry`, `Point`, `Linestring`, `Ring`, `Polygon`, … |
 | 2 | [`geometry-model`](crates/geometry-model.md) | Concrete types: `Point2D`, `Polygon`, `DynGeometry`, … |
 | 2 | [`geometry-derive`](crates/geometry-derive.md) | `#[derive(Point)]` |
@@ -53,6 +55,7 @@ depends on it. Ordered by dependency layer (foundation first):
 | I/O | [`geometry-io-wkt`](crates/geometry-io-wkt.md) | Well-Known Text |
 | I/O | [`geometry-io-ewkt`](crates/geometry-io-ewkt.md) | PostGIS Extended Well-Known Text (`SRID=…;` prefix) |
 | I/O | [`geometry-io-wkb`](crates/geometry-io-wkb.md) | Well-Known Binary |
+| I/O | [`geometry-io-ewkb`](crates/geometry-io-ewkb.md) | PostGIS Extended Well-Known Binary (binary and hex) |
 | I/O | [`geometry-io-geojson`](crates/geometry-io-geojson.md) | GeoJSON (RFC 7946) |
 | I/O | [`geometry-io-svg`](crates/geometry-io-svg.md) | SVG output (debugging) |
 | standalone | [`geometry-proj`](crates/geometry-proj.md) | CRS reprojection |
@@ -66,7 +69,7 @@ depends on it. Ordered by dependency layer (foundation first):
 | Adapt a `geo-types` or `nalgebra` type | [`geometry-adapt-geo-types`](crates/geometry-adapt-geo-types.md) / [`geometry-adapt-nalgebra`](crates/geometry-adapt-nalgebra.md) |
 | Add a new algorithm | Read [tag-dispatch pattern](02-tag-dispatch-pattern.md) first, then [`geometry-strategy`](crates/geometry-strategy.md)'s own "how to write a strategy" tutorial in its `lib.rs` |
 | Understand `intersection`/`union`/`difference` | [Overlay deep-dive](03-overlay-engine.md) |
-| Parse/write WKT, EWKT, WKB, or GeoJSON | [`geometry-io-wkt`](crates/geometry-io-wkt.md) / [`geometry-io-ewkt`](crates/geometry-io-ewkt.md) / [`geometry-io-wkb`](crates/geometry-io-wkb.md) / [`geometry-io-geojson`](crates/geometry-io-geojson.md) |
+| Parse/write WKT, EWKT, WKB, EWKB, or GeoJSON | [`geometry-io-wkt`](crates/geometry-io-wkt.md) / [`geometry-io-ewkt`](crates/geometry-io-ewkt.md) / [`geometry-io-wkb`](crates/geometry-io-wkb.md) / [`geometry-io-ewkb`](crates/geometry-io-ewkb.md) / [`geometry-io-geojson`](crates/geometry-io-geojson.md) |
 | Spatially index a set of geometries | [`geometry-rtree`](crates/geometry-rtree.md) |
 | Reproject between coordinate systems | [`geometry-proj`](crates/geometry-proj.md) |
 | See the full crate dependency graph | [Architecture](01-architecture.md) |

@@ -64,9 +64,10 @@ GROUP_ORDER = {
     "I/O — Well-Known Text": 8,
     "I/O — Extended Well-Known Text": 9,
     "I/O — Well-Known Binary": 10,
-    "I/O — GeoJSON": 11,
-    "I/O — SVG": 12,
-    "Reprojection": 13,
+    "I/O — Extended Well-Known Binary": 11,
+    "I/O — GeoJSON": 12,
+    "I/O — SVG": 13,
+    "Reprojection": 14,
 }
 
 # A crate "participates" in the table iff its lib.rs contains at least one

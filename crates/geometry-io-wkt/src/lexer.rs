@@ -1,16 +1,6 @@
-//! The WKT tokenizer and its error type.
-//!
-//! Mirrors the `tokenizer` block in `boost/geometry/io/wkt/read.hpp`
-//! (Boost drives the read with `boost::tokenizer` over a small set of
-//! separators). This port hand-rolls the scan so it can classify each
-//! lexeme into a [`Token`] up front — identifiers (uppercased keywords
-//! such as `POINT`, `LINESTRING`, the OGC `Z`/`M`/`ZM` dimension
-//! suffixes, and `EMPTY`), signed decimal / E-notation numbers, and the
-//! `(`, `)`, `,` punctuation the grammar uses.
-//!
-//! Reference: OGC Simple Feature Access Part 1 §7 for the WKT grammar,
-//! and `boost/geometry/io/wkt/read.hpp` for the C++ tokenizer.
+//! Tokenization for the `PostGIS`-compatible XY text profile.
 
+use crate::wkt_error::WktError;
 use alloc::string::{String, ToString};
 #[cfg(test)]
 use alloc::vec::Vec;
@@ -42,210 +32,208 @@ pub enum Token {
     Eof,
 }
 
-/// Everything that can go wrong reading WKT.
-///
-/// Covers the lexer's character-level failures plus the parser's
-/// token-level and type-level failures, so a single error type flows
-/// through the whole read path (mirroring how
-/// `boost/geometry/io/wkt/read.hpp` throws a single
-/// `read_wkt_exception`).
-#[derive(Debug, Clone, PartialEq)]
-pub enum WktError {
-    /// A character that cannot begin any lexeme, at byte offset `pos`.
-    UnexpectedChar {
-        /// Byte offset of the offending character in the input.
-        pos: usize,
-        /// The offending character.
-        ch: char,
-    },
-    /// A token that does not fit the grammar at this point.
-    UnexpectedToken {
-        /// A human-readable description of what the parser wanted.
-        expected: &'static str,
-        /// A `Debug`-style rendering of the token actually found.
-        found: String,
-    },
-    /// Input ended while the parser still needed more tokens.
-    UnexpectedEof,
-    /// A numeric lexeme that failed to parse as `f64`.
-    InvalidNumber(String),
-    /// A leading keyword that is not a known OGC geometry type.
-    UnknownGeometryType(String),
-    /// A typed-parse convenience function was handed WKT of the wrong
-    /// kind (e.g. [`crate::parse_point`] on a `LINESTRING`).
-    TypeMismatch {
-        /// The kind the caller asked for.
-        expected: &'static str,
-        /// The kind actually present in the input.
-        found: &'static str,
-    },
-    /// Nested `GEOMETRYCOLLECTION`s exceeded the reader's recursion limit.
-    /// Rejecting deep nesting keeps a hostile string from overflowing the
-    /// native stack (an uncatchable process abort).
-    NestingTooDeep,
-}
-
-impl core::fmt::Display for WktError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            WktError::UnexpectedChar { pos, ch } => {
-                write!(f, "unexpected character {ch:?} at byte {pos}")
-            }
-            WktError::UnexpectedToken { expected, found } => {
-                write!(f, "expected {expected}, found {found}")
-            }
-            WktError::UnexpectedEof => f.write_str("unexpected end of input"),
-            WktError::InvalidNumber(s) => write!(f, "invalid number {s:?}"),
-            WktError::UnknownGeometryType(s) => write!(f, "unknown geometry type {s:?}"),
-            WktError::TypeMismatch { expected, found } => {
-                write!(f, "type mismatch: expected {expected}, found {found}")
-            }
-            WktError::NestingTooDeep => {
-                f.write_str("WKT nesting too deep; exceeded the reader's recursion limit")
-            }
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for WktError {}
-
-/// Split a WKT string into its token stream.
-///
-/// Whitespace separates tokens and is otherwise discarded. Identifiers
-/// (ASCII letters) are uppercased so `Point`, `POINT`, and `point` all
-/// lex to the same keyword — matching the case-insensitivity Boost gets
-/// from comparing against upper-cased keyword tables in
-/// `boost/geometry/io/wkt/read.hpp`. Numbers accept an optional sign, a
-/// decimal point, and an `e`/`E` exponent (e.g. `1.5e-3`). The stream
-/// always ends with a single [`Token::Eof`].
-///
-/// # Errors
-///
-/// Returns [`WktError::UnexpectedChar`] for a character that cannot
-/// start any lexeme, and [`WktError::InvalidNumber`] for a numeric
-/// lexeme that fails to parse as `f64`.
+/// One-token-at-a-time scanning preserves positions in the original input.
 pub(crate) struct Lexer<'a> {
     input: &'a str,
     pos: usize,
+    token_start: usize,
 }
 
 impl<'a> Lexer<'a> {
     pub(crate) fn new(input: &'a str) -> Self {
-        Self { input, pos: 0 }
+        Self {
+            input,
+            pos: 0,
+            token_start: 0,
+        }
     }
 
-    /// Scan and return one token, leaving the rest of the input untouched.
-    /// The parser asks for the next token only after consuming the current
-    /// one, avoiding an allocated copy of the complete token stream.
+    pub(crate) fn token_start(&self) -> usize {
+        self.token_start
+    }
+
     pub(crate) fn next_token(&mut self) -> Result<Token, WktError> {
         let bytes = self.input.as_bytes();
-        while let Some(&byte) = bytes.get(self.pos) {
-            if byte.is_ascii_whitespace() {
-                self.pos += 1;
-            } else if !byte.is_ascii() {
-                let ch = self.input[self.pos..]
-                    .chars()
-                    .next()
-                    .expect("position is inside the input");
-                if ch.is_whitespace() {
-                    self.pos += ch.len_utf8();
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-
+        self.pos =
+            self.input.len() - crate::whitespace::trim_wkt_start(&self.input[self.pos..]).len();
+        self.token_start = self.pos;
         let Some(&byte) = bytes.get(self.pos) else {
             return Ok(Token::Eof);
         };
-        let start = self.pos;
-        if byte == b'(' {
-            self.pos += 1;
-            Ok(Token::LeftParen)
-        } else if byte == b')' {
-            self.pos += 1;
-            Ok(Token::RightParen)
-        } else if byte == b',' {
-            self.pos += 1;
-            Ok(Token::Comma)
-        } else if byte.is_ascii_alphabetic() {
-            self.pos += 1;
-            while bytes.get(self.pos).is_some_and(u8::is_ascii_alphabetic) {
+        match byte {
+            b'(' => {
                 self.pos += 1;
+                Ok(Token::LeftParen)
             }
-            let word = self.input[start..self.pos].to_ascii_uppercase();
-            if word == "EMPTY" {
-                Ok(Token::Empty)
-            } else {
-                Ok(Token::Ident(word))
+            b')' => {
+                self.pos += 1;
+                Ok(Token::RightParen)
             }
-        } else if byte == b'+' || byte == b'-' || byte == b'.' || byte.is_ascii_digit() {
-            let negative = byte == b'-';
-            let mut all_digits = byte == b'+' || byte == b'-' || byte.is_ascii_digit();
-            let mut saw_digit = byte.is_ascii_digit();
-            let mut integer = if saw_digit { u64::from(byte - b'0') } else { 0 };
-            self.pos += 1;
-            while let Some(&byte) = bytes.get(self.pos) {
-                if byte.is_ascii_digit()
-                    || byte == b'.'
-                    || byte == b'+'
-                    || byte == b'-'
-                    || byte == b'e'
-                    || byte == b'E'
-                {
-                    if all_digits {
-                        if byte.is_ascii_digit() {
-                            saw_digit = true;
-                            match integer
-                                .checked_mul(10)
-                                .and_then(|value| value.checked_add(u64::from(byte - b'0')))
-                            {
-                                Some(next) => integer = next,
-                                None => all_digits = false,
-                            }
-                        } else {
-                            all_digits = false;
-                        }
-                    }
-                    self.pos += 1;
-                } else {
-                    break;
-                }
+            b',' => {
+                self.pos += 1;
+                Ok(Token::Comma)
             }
-            let slice = &self.input[start..self.pos];
-            let value = if all_digits && saw_digit {
-                #[allow(
-                    clippy::cast_precision_loss,
-                    reason = "integer-to-f64 uses the same IEEE-754 rounding as parsing its decimal spelling"
-                )]
-                let value = integer as f64;
-                if negative { -value } else { value }
-            } else {
-                let parsed: f64 = slice
-                    .parse()
-                    .map_err(|_| WktError::InvalidNumber(slice.to_string()))?;
-                // `str::parse` maps an out-of-range exponent to an infinity
-                // rather than failing, so `1e400` would otherwise enter the
-                // model as `+inf` — a value WKT cannot spell on the way back
-                // out. The integer fast path above cannot reach here
-                // non-finite: it falls through to this branch on overflow.
-                if !parsed.is_finite() {
-                    return Err(WktError::InvalidNumber(slice.to_string()));
-                }
-                parsed
-            };
-            Ok(Token::Number(value))
-        } else {
-            let ch = self.input[self.pos..]
-                .chars()
-                .next()
-                .expect("position is inside the input");
-            Err(WktError::UnexpectedChar { pos: self.pos, ch })
+            b'+' | b'-' | b'.' | b'0'..=b'9' => self.number(),
+            b'A'..=b'Z' | b'a'..=b'z' => self.word(),
+            _ => Err(self.unexpected_char()),
         }
     }
+
+    fn starts_with(&self, word: &str) -> bool {
+        self.input.as_bytes()[self.pos..]
+            .get(..word.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(word.as_bytes()))
+    }
+
+    fn word(&mut self) -> Result<Token, WktError> {
+        if self.starts_with("NAN") {
+            self.pos += 3;
+            self.number_end()?;
+            return Ok(Token::Number(f64::NAN));
+        }
+        // PostGIS recognizes literal tokens even without an intervening space:
+        // POINTEMPTY and POINTZM are POINT + EMPTY and POINT + ZM, respectively.
+        for word in [
+            "GEOMETRYCOLLECTION",
+            "MULTILINESTRING",
+            "MULTIPOLYGON",
+            "MULTIPOINT",
+            "LINESTRING",
+            "POLYGON",
+            "POINT",
+            "EMPTY",
+            "ZM",
+            "Z",
+            "M",
+        ] {
+            if self.starts_with(word) {
+                self.pos += word.len();
+                return Ok(if word == "EMPTY" {
+                    Token::Empty
+                } else {
+                    Token::Ident(word.into())
+                });
+            }
+        }
+        let start = self.pos;
+        while self
+            .input
+            .as_bytes()
+            .get(self.pos)
+            .is_some_and(u8::is_ascii_alphabetic)
+        {
+            self.pos += 1;
+        }
+        Ok(Token::Ident(
+            self.input[start..self.pos].to_ascii_uppercase(),
+        ))
+    }
+
+    fn unexpected_char(&self) -> WktError {
+        WktError::UnexpectedChar {
+            pos: self.pos,
+            ch: self.input[self.pos..]
+                .chars()
+                .next()
+                .expect("position is inside input"),
+        }
+    }
+
+    fn number_end(&self) -> Result<(), WktError> {
+        match self.input.as_bytes().get(self.pos) {
+            None | Some(b',' | b')') => Ok(()),
+            Some(_)
+                if crate::whitespace::trim_wkt_start(&self.input[self.pos..]).len()
+                    < self.input.len() - self.pos =>
+            {
+                Ok(())
+            }
+            _ => Err(self.unexpected_char()),
+        }
+    }
+
+    fn number(&mut self) -> Result<Token, WktError> {
+        let start = self.pos;
+        while self
+            .input
+            .as_bytes()
+            .get(self.pos)
+            .is_some_and(|b| b.is_ascii_digit() || matches!(b, b'.' | b'+' | b'-' | b'e' | b'E'))
+        {
+            self.pos += 1;
+        }
+        let literal = &self.input[start..self.pos];
+        if !decimal_literal(literal) {
+            return Err(WktError::InvalidNumber(literal.to_string()));
+        }
+        self.number_end()?;
+        let unsigned = literal.strip_prefix('-').unwrap_or(literal);
+        // The integer fast path preserves signed zero and avoids float parsing
+        // for the ordinary small integer coordinates common in geometry data.
+        if let Ok(integer) = unsigned.parse::<u64>() {
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "IEEE-754 integer rounding matches decimal parsing"
+            )]
+            let value = integer as f64;
+            return Ok(Token::Number(if literal.starts_with('-') {
+                -value
+            } else {
+                value
+            }));
+        }
+        let value: f64 = literal
+            .parse()
+            .map_err(|_| WktError::InvalidNumber(literal.to_string()))?;
+        if value.is_infinite() {
+            return Err(WktError::NumberOutOfRange {
+                pos: start,
+                literal: literal.to_string(),
+            });
+        }
+        Ok(Token::Number(value))
+    }
+}
+
+/// `PostGIS` decimal spelling: minus is allowed, plus only in an exponent;
+/// a trailing decimal point is allowed only without an exponent.
+fn decimal_literal(input: &str) -> bool {
+    let bytes = input.strip_prefix('-').unwrap_or(input).as_bytes();
+    let mut pos = 0;
+    while bytes.get(pos).is_some_and(u8::is_ascii_digit) {
+        pos += 1;
+    }
+    let integer_digits = pos;
+    let mut fraction_digits = 0;
+    let has_dot = bytes.get(pos) == Some(&b'.');
+    if has_dot {
+        pos += 1;
+        let start = pos;
+        while bytes.get(pos).is_some_and(u8::is_ascii_digit) {
+            pos += 1;
+        }
+        fraction_digits = pos - start;
+    }
+    if integer_digits + fraction_digits == 0 {
+        return false;
+    }
+    if matches!(bytes.get(pos), Some(b'e' | b'E')) {
+        if has_dot && fraction_digits == 0 {
+            return false;
+        }
+        pos += 1;
+        if matches!(bytes.get(pos), Some(b'+' | b'-')) {
+            pos += 1;
+        }
+        let start = pos;
+        while bytes.get(pos).is_some_and(u8::is_ascii_digit) {
+            pos += 1;
+        }
+        if start == pos {
+            return false;
+        }
+    }
+    pos == bytes.len()
 }
 
 #[cfg(test)]
@@ -328,7 +316,7 @@ mod tests {
 
     #[test]
     fn number_signed_and_decimal() {
-        let toks = tokenize("-10 20.5 +3").unwrap();
+        let toks = tokenize("-10 20.5 3").unwrap();
         assert_eq!(
             toks,
             vec![
@@ -380,7 +368,10 @@ mod tests {
         for literal in ["1e400", "-1e400", "1.5e309"] {
             assert_eq!(
                 tokenize(literal).unwrap_err(),
-                WktError::InvalidNumber(literal.into()),
+                WktError::NumberOutOfRange {
+                    pos: 0,
+                    literal: literal.into()
+                },
                 "literal {literal}"
             );
         }

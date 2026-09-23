@@ -2,43 +2,38 @@
 
 Part of the [boost_geometry](https://crates.io/crates/boost_geometry) workspace — a Rust port of [Boost.Geometry](https://www.boost.org/doc/libs/release/libs/geometry/). Most users should depend on the facade crate, which re-exports this one; depend on this crate directly only for a slimmer build.
 
-`PostGIS` Extended Well-Known Text (EWKT) reader and writer.
+Checked XY Extended Well-Known Text (EWKT) reader and writer.
 
-Not part of Boost.Geometry; follows the `PostGIS` manual, sections
-"4.1.3. WKT and WKB" and "4.2.1. `PostGIS` EWKB and EWKT", and the
-`PostGIS` reader in `liblwgeom/lwin_wkt_lex.l`. EWKT is the dialect
-`ST_AsEWKT` emits and `ST_GeomFromEWKT` accepts: OGC WKT plus an
-optional `SRID=<digits>;` prefix and the glued dimension-suffix
-spellings. `ST_AsEWKT` glues only `M` (`POINTM(1 2 3)`); `PostGIS`
-reads the glued `Z`, `M`, and `ZM` forms and the OGC-spaced
-`POINT Z` / `POINT M` / `POINT ZM` forms alike, and this crate reads
-all of them.
+The geometry body uses [`geometry_io_wkt`]'s `PostGIS` 3.4.3-compatible
+XY profile. Z, M, ZM, and extra ordinates are rejected, including on
+empty geometries. No coordinate is silently discarded.
 
-The geometry body is delegated to [`geometry_io_wkt`]. This crate
-scans the prefix, overwrites a glued suffix with spaces in place — a
-same-length rewrite, so every byte offset it reports indexes the
-string the caller passed — and hands the body over. [`from_ewkt`]
-therefore emits a [`geometry_model::DynGeometry`], and the six
-`parse_*` conveniences return concrete model types; each is paired
-with the spatial-reference id in an [`Ewkt`].
+[`from_ewkt_2d`] retains empty points and empty multipoint members using
+[`geometry_model::GeometryValue`]. [`from_ewkt`] returns the legacy
+[`geometry_model::DynGeometry`] and rejects unrepresentable empty points.
 
-`PostGIS` treats SRID 0 as unknown ([`Srid::UNKNOWN`]) and omits the
-prefix for it. This crate reads `SRID=0;` as `Some(Srid::UNKNOWN)`
-and writes it back as `SRID=0;`; callers pass `None` to omit the
-prefix.
+The optional `SRID=` prefix accepts checked signed 32-bit integers.
+Nonpositive values normalize to zero; values above 999999 normalize to
+`999000 + (value % 999)`, matching the pinned `PostGIS` parser. Only space,
+tab, CR and LF are accepted as whitespace. Whitespace is allowed before
+the prefix and before its semicolon, but not inside `SRID=` or before digits.
+Output SRIDs must be at most 999999; writers return an error otherwise.
+`None` omits the prefix, while `Some(Srid::UNKNOWN)` writes `SRID=0;`.
 
-Every ordinate past the second is discarded, as in
-[`geometry_io_wkt`], and nothing above 2D is ever written — so a
-dimension suffix carries no information this model can hold.
+## Migration
 
-### Read and write a prefixed geometry
+Owned and streaming writers return typed errors. Use [`to_ewkt`] instead
+of formatting [`Ewkt`] with `Display`; formatting cannot convey geometry
+validation errors. Negative input SRIDs now normalize to unknown, and
+positive input SRIDs outside the `PostGIS` range normalize as described above.
+The binary codecs and [`Srid`] itself retain their existing behavior.
 
 ```rust
-use geometry_io_ewkt::{Srid, from_ewkt, to_ewkt};
+use geometry_io_ewkt::{Srid, from_ewkt_2d, to_ewkt};
 
-let e = from_ewkt("SRID=4326;POINTM(1 2 3)").unwrap();
+let e = from_ewkt_2d("SRID=4326;POINT EMPTY").unwrap();
 assert_eq!(e.srid, Some(Srid::new(4326)));
-assert_eq!(to_ewkt(&e.geometry, e.srid), "SRID=4326;POINT(1 2)");
+assert_eq!(to_ewkt(&e.geometry, e.srid).unwrap(), "SRID=4326;POINT EMPTY");
 ```
 
 ## License

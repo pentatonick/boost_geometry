@@ -1,133 +1,99 @@
-//! The `SRID=` prefix scanner.
-//!
-//! Grammar (`PostGIS` manual §4.2.1; the reader is
-//! `liblwgeom/lwin_wkt_lex.l`):
-//!
-//! ```text
-//! ewkt        := ws* srid_prefix body | body
-//! srid_prefix := "SRID" "=" digits ";"   ; "SRID" case-insensitive; no whitespace inside
-//! digits      := [0-9]+                  ; value must fit u32
-//! body        := <anything; handed to geometry-io-wkt after normalisation>
-//! ```
-//!
-//! **Claiming rule.** Leading whitespace is skipped with the WKT lexer's
-//! own two-tier rule — `u8::is_ascii_whitespace` for an ASCII byte,
-//! `char::is_whitespace` for a non-ASCII character — so the scanner
-//! accepts exactly the leading whitespace the lexer would. If the maximal
-//! run of ASCII letters at the cursor uppercases to exactly `SRID`, the
-//! scanner *claims* the input and every deviation from the grammar is
-//! [`EwktError::InvalidSrid`]. Otherwise it claims nothing, `body_start`
-//! is 0, and the whole string — leading whitespace included — is the
-//! body.
-//!
-//! `PostGIS` permits whitespace around the `;` (the prefix is two tokens,
-//! `SRID=-?[0-9]+` and `\;`, joined by a grammar rule) and admits a minus
-//! sign in the digits. This scanner is deliberately narrower: no
-//! whitespace anywhere inside the prefix, and no sign.
+//! The `PostGIS` SRID envelope: checked signed input and bounded output.
 
 use crate::ewkt_error::EwktError;
-use crate::srid::Srid;
+use crate::ewkt_write_error::EwktWriteError;
+use geometry_io_wkt::trim_wkt_start;
+use geometry_srid::Srid;
 
-/// What the scanner found at the head of the input.
+const SRID_MAXIMUM: u32 = 999_999;
+
 #[derive(Debug, PartialEq)]
 pub(crate) struct Scanned {
-    /// The prefix's spatial-reference id, or `None` when the input
-    /// carried no prefix.
     pub(crate) srid: Option<Srid>,
-    /// Byte offset at which the geometry body begins: the byte after
-    /// `;`, or 0 when nothing was claimed.
     pub(crate) body_start: usize,
 }
 
-/// Build an `InvalidSrid` for `reason` at `pos`.
-///
-/// The variant carries a position and never a copy of the offending
-/// text, so a hostile megabyte after `SRID=` is not duplicated.
 fn invalid(reason: &'static str, pos: usize) -> EwktError {
     EwktError::InvalidSrid { reason, pos }
 }
 
-/// Scan an optional `SRID=<digits>;` prefix off the head of `input`.
-///
-/// # Errors
-///
-/// [`EwktError::InvalidSrid`] when the input is claimed (its leading
-/// letter run uppercases to `SRID`) but deviates from the grammar above,
-/// or when the digit run exceeds `u32`.
 pub(crate) fn scan(input: &str) -> Result<Scanned, EwktError> {
     let bytes = input.as_bytes();
-
-    let mut cursor = 0;
-    while let Some(&byte) = bytes.get(cursor) {
-        if byte.is_ascii_whitespace() {
-            cursor += 1;
-        } else if byte.is_ascii() {
-            break;
-        } else {
-            let ch = input[cursor..]
-                .chars()
-                .next()
-                .expect("cursor is inside the input");
-            if ch.is_whitespace() {
-                cursor += ch.len_utf8();
-            } else {
-                break;
-            }
-        }
-    }
-
-    let mut pos = cursor;
+    let start = input.len() - trim_wkt_start(input).len();
+    let mut pos = start;
     while bytes.get(pos).is_some_and(u8::is_ascii_alphabetic) {
         pos += 1;
     }
-    if !input[cursor..pos].eq_ignore_ascii_case("SRID") {
+    if !input[start..pos].eq_ignore_ascii_case("SRID") {
         return Ok(Scanned {
             srid: None,
             body_start: 0,
         });
     }
-
-    if bytes.get(pos) == Some(&b'=') {
-        pos += 1;
-    } else {
+    if bytes.get(pos) != Some(&b'=') {
         return Err(invalid("expected '='", pos));
     }
-
-    match bytes.get(pos) {
-        Some(b'+' | b'-') => return Err(invalid("sign not allowed", pos)),
-        Some(byte) if byte.is_ascii_digit() => {}
-        _ => return Err(invalid("expected digits", pos)),
+    pos += 1;
+    if bytes.get(pos) == Some(&b'+') {
+        return Err(invalid("leading '+' not allowed", pos));
     }
-
-    let mut value: u32 = 0;
-    while let Some(&byte) = bytes.get(pos) {
-        if !byte.is_ascii_digit() {
-            break;
-        }
+    let negative = bytes.get(pos) == Some(&b'-');
+    if negative {
+        pos += 1;
+    }
+    if !bytes.get(pos).is_some_and(u8::is_ascii_digit) {
+        return Err(invalid("expected digits", pos));
+    }
+    let limit = if negative {
+        2_147_483_648
+    } else {
+        2_147_483_647
+    };
+    let mut value = 0_u32;
+    while let Some(&byte) = bytes.get(pos).filter(|b| b.is_ascii_digit()) {
         value = value
             .checked_mul(10)
-            .and_then(|scaled| scaled.checked_add(u32::from(byte - b'0')))
-            .ok_or_else(|| invalid("value exceeds u32", pos))?;
+            .and_then(|v| v.checked_add(u32::from(byte - b'0')))
+            .filter(|v| *v <= limit)
+            .ok_or_else(|| invalid("value exceeds i32", pos))?;
         pos += 1;
     }
-
-    if bytes.get(pos) == Some(&b';') {
-        pos += 1;
-    } else {
+    pos = input.len() - trim_wkt_start(&input[pos..]).len();
+    if bytes.get(pos) != Some(&b';') {
         return Err(invalid("expected ';'", pos));
     }
-
+    pos += 1;
+    let value = if negative {
+        0
+    } else if value > SRID_MAXIMUM {
+        999_000 + value % 999
+    } else {
+        value
+    };
     Ok(Scanned {
         srid: Some(Srid::new(value)),
         body_start: pos,
     })
 }
 
+pub(crate) fn write<W: core::fmt::Write + ?Sized>(
+    srid: Option<Srid>,
+    out: &mut W,
+) -> Result<(), EwktWriteError> {
+    if let Some(srid) = srid {
+        if srid.get() > SRID_MAXIMUM {
+            return Err(EwktWriteError::SridOutOfRange { srid: srid.get() });
+        }
+        write!(out, "SRID={srid};")?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Scanned, scan};
     use crate::ewkt_error::EwktError;
-    use crate::srid::Srid;
+    use geometry_srid::Srid;
 
     /// The scanner's error for `input`, which must be claimed.
     fn err(input: &str) -> EwktError {
@@ -175,12 +141,15 @@ mod tests {
 
     #[test]
     fn minus_sign() {
-        assert_eq!(err("SRID=-1;POINT(1 2)"), invalid("sign not allowed", 5));
+        assert_eq!(scan("SRID=-1;POINT(1 2)"), Ok(claimed(0, 8)));
     }
 
     #[test]
     fn plus_sign() {
-        assert_eq!(err("SRID=+1;POINT(1 2)"), invalid("sign not allowed", 5));
+        assert_eq!(
+            err("SRID=+1;POINT(1 2)"),
+            invalid("leading '+' not allowed", 5)
+        );
     }
 
     #[test]
@@ -195,7 +164,7 @@ mod tests {
 
     #[test]
     fn space_before_the_semicolon() {
-        assert_eq!(err("SRID=4326 ;POINT(1 2)"), invalid("expected ';'", 9));
+        assert_eq!(scan("SRID=4326 ;POINT(1 2)"), Ok(claimed(4326, 11)));
     }
 
     #[test]
@@ -205,7 +174,7 @@ mod tests {
 
     #[test]
     fn no_semicolon_at_all() {
-        assert_eq!(err("SRID=4326 POINT(1 2)"), invalid("expected ';'", 9));
+        assert_eq!(err("SRID=4326 POINT(1 2)"), invalid("expected ';'", 10));
     }
 
     #[test]
@@ -226,8 +195,8 @@ mod tests {
     #[test]
     fn one_past_the_upper_bound() {
         assert_eq!(
-            err("SRID=4294967296;POINT(1 2)"),
-            invalid("value exceeds u32", 14)
+            err("SRID=2147483648;POINT(1 2)"),
+            invalid("value exceeds i32", 14)
         );
     }
 
@@ -235,7 +204,7 @@ mod tests {
     fn far_past_the_upper_bound() {
         assert_eq!(
             err("SRID=99999999999;POINT(1 2)"),
-            invalid("value exceeds u32", 14)
+            invalid("value exceeds i32", 14)
         );
     }
 
@@ -264,10 +233,7 @@ mod tests {
 
     #[test]
     fn upper_bound_is_accepted() {
-        assert_eq!(
-            scan("SRID=4294967295;POINT(1 2)"),
-            Ok(claimed(u32::MAX, 16))
-        );
+        assert_eq!(scan("SRID=2147483647;POINT(1 2)"), Ok(claimed(999_280, 16)));
     }
 
     #[test]
@@ -276,8 +242,8 @@ mod tests {
     }
 
     #[test]
-    fn non_ascii_whitespace_is_skipped() {
-        assert_eq!(scan("\u{a0}SRID=4326;POINT(1 2)"), Ok(claimed(4326, 12)));
+    fn non_ascii_whitespace_is_not_skipped() {
+        assert_eq!(scan("\u{a0}SRID=4326;POINT(1 2)"), Ok(unclaimed()));
     }
 
     #[test]
@@ -285,11 +251,7 @@ mod tests {
         assert_eq!(scan("\x0bSRID=1;POINT(1 2)"), Ok(unclaimed()));
     }
 
-    /// The leading scan decodes a non-ASCII byte to a `char` only to ask
-    /// whether it is whitespace. A non-ASCII character that is *not*
-    /// whitespace must stop the scan rather than be stepped over, so the
-    /// prefix behind it is never reached and nothing is claimed — the
-    /// counterpart to `non_ascii_whitespace_is_skipped`.
+    /// Non-ASCII characters prevent the prefix from being claimed.
     #[test]
     fn non_ascii_non_whitespace_is_not_skipped() {
         assert_eq!(scan("\u{e9}SRID=4326;POINT(1 2)"), Ok(unclaimed()));

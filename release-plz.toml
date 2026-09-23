@@ -104,5 +104,13 @@ name = "geometry-io-wkb"
 version_group = "lockstep"
 
 [[package]]
+name = "geometry-io-ewkb"
+version_group = "lockstep"
+
+[[package]]
+name = "geometry-srid"
+version_group = "lockstep"
+
+[[package]]
 name = "geometry-proj"
 version_group = "lockstep"

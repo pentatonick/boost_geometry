@@ -5,7 +5,10 @@
 //! Reference: OGC Simple Feature Access 06-103r4 §8.2.
 
 use geometry_cs::Cartesian;
-use geometry_io_wkb::{ByteOrder, WkbError, WriteWkb, from_wkb, to_wkb, to_wkb_polygon};
+use geometry_io_wkb::{
+    ByteOrder, WkbError, WriteWkb, from_wkb, from_wkb_parts, polygon_wkb_len, split_header, to_wkb,
+    to_wkb_polygon, write_wkb_polygon,
+};
 use geometry_model::{
     DynGeometry, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D, Polygon, Ring,
 };
@@ -20,6 +23,53 @@ fn assert_round_trip(g: &Dyn, order: ByteOrder) {
     let bytes = to_wkb(g, order);
     let back = from_wkb(&bytes).expect("re-parse must succeed");
     assert_eq!(&back, g, "round-trip mismatch in {order:?}");
+}
+
+/// Every rejected type word reports what is actually wrong with it.
+/// Before the three-way split these all returned one
+/// `UnsupportedDimension`, which was true for the ISO and Z/M rows and
+/// false for the SRID and bounding-box rows.
+#[test]
+fn rejected_type_words_report_their_actual_defect() {
+    // Each rejected type word now reports what is actually wrong with
+    // it, rather than one "unsupported dimension" for three conditions.
+    for (type_code, want) in [
+        (
+            0x8000_0001_u32,
+            WkbError::HigherDimension {
+                type_word: 0x8000_0001,
+            },
+        ),
+        (
+            0x4000_0001,
+            WkbError::HigherDimension {
+                type_word: 0x4000_0001,
+            },
+        ),
+        (
+            0x2000_0001,
+            WkbError::UnexpectedSridFlag {
+                type_word: 0x2000_0001,
+            },
+        ),
+        (1001, WkbError::HigherDimension { type_word: 1001 }),
+        (2001, WkbError::HigherDimension { type_word: 2001 }),
+        (3001, WkbError::HigherDimension { type_word: 3001 }),
+        (
+            0x1000_0001,
+            WkbError::UnrecognisedTypeWord {
+                type_word: 0x1000_0001,
+            },
+        ),
+    ] {
+        let mut dimensional = vec![1];
+        dimensional.extend_from_slice(&type_code.to_le_bytes());
+        assert_eq!(
+            from_wkb(&dimensional).unwrap_err(),
+            want,
+            "{type_code:#010x}"
+        );
+    }
 }
 
 /// Round-trip `g` in both byte orders.
@@ -132,6 +182,33 @@ fn bare_ring_and_public_polygon_writer_round_trip() {
 }
 
 #[test]
+fn empty_polygon_writers_emit_no_rings() {
+    let polygon = Polygon::<Pt>::default();
+    let ring = Ring::<Pt>::new();
+    for (order, expected) in [
+        (ByteOrder::LittleEndian, [1, 3, 0, 0, 0, 0, 0, 0, 0]),
+        (ByteOrder::BigEndian, [0, 0, 0, 0, 3, 0, 0, 0, 0]),
+    ] {
+        assert_eq!(
+            to_wkb(&polygon, order),
+            expected,
+            "[ewkb-empty] expected zero rings in {order:?}"
+        );
+        assert_eq!(to_wkb(&ring, order), expected);
+        assert_eq!(to_wkb_polygon(&polygon, order), expected);
+        assert_eq!(polygon.wkb_len(), Some(expected.len()));
+        assert_eq!(ring.wkb_len(), Some(expected.len()));
+        assert_eq!(polygon_wkb_len(&polygon), Some(expected.len()));
+
+        let mut appended = vec![0xCA, 0xFE];
+        write_wkb_polygon(&polygon, order, &mut appended);
+        assert_eq!(&appended[..2], &[0xCA, 0xFE]);
+        assert_eq!(&appended[2..], &expected);
+        assert_eq!(from_wkb(&expected), Ok(Dyn::Polygon(polygon.clone())));
+    }
+}
+
+#[test]
 fn collection_with_every_geometry_kind_round_trips() {
     let polygon = sample_polygon();
     let collection = Dyn::GeometryCollection(vec![
@@ -165,15 +242,6 @@ fn malformed_documents_cover_the_public_error_contract() {
         from_wkb(&unknown).unwrap_err(),
         WkbError::UnknownGeometryType(8)
     );
-
-    for type_code in [0x8000_0001_u32, 0x4000_0001, 0x2000_0001, 1001, 2001, 3001] {
-        let mut dimensional = vec![1];
-        dimensional.extend_from_slice(&type_code.to_le_bytes());
-        assert_eq!(
-            from_wkb(&dimensional).unwrap_err(),
-            WkbError::UnsupportedDimension
-        );
-    }
 
     let mut trailing = to_wkb(&Pt::new(1.0, 2.0), ByteOrder::LittleEndian);
     trailing.push(0xff);
@@ -216,7 +284,15 @@ fn malformed_documents_cover_the_public_error_contract() {
         WkbError::UnexpectedEof,
         WkbError::InvalidByteOrder(2),
         WkbError::UnknownGeometryType(8),
-        WkbError::UnsupportedDimension,
+        WkbError::HigherDimension {
+            type_word: 0x8000_0001,
+        },
+        WkbError::UnexpectedSridFlag {
+            type_word: 0x2000_0001,
+        },
+        WkbError::UnrecognisedTypeWord {
+            type_word: 0x1000_0001,
+        },
         WkbError::TrailingBytes,
         WkbError::NestingTooDeep,
         WkbError::MismatchedMemberType {
@@ -445,10 +521,20 @@ fn unknown_and_flagged_tags_inside_containers_are_rejected() {
     assert_eq!(from_wkb(&zero), Err(WkbError::UnknownGeometryType(0)));
 
     for (tag, want) in [
-        (0x8000_0001_u32, WkbError::UnsupportedDimension),
-        (0x2000_0001, WkbError::UnsupportedDimension),
-        (1001, WkbError::UnsupportedDimension),
-        (3007, WkbError::UnsupportedDimension),
+        (
+            0x8000_0001_u32,
+            WkbError::HigherDimension {
+                type_word: 0x8000_0001,
+            },
+        ),
+        (
+            0x2000_0001,
+            WkbError::UnexpectedSridFlag {
+                type_word: 0x2000_0001,
+            },
+        ),
+        (1001, WkbError::HigherDimension { type_word: 1001 }),
+        (3007, WkbError::HigherDimension { type_word: 3007 }),
         (8, WkbError::UnknownGeometryType(8)),
         (999, WkbError::UnknownGeometryType(999)),
     ] {
@@ -465,5 +551,95 @@ fn unknown_and_flagged_tags_inside_containers_are_rejected() {
             Err(want),
             "tag {tag:#x} inside a multipoint"
         );
+    }
+}
+
+/// P.2's acceptance criterion, as a test rather than as prose:
+/// `from_wkb(b)` and `split_header` + `from_wkb_parts` agree on every
+/// corpus buffer, every prefix of one, and every §9 error shape — and
+/// header failures preserve the same error as `from_wkb`.
+#[test]
+fn split_header_and_from_wkb_parts_agree_with_from_wkb() {
+    let mut buffers: Vec<Vec<u8>> = Vec::new();
+    for g in every_kind_corpus() {
+        for order in BOTH_ORDERS {
+            let b = to_wkb(&g, order);
+            for end in 0..=b.len() {
+                buffers.push(b[..end].to_vec());
+            }
+            let mut trailing = b.clone();
+            trailing.push(0xFF);
+            buffers.push(trailing);
+        }
+    }
+    // §9-shaped error buffers, including both byte orders of each.
+    for tag in [
+        0x8000_0001_u32,
+        0x4000_0001,
+        0x2000_0001,
+        0x1000_0001,
+        0x0800_0001,
+        1001,
+        2000,
+        3007,
+        8,
+        999,
+        0,
+    ] {
+        for order in BOTH_ORDERS {
+            let mut b = vec![u8::from(order == ByteOrder::LittleEndian)];
+            b.extend_from_slice(&order.to_bytes(tag));
+            buffers.push(b);
+        }
+    }
+    buffers.push(vec![0x02, 1, 0, 0, 0]);
+    buffers.push(Vec::new());
+
+    for b in &buffers {
+        let direct = from_wkb(b);
+        match split_header(b) {
+            Ok(header) => {
+                assert_eq!(
+                    from_wkb_parts(header.byte_order, header.type_word, header.body),
+                    direct,
+                    "disagreement on {b:02X?}"
+                );
+            }
+            Err(error) => assert_eq!(direct, Err(error), "header error for {b:02X?}"),
+        }
+    }
+}
+
+/// P.3's acceptance criterion: the appending polygon writer agrees with
+/// `to_wkb_polygon`, and `polygon_wkb_len` agrees with both — for every
+/// polygon shape this file builds, in both orders. Also pins the two
+/// public routes to the same bytes (`WriteWkb` and the free function).
+#[test]
+fn polygon_writer_and_length_agree_on_every_shape() {
+    let shapes = [
+        sample_polygon(),
+        Polygon::new(sample_ring()),
+        Polygon::<Pt>::new(Ring::new()),
+        Polygon::with_inners(Ring::new(), vec![sample_hole()]),
+    ];
+    for pg in &shapes {
+        for order in BOTH_ORDERS {
+            let via_to = to_wkb_polygon(pg, order);
+
+            let mut via_write = Vec::new();
+            write_wkb_polygon(pg, order, &mut via_write);
+            assert_eq!(via_write, via_to, "{order:?}");
+
+            // the whole-record length, not the body's
+            assert_eq!(polygon_wkb_len(pg), Some(via_to.len()), "{order:?}");
+
+            // and the `WriteWkb` route produces the same record
+            let via_trait = to_wkb(&DynGeometry::Polygon(pg.clone()), order);
+            assert_eq!(via_trait, via_to, "{order:?}");
+            assert_eq!(pg.wkb_len(), Some(via_to.len()), "{order:?}");
+
+            // one allocation, sized exactly
+            assert_eq!(via_to.capacity(), via_to.len(), "{order:?}");
+        }
     }
 }

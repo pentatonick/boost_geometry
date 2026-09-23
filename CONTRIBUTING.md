@@ -9,13 +9,13 @@ edition 2024); `rustup` picks it up automatically.
 
 ```sh
 cargo build --workspace --all-targets
-cargo test --workspace
+cargo test --workspace --all-features
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-CI runs exactly those four commands (plus a release-mode build), so a
-clean local run means a green PR.
+CI runs those four commands, plus a release build and all-feature release
+tests. It also checks the generated documentation described below.
 
 ## READMEs are generated
 
@@ -62,11 +62,12 @@ CI fails if the generated files are out of sync.
 ## Design ground rules
 
 - **Mirror Boost.Geometry.** Every public item that ports a Boost header
-  cites it. Four crates have no Boost counterpart
-  (`geometry-io-wkb`, `geometry-io-geojson`, `geometry-io-ewkt`,
-  `geometry-proj`); those cite the format specification or upstream
-  reference they implement instead. Read `docs/` first — the architecture, the
-  tag-dispatch pattern, and the overlay engine are documented there.
+  cites it. Six crates have no Boost counterpart
+  (`geometry-io-wkb`, `geometry-io-ewkb`, `geometry-io-geojson`,
+  `geometry-io-ewkt`, `geometry-srid`, `geometry-proj`); those cite the
+  format specification or upstream reference they implement instead. Read
+  `docs/` first — the architecture, the tag-dispatch pattern, and the
+  overlay engine are documented there.
 - **`unsafe_code = "forbid"`** across the whole workspace.
 - **Dependency spine.** Crates depend strictly downward (tags/coords →
   traits → models → strategies → algorithms → overlay → facade). No

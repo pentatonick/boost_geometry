@@ -1,13 +1,14 @@
 # Architecture — the dependency spine
 
 This is a Rust port of [Boost.Geometry](https://www.boost.org/doc/libs/release/libs/geometry/),
-organised as a 20-crate Cargo workspace. Most crates mirror one or more
+organised as a 22-crate Cargo workspace. Most crates mirror one or more
 `boost/geometry/**` headers, and each such crate's `lib.rs` names the exact
-header it mirrors; `geometry-io-wkb`, `geometry-io-geojson`,
-`geometry-io-ewkt`, and `geometry-proj` have no Boost counterpart and say so
-instead. The workspace is not a grab-bag of modules — it is a **dependency
-spine**: foundational crates at the bottom, derived crates stacked above,
-arrows always pointing rootward. No cycles.
+header it mirrors; `geometry-io-wkb`, `geometry-io-ewkb`, `geometry-io-geojson`,
+`geometry-io-ewkt`, `geometry-srid`, and `geometry-proj` have no Boost
+counterpart and say so instead. The workspace is not a grab-bag of
+modules — it is a **dependency spine**: foundational crates at the
+bottom, derived crates stacked above, arrows always pointing rootward.
+No cycles.
 
 This page is the map. It answers "where does concept X live, and what does
 it depend on."
@@ -20,6 +21,7 @@ graph BT
         tag["geometry-tag<br/><i>kind tags + hierarchy markers</i>"]
         coords["geometry-coords<br/><i>scalar traits, promotion</i>"]
         cs["geometry-cs<br/><i>Cartesian/Spherical/Geographic</i>"]
+        srid["geometry-srid<br/><i>PostGIS spatial-reference id</i>"]
     end
 
     subgraph L1["Layer 1 — concepts"]
@@ -57,10 +59,11 @@ graph BT
         adapt_na["geometry-adapt-nalgebra"]
     end
 
-    subgraph "I/O (peers of L5/L6, consume model, and -ewkt consumes -wkt)"
+    subgraph "I/O (peers of L5/L6, consume model, and -ewkt consumes -wkt, -ewkb consumes -wkb)"
         io_wkt["geometry-io-wkt"]
         io_ewkt["geometry-io-ewkt"]
         io_wkb["geometry-io-wkb"]
+        io_ewkb["geometry-io-ewkb"]
         io_geojson["geometry-io-geojson"]
         io_svg["geometry-io-svg"]
     end
@@ -100,7 +103,11 @@ graph BT
     model --> io_wkt
     model --> io_ewkt
     io_wkt --> io_ewkt
+    srid --> io_ewkt
     model --> io_wkb
+    model --> io_ewkb
+    io_wkb --> io_ewkb
+    srid --> io_ewkb
     model --> io_geojson
     model --> io_svg
 
@@ -125,6 +132,7 @@ No domain dependencies. These are the nouns every other crate is built from.
 | [`geometry-tag`](crates/geometry-tag.md) | `core/{tags,tag,tag_cast}.hpp` | 11 zero-sized kind tags (`PointTag`, `PolygonTag`, …) + 8 hierarchy marker traits (`Single`, `Linear`, `Areal`, …) |
 | [`geometry-coords`](crates/geometry-coords.md) | `util/{select_most_precise,calculation_type,math}.hpp` | `CoordinateScalar`, `Promote` (type widening), `Comparable<T>` (skip-sqrt distance) |
 | [`geometry-cs`](crates/geometry-cs.md) | `core/cs.hpp`, `srs/spheroid.hpp` | `Cartesian`, `Spherical<U>`, `Geographic<U>`, `Polar<U>`, the `*Family` classifiers, `Spheroid` |
+| [`geometry-srid`](crates/geometry-srid.md) | none — PostGIS manual §4.1.3/§4.2.1 and `liblwgeom/lwutil.c` (`clamp_srid`) | `Srid` — the PostGIS spatial-reference id newtype, and `Srid::UNKNOWN` |
 
 ### Layer 1 — Concepts
 
@@ -177,13 +185,14 @@ No domain dependencies. These are the nouns every other crate is built from.
 | [`geometry-adapt-geo-types`](crates/geometry-adapt-geo-types.md) | [`geo-types`](https://docs.rs/geo-types) — the de-facto Rust geo ecosystem crate |
 | [`geometry-adapt-nalgebra`](crates/geometry-adapt-nalgebra.md) | [`nalgebra`](https://nalgebra.org)'s `Point2`/`Point3`/`Vector2`/`Vector3` |
 
-### Peers — I/O (consume `geometry-model`, sit beside algorithm/overlay; `geometry-io-ewkt` also consumes `geometry-io-wkt`)
+### Peers — I/O (consume `geometry-model`, sit beside algorithm/overlay; `geometry-io-ewkt` also consumes `geometry-io-wkt`, `geometry-io-ewkb` also consumes `geometry-io-wkb`)
 
 | Crate | Format | Spec |
 |---|---|---|
 | [`geometry-io-wkt`](crates/geometry-io-wkt.md) | Well-Known Text | OGC SFA-1 §7 |
 | [`geometry-io-ewkt`](crates/geometry-io-ewkt.md) | PostGIS Extended Well-Known Text | none — PostGIS manual §4.2.1 and `liblwgeom/lwin_wkt_lex.l` |
 | [`geometry-io-wkb`](crates/geometry-io-wkb.md) | Well-Known Binary | OGC 06-103r4 §8 |
+| [`geometry-io-ewkb`](crates/geometry-io-ewkb.md) | PostGIS Extended Well-Known Binary | none — PostGIS manual §4.2.1 and `liblwgeom/lwout_wkb.c` |
 | [`geometry-io-geojson`](crates/geometry-io-geojson.md) | GeoJSON | RFC 7946 |
 | [`geometry-io-svg`](crates/geometry-io-svg.md) | SVG | debugging convenience, mirrors `io/svg/svg_mapper.hpp` |
 
@@ -211,11 +220,12 @@ geometry-algorithm`, a cycle. They live in `geometry-overlay` instead, and
 The four foundation-through-model crates (`geometry-tag`, `geometry-coords`,
 `geometry-cs`, `geometry-trait`) plus most of the layers above build
 `#![no_std]` (`alloc`-only where they need heap containers). In the
-generated support table the original I/O crates show ❌ because they need a
-libm-backed `Float` impl but forward no `libm` feature to `geometry-coords`
-(and `geometry-io-svg` also calls std-only `f64` methods); crates that need
-no such impl, like `geometry-tag` and `geometry-derive`, show ✅ without the
-feature. `geometry-io-ewkt` forwards one and shows ✅.
+generated support table every crate shows ✅: the I/O crates that need a
+libm-backed `Float` impl (and `geometry-io-svg`, which also calls std-only
+`f64` methods) forward a `libm` feature to `geometry-coords` for it, while
+crates that need no such impl, like `geometry-tag` and `geometry-derive`,
+show ✅ without the feature. `geometry-io-ewkt` and `geometry-io-ewkb` both
+forward one, the same as every other I/O crate — neither is an exception.
 
 ## `unsafe_code`
 
