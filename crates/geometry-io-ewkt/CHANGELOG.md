@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/pentatonick/boost_geometry/compare/geometry-io-ewkt-v0.0.11...geometry-io-ewkt-v0.0.12) - 2026-10-08
+
+### Fixed
+
+- resolve Boost parity gaps found
+
 ## [0.0.11](https://github.com/pentatonick/boost_geometry/compare/geometry-io-ewkt-v0.0.10...geometry-io-ewkt-v0.0.11) - 2026-09-23
 
 ### Added
