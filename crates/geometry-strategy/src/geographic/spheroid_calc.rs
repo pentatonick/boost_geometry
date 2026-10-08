@@ -29,7 +29,6 @@ pub(crate) struct SpheroidCalc {
     /// Flattening `f = (a − b) / a`, dimensionless.
     pub(crate) f: f64,
     /// First eccentricity squared `e² = 2f − f²`.
-    #[allow(dead_code, reason = "consumed by Vincenty / Thomas in T44+")]
     pub(crate) e2: f64,
 }
 
@@ -50,9 +49,8 @@ impl SpheroidCalc {
 
     /// Second eccentricity squared `e'² = e² / (1 − e²)`.
     ///
-    /// Used by Andoyer / Thomas series expansions; corresponds to
-    /// `ep2` in `boost/geometry/formulas/thomas_inverse.hpp`.
-    #[allow(dead_code, reason = "consumed by distance strategies landing in T43+")]
+    /// Used by the geographic area series; corresponds to `m_ep2` in
+    /// `boost/geometry/strategy/geographic/area.hpp`.
     pub(crate) fn second_eccentricity_squared(&self) -> f64 {
         self.e2 / (1.0 - self.e2)
     }

@@ -98,6 +98,26 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consume an empty body — `EMPTY`, or the `()` Boost writes for an
+    /// empty geometry (`io/wkt/write.hpp`) and reads back
+    /// (`io/wkt/read.hpp`) — and report whether there was one.
+    fn empty_body(&mut self) -> Result<bool, WktError> {
+        match self.peek() {
+            Token::Empty => {
+                self.advance()?;
+                Ok(true)
+            }
+            Token::LeftParen
+                if matches!(self.lexer.clone().next_token(), Ok(Token::RightParen)) =>
+            {
+                self.advance()?;
+                self.advance()?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// Reject dimensions this value cannot retain, including empty geometries.
     fn reject_dimension_suffix(&self) -> Result<(), WktError> {
         match self.peek() {
@@ -188,12 +208,11 @@ impl<'a> Parser<'a> {
         Ok(GeometryValue::Point(Some(p)))
     }
 
-    /// `LINESTRING` body: `(x y, …)` or `EMPTY`.
+    /// `LINESTRING` body: `(x y, …)` or empty.
     fn parse_linestring_body(
         &mut self,
     ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
-        if let Token::Empty = self.peek() {
-            self.advance()?;
+        if self.empty_body()? {
             return Ok(GeometryValue::LineString(Linestring(Vec::new())));
         }
         let pos = self.pos;
@@ -203,7 +222,7 @@ impl<'a> Parser<'a> {
         Ok(GeometryValue::LineString(Linestring(pts)))
     }
 
-    /// `POLYGON` body: `((outer), (hole1), …)` or `EMPTY`. The first
+    /// `POLYGON` body: `((outer), (hole1), …)` or empty. The first
     /// ring is the exterior; the rest are holes.
     fn parse_polygon_body(&mut self) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
         Ok(GeometryValue::Polygon(self.parse_polygon_value()?))
@@ -211,8 +230,7 @@ impl<'a> Parser<'a> {
 
     /// The shared `POLYGON` value builder, reused by `MULTIPOLYGON`.
     fn parse_polygon_value(&mut self) -> Result<Polygon<Pt>, WktError> {
-        if let Token::Empty = self.peek() {
-            self.advance()?;
+        if self.empty_body()? {
             return Ok(Polygon::new(Ring::new()));
         }
         let mut rings = self.parse_coord_list_list()?.into_iter();
@@ -228,8 +246,7 @@ impl<'a> Parser<'a> {
     fn parse_multipoint_body(
         &mut self,
     ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
-        if let Token::Empty = self.peek() {
-            self.advance()?;
+        if self.empty_body()? {
             return Ok(GeometryValue::MultiPoint(Vec::new()));
         }
         self.expect_left_paren()?;
@@ -268,15 +285,13 @@ impl<'a> Parser<'a> {
     fn parse_multilinestring_body(
         &mut self,
     ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
-        if let Token::Empty = self.peek() {
-            self.advance()?;
+        if self.empty_body()? {
             return Ok(GeometryValue::MultiLineString(MultiLinestring(Vec::new())));
         }
         self.expect_left_paren()?;
         let mut lines = Vec::new();
         loop {
-            if let Token::Empty = self.peek() {
-                self.advance()?;
+            if self.empty_body()? {
                 lines.push(Linestring(Vec::new()));
             } else {
                 let pos = self.pos;
@@ -296,12 +311,11 @@ impl<'a> Parser<'a> {
         Ok(GeometryValue::MultiLineString(MultiLinestring(lines)))
     }
 
-    /// `MULTIPOLYGON` body: `(((ring), …), …)` or `EMPTY`.
+    /// `MULTIPOLYGON` body: `(((ring), …), …)` or empty.
     fn parse_multipolygon_body(
         &mut self,
     ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
-        if let Token::Empty = self.peek() {
-            self.advance()?;
+        if self.empty_body()? {
             return Ok(GeometryValue::MultiPolygon(MultiPolygon(Vec::new())));
         }
         self.expect_left_paren()?;
@@ -319,15 +333,14 @@ impl<'a> Parser<'a> {
         Ok(GeometryValue::MultiPolygon(MultiPolygon(polys)))
     }
 
-    /// `GEOMETRYCOLLECTION` body: `(<geometry>, …)` or `EMPTY`. Recurses
+    /// `GEOMETRYCOLLECTION` body: `(<geometry>, …)` or empty. Recurses
     /// into [`Parser::parse_geometry`] for each member, carrying `depth`
     /// so nested collections stay bounded by [`MAX_DEPTH`].
     fn parse_collection_body(
         &mut self,
         depth: usize,
     ) -> Result<GeometryValue<Point2D<f64, Cartesian>>, WktError> {
-        if let Token::Empty = self.peek() {
-            self.advance()?;
+        if self.empty_body()? {
             return Ok(GeometryValue::GeometryCollection(Vec::new()));
         }
         self.expect_left_paren()?;
@@ -801,6 +814,42 @@ mod tests {
     fn geometrycollection_empty() {
         let g = from_wkt("GEOMETRYCOLLECTION EMPTY").unwrap();
         assert_eq!(g, DynGeometry::GeometryCollection(Vec::new()));
+    }
+
+    /// Boost writes an empty geometry as its keyword and `()`
+    /// (`io/wkt/write.hpp`), and reads that back as empty; so does this
+    /// reader, for every kind but the point, which has no empty form there.
+    #[test]
+    fn boost_empty_parentheses_read_as_empty() {
+        assert_eq!(
+            from_wkt("LINESTRING()").unwrap(),
+            DynGeometry::LineString(Linestring::from_vec(Vec::new()))
+        );
+        assert_eq!(
+            from_wkt("POLYGON()").unwrap(),
+            DynGeometry::Polygon(Polygon::new(Ring::new()))
+        );
+        assert_eq!(
+            from_wkt("MULTIPOINT()").unwrap(),
+            DynGeometry::MultiPoint(MultiPoint::from_vec(Vec::new()))
+        );
+        assert_eq!(
+            from_wkt("MULTILINESTRING()").unwrap(),
+            DynGeometry::MultiLineString(MultiLinestring::from_vec(Vec::new()))
+        );
+        assert_eq!(
+            from_wkt("MULTIPOLYGON ( )").unwrap(),
+            DynGeometry::MultiPolygon(MultiPolygon::from_vec(Vec::new()))
+        );
+        assert_eq!(
+            from_wkt("GEOMETRYCOLLECTION()").unwrap(),
+            DynGeometry::GeometryCollection(Vec::new())
+        );
+        assert_eq!(
+            from_wkt("MULTIPOLYGON(())").unwrap(),
+            DynGeometry::MultiPolygon(MultiPolygon::from_vec(vec![Polygon::new(Ring::new())]))
+        );
+        assert!(from_wkt("POINT()").is_err());
     }
 
     #[test]

@@ -18,7 +18,9 @@
 use proj4rs::transform::{Transform, TransformClosure};
 
 use geometry_cs::CoordinateSystem;
-use geometry_model::{Linestring, MultiPolygon, Point2D, Polygon, Ring};
+use geometry_model::{
+    Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point2D, Polygon, Ring,
+};
 use geometry_trait::{Point, PointMut};
 
 use crate::crs::{Crs, CrsError};
@@ -26,9 +28,9 @@ use crate::crs::{Crs, CrsError};
 /// A geometry whose points can be enumerated and rewritten — the hook
 /// reprojection needs.
 ///
-/// Implemented for the kernel's mutable areal / linear / point model
-/// types. The single method visits every point, letting the caller
-/// replace its `(x, y)`.
+/// Implemented for the kernel's point, linestring, ring, polygon and
+/// multi model types, of either winding and closure. The single method
+/// visits every point, letting the caller replace its `(x, y)`.
 pub trait ReprojectPoints {
     /// Visit each point, replacing it with `f(x, y)`. `f` may fail; the
     /// first failure stops the walk and is propagated.
@@ -150,7 +152,7 @@ impl<Cs: CoordinateSystem> ReprojectPoints for Linestring<Point2D<f64, Cs>> {
     }
 }
 
-impl<Cs: CoordinateSystem> ReprojectPoints for Ring<Point2D<f64, Cs>> {
+impl<Cs: CoordinateSystem> ReprojectPoints for MultiPoint<Point2D<f64, Cs>> {
     fn map_points<F>(&mut self, f: &mut F) -> Result<(), CrsError>
     where
         F: FnMut(f64, f64) -> Result<(f64, f64), CrsError>,
@@ -162,7 +164,35 @@ impl<Cs: CoordinateSystem> ReprojectPoints for Ring<Point2D<f64, Cs>> {
     }
 }
 
-impl<Cs: CoordinateSystem> ReprojectPoints for Polygon<Point2D<f64, Cs>> {
+impl<Cs: CoordinateSystem> ReprojectPoints for MultiLinestring<Linestring<Point2D<f64, Cs>>> {
+    fn map_points<F>(&mut self, f: &mut F) -> Result<(), CrsError>
+    where
+        F: FnMut(f64, f64) -> Result<(f64, f64), CrsError>,
+    {
+        for ls in &mut self.0 {
+            ls.map_points(f)?;
+        }
+        Ok(())
+    }
+}
+
+impl<Cs: CoordinateSystem, const CW: bool, const CL: bool> ReprojectPoints
+    for Ring<Point2D<f64, Cs>, CW, CL>
+{
+    fn map_points<F>(&mut self, f: &mut F) -> Result<(), CrsError>
+    where
+        F: FnMut(f64, f64) -> Result<(f64, f64), CrsError>,
+    {
+        for p in &mut self.0 {
+            p.map_points(f)?;
+        }
+        Ok(())
+    }
+}
+
+impl<Cs: CoordinateSystem, const CW: bool, const CL: bool> ReprojectPoints
+    for Polygon<Point2D<f64, Cs>, CW, CL>
+{
     fn map_points<F>(&mut self, f: &mut F) -> Result<(), CrsError>
     where
         F: FnMut(f64, f64) -> Result<(f64, f64), CrsError>,
@@ -175,7 +205,9 @@ impl<Cs: CoordinateSystem> ReprojectPoints for Polygon<Point2D<f64, Cs>> {
     }
 }
 
-impl<Cs: CoordinateSystem> ReprojectPoints for MultiPolygon<Polygon<Point2D<f64, Cs>>> {
+impl<Cs: CoordinateSystem, const CW: bool, const CL: bool> ReprojectPoints
+    for MultiPolygon<Polygon<Point2D<f64, Cs>, CW, CL>>
+{
     fn map_points<F>(&mut self, f: &mut F) -> Result<(), CrsError>
     where
         F: FnMut(f64, f64) -> Result<(f64, f64), CrsError>,
@@ -328,5 +360,27 @@ mod tests {
                 .map(|p| (p.get::<0>().to_bits(), p.get::<1>().to_bits()))
                 .collect();
         assert_eq!(before, after, "geometry must be unchanged on Err");
+    }
+
+    /// The multi-point and multi-linestring kinds, and a counter-clockwise
+    /// open polygon, reproject vertex by vertex too.
+    #[test]
+    fn reproject_multis_and_any_winding() {
+        use geometry_model::{MultiLinestring, MultiPoint, Polygon, Ring};
+        let mut points = MultiPoint(vec![P::new(0.0, 0.0), P::new(0.1, 0.0)]);
+        reproject(&mut points, &wgs84(), &mercator()).unwrap();
+        assert!(points.0[1].get::<0>() > 1000.0);
+
+        let mut lines = MultiLinestring(vec![Linestring(vec![P::new(0.0, 0.0), P::new(0.0, 0.1)])]);
+        reproject(&mut lines, &wgs84(), &mercator()).unwrap();
+        assert!(lines.0[0].0[1].get::<1>() > 1000.0);
+
+        let mut polygon: Polygon<P, false, false> = Polygon::new(Ring::from_vec(vec![
+            P::new(0.0, 0.0),
+            P::new(0.1, 0.0),
+            P::new(0.1, 0.1),
+        ]));
+        reproject(&mut polygon, &wgs84(), &mercator()).unwrap();
+        assert!(polygon.outer.0[2].get::<1>() > 1000.0);
     }
 }

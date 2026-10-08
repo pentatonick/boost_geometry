@@ -1,0 +1,7 @@
+error[E0271]: type mismatch resolving `<i32 as CoordinateScalar>::Measure == i32`
+  --> tests/ui/integer_point_to_segment.rs:14:40
+   |
+14 |     let _ = PointToSegment(Pythagoras).distance(&IntegerPoint::new(5, 7), &segment);
+   |                                        ^^^^^^^^ expected `i32`, found `f64`
+   |
+   = note: required for `PointToSegment` to implement `DistanceStrategy<geometry_model::Point<i32, 2>, _>`

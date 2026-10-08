@@ -44,14 +44,16 @@ pub struct Spheroid {
 impl Spheroid {
     /// The WGS84 reference ellipsoid.
     ///
-    /// Equatorial radius and flattening per the WGS84 defining
-    /// parameters; matches the default-constructed
-    /// `srs::spheroid<RadiusType>` in
+    /// Matches the default-constructed `srs::spheroid<RadiusType>` in
     /// `boost/geometry/srs/spheroid.hpp:62-69`, which seeds
-    /// `m_a = 6_378_137.0` and `m_b = 6_356_752.314_245_179_3`.
+    /// `m_a = 6_378_137.0` and `m_b = 6_356_752.314_245_179_3`, and takes
+    /// the flattening Boost's formulas derive from those radii,
+    /// `(a − b) / a` (`formulas/flattening.hpp:41-50`). That is 74 ulp
+    /// above the WGS84 defining `1 / 298.257_223_563`; the defining value
+    /// would move geodesic results off Boost's in their last bits.
     pub const WGS84: Self = Self {
         equatorial_radius: 6_378_137.0,
-        flattening: 1.0 / 298.257_223_563,
+        flattening: (6_378_137.0 - 6_356_752.314_245_179) / 6_378_137.0,
     };
 
     /// Semi-minor axis `b = a · (1 − f)`, in metres.

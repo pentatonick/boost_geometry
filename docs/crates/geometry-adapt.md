@@ -1,6 +1,6 @@
 # `geometry-adapt`
 
-**Layer 3 — adaptation.** Depends on `geometry-model`, `geometry-trait` (transitively tag/coords/cs). `#![no_std]`.
+**Layer 3 — adaptation.** Depends on `geometry-trait`, `geometry-cs` (transitively tag/coords). `#![no_std]`.
 
 Mirrors `boost/geometry/geometries/{adapted,register}/*.hpp`.
 
@@ -49,5 +49,5 @@ documented in the crate's `lib.rs` in order from least to most indirect:
 ## Who depends on this
 
 `geometry-strategy` (its worked "how to write a strategy" example uses
-`WithCs`), `geometry-algorithm`, `geometry-overlay`, re-exported by the
+`WithCs`) and `geometry-algorithm`, in their tests only; re-exported by the
 `boost_geometry` facade as `boost_geometry::adapt`.

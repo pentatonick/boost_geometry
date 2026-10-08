@@ -12,13 +12,12 @@
 
 use alloc::vec::Vec;
 
+#[cfg(not(feature = "std"))]
+use geometry_coords::math::Float;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::Linestring;
 use geometry_tag::SameAs;
-use geometry_trait::{Linestring as LinestringTrait, Point, PointMut};
-
-use crate::cartesian::Pythagoras;
-use crate::distance::DistanceStrategy;
+use geometry_trait::{Linestring as LinestringTrait, Point, PointMut, ordinate, set_ordinate};
 
 /// A strategy for densifying a geometry — inserting intermediate
 /// vertices so no segment exceeds `max_distance`.
@@ -48,7 +47,6 @@ where
     L: LinestringTrait<Point = P>,
     P: Point<Scalar = f64> + PointMut + Default + Copy,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
-    Pythagoras: DistanceStrategy<P, P, Out = f64>,
 {
     type Output = Linestring<P>;
 
@@ -78,75 +76,68 @@ where
 
         for w in pts.windows(2) {
             out.push(w[0]);
-            let d_total = Pythagoras.distance(&w[0], &w[1]);
-            // Number of *intermediate* points inserted on this edge.
-            // Mirrors `densify/cartesian.hpp::apply` exactly:
-            // `n = int(len / threshold)` (a truncation = floor for the
-            // positive `len`), then the edge is divided into `n + 1`
-            // equal sub-segments with the intermediate points placed at
-            // `i / (n + 1)` for `i in 1..=n`. Using `ceil` here would
-            // diverge from Boost on exact-integer ratios (e.g.
-            // `len == 2·max` would emit one fewer point and leave a
-            // sub-segment exactly equal to `max` instead of shorter).
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                clippy::cast_precision_loss,
-                reason = "d_total / max_distance >= 0 keeps the floor non-negative and small; \
-                          the fraction cast loses no meaningful precision for realistic counts."
-            )]
-            {
-                let n = (d_total / max_distance) as usize;
-                if n > 0 {
-                    let den = (n + 1) as f64;
-                    for i in 1..=n {
-                        let t = i as f64 / den;
-                        out.push(interpolate(&w[0], &w[1], t));
-                    }
-                }
-            }
+            densify_segment(&w[0], &w[1], max_distance, &mut out);
         }
         out.push(*pts.last().unwrap());
         Linestring::from_vec(out)
     }
 }
 
-/// Linear per-dimension interpolation: `out[D] = a[D] + t·(b[D] − a[D])`
-/// for each dimension `D ∈ 0..P::DIM`.
+/// Push the points that cut `p0 → p1` into equal parts no longer than
+/// `length_threshold`, between its two ends.
 ///
-/// Mirrors the point-blend inside `densify/cartesian.hpp::apply` that
-/// walks each coordinate of the two endpoints.
-#[inline]
-fn interpolate<P>(a: &P, b: &P, t: f64) -> P
+/// C++: `strategy::densify::cartesian::apply`
+/// (`strategies/cartesian/densify.hpp`): `n = int(len / threshold)` points
+/// — a truncation, the floor of the positive ratio — at
+/// `p0 + (p1 − p0)·i / (n + 1)` for `i in 1..=n`, each evaluated in that
+/// order so the points are Boost's to the last bit. Truncating rather than
+/// rounding up means `len == 2·max` gets one point more than `ceil` would,
+/// leaving sub-segments shorter than `max` instead of equal to it.
+fn densify_segment<P>(p0: &P, p1: &P, length_threshold: f64, out: &mut Vec<P>)
 where
     P: Point<Scalar = f64> + PointMut + Default,
 {
-    let mut out = P::default();
-    geometry_trait::fold_dims((), a, |(), _p, d| {
-        let av = match d {
-            0 => a.get::<0>(),
-            1 => a.get::<1>(),
-            2 => a.get::<2>(),
-            3 => a.get::<3>(),
-            _ => unreachable!(),
-        };
-        let bv = match d {
-            0 => b.get::<0>(),
-            1 => b.get::<1>(),
-            2 => b.get::<2>(),
-            3 => b.get::<3>(),
-            _ => unreachable!(),
-        };
-        let v = av + t * (bv - av);
-        match d {
-            0 => out.set::<0>(v),
-            1 => out.set::<1>(v),
-            2 => out.set::<2>(v),
-            3 => out.set::<3>(v),
-            _ => unreachable!(),
+    let direction = |dimension| ordinate(p1, dimension) - ordinate(p0, dimension);
+    // C++: `dot_product(dir01, dir01)`, which adds the squares from the
+    // last dimension down.
+    let dot = (0..P::DIM)
+        .rev()
+        .map(|dimension| direction(dimension) * direction(dimension))
+        .reduce(|later, square| square + later)
+        .unwrap_or(0.0);
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "C++ truncates the non-negative ratio to an integer the same way"
+    )]
+    let n = (dot.sqrt() / length_threshold) as usize;
+    if n == 0 {
+        return;
+    }
+    // A count no `Vec` can hold — a length that overflowed to infinity
+    // saturates the cast — panics here rather than wrapping `n + 1`.
+    out.reserve(n);
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "C++ converts the counts to the calculation type the same way"
+    )]
+    let den = (n + 1) as f64;
+    for i in 1..=n {
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "C++ converts the counts to the calculation type the same way"
+        )]
+        let num = i as f64;
+        let mut point = P::default();
+        for dimension in 0..P::DIM {
+            set_ordinate(
+                &mut point,
+                dimension,
+                ordinate(p0, dimension) + direction(dimension) * num / den,
+            );
         }
-    });
-    out
+        out.push(point);
+    }
 }
 
 #[cfg(test)]
@@ -191,6 +182,38 @@ mod tests {
         let out = CartesianDensify.densify(&ls, 2.0);
         let xs: alloc::vec::Vec<f64> = out.points().map(Pt::get::<0>).collect();
         assert_eq!(xs, alloc::vec![0.0, 1.5, 3.0, 4.5, 6.0]);
+    }
+
+    /// The points are Boost's to the last bit: `p0 + d·i / (n + 1)`
+    /// (`aed7bc3`), where `p0 + (i / (n + 1))·d` rounds `10 / 7` to
+    /// `1.4285714285714284`.
+    #[test]
+    fn densified_points_are_boosts_to_the_last_bit() {
+        let ls: Linestring<Pt> = linestring![(0., 0.), (10., 0.)];
+        let out = CartesianDensify.densify(&ls, 1.5);
+        let xs: alloc::vec::Vec<f64> = out.points().map(Pt::get::<0>).collect();
+        assert_eq!(
+            xs,
+            alloc::vec![
+                0.0,
+                1.428_571_428_571_428_6,
+                2.857_142_857_142_857,
+                4.285_714_285_714_286,
+                5.714_285_714_285_714,
+                7.142_857_142_857_143,
+                8.571_428_571_428_571,
+                10.0
+            ]
+        );
+    }
+
+    /// A segment whose length overflows to infinity asks for more points
+    /// than any `Vec` holds; that panics rather than looping forever.
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn an_infinitely_long_segment_panics_instead_of_looping() {
+        let ls: Linestring<Pt> = linestring![(0., 0.), (f64::MAX, f64::MAX)];
+        let _ = CartesianDensify.densify(&ls, 1.0);
     }
 
     #[test]

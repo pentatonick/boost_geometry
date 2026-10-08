@@ -112,7 +112,9 @@ where
 /// Mirrors `boost::geometry::for_each_segment(g, f)` from
 /// `boost/geometry/algorithms/for_each.hpp`. A closed ring visits its
 /// closing edge via the repeated last-vertex already in storage; an
-/// open ring emits the implicit `(last, first)` closing edge.
+/// open ring emits the implicit `(last, first)` closing edge. A linestring
+/// or ring of one point is the degenerate segment from that point to itself,
+/// as in Boost (`for_each.hpp:236-263`).
 pub fn for_each_segment<G, F>(g: &G, mut f: F)
 where
     G: ForEachSegment,
@@ -132,6 +134,9 @@ impl<P: geometry_trait::Point> ForEachSegment for Linestring<P> {
     type Point = P;
     fn for_each_segment<F: FnMut(&P, &P)>(&self, f: &mut F) {
         let pts: alloc::vec::Vec<&P> = self.points().collect();
+        if let [only] = pts[..] {
+            f(only, only);
+        }
         for w in pts.windows(2) {
             f(w[0], w[1]);
         }
@@ -142,8 +147,10 @@ impl<P: geometry_trait::Point, const CW: bool, const CL: bool> ForEachSegment fo
     type Point = P;
     fn for_each_segment<F: FnMut(&P, &P)>(&self, f: &mut F) {
         let pts: alloc::vec::Vec<&P> = self.points().collect();
-        if pts.len() < 2 {
-            return;
+        match pts[..] {
+            [] => return,
+            [only] => return f(only, only),
+            _ => {}
         }
         for w in pts.windows(2) {
             f(w[0], w[1]);
@@ -304,13 +311,26 @@ mod tests {
         assert_eq!(*edges.last().unwrap(), ((0.0, 2.0), (0.0, 0.0)));
     }
 
-    /// A ring with fewer than two vertices emits no segments (the length
-    /// guard).
+    /// One point is the degenerate segment from it to itself, open ring or
+    /// linestring alike; nothing is no segment at all. Boost
+    /// (`test/algorithms/for_each.cpp:49-58`): `LINESTRING(1 1)` visits
+    /// `((1, 1), (1, 1))`.
     #[test]
-    fn degenerate_ring_emits_no_segments() {
+    fn a_single_point_is_one_degenerate_segment() {
+        let mut seen = Vec::new();
         let ring: Ring<Pt, true, false> = Ring::from_vec(vec![Pt::new(1.0, 1.0)]);
+        for_each_segment(&ring, |a, b| seen.push((a.get::<0>(), b.get::<0>())));
+        let line: Linestring<Pt> = Linestring::from_vec(vec![Pt::new(1.0, 1.0)]);
+        for_each_segment(&line, |a, b| seen.push((a.get::<0>(), b.get::<0>())));
+        assert_eq!(seen, vec![(1.0, 1.0), (1.0, 1.0)]);
+
         let mut count = 0;
-        for_each_segment(&ring, |_, _| count += 1);
+        for_each_segment(&Ring::<Pt, true, false>::from_vec(Vec::new()), |_, _| {
+            count += 1;
+        });
+        for_each_segment(&Linestring::<Pt>::from_vec(Vec::new()), |_, _| {
+            count += 1;
+        });
         assert_eq!(count, 0);
     }
 

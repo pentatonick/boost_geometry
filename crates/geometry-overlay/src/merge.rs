@@ -57,7 +57,7 @@ pub fn merge_polygons<P>(
 ) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     let mut work = polygons;
@@ -93,7 +93,7 @@ where
 pub fn merge_elements<P, I>(polygons: I) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
     I: IntoIterator<Item = Polygon<P>>,
 {
@@ -116,7 +116,7 @@ pub fn merge_multipolygon<P>(
 ) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     merge_polygons(mp.0)
@@ -137,7 +137,7 @@ where
 pub fn stitch_triangles<P, I>(triangles: I) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
     I: IntoIterator<Item = Polygon<P>>,
 {
@@ -155,7 +155,7 @@ fn first_stitchable_pair<P>(
 ) -> Result<Option<(usize, usize, Polygon<P>)>, OverlayError>
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     for first in 0..polygons.len() {

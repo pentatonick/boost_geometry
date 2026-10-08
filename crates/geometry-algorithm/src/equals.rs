@@ -12,9 +12,10 @@ use geometry_trait::Geometry;
 /// `true` iff `a` and `b` describe the same point set.
 ///
 /// Mirrors `boost::geometry::equals(a, b)` from
-/// `boost/geometry/algorithms/equals.hpp`. Polygon equality is
-/// up-to-rotation and traversal direction; vertex-order normalisation
-/// happens inside the strategy kernel.
+/// `boost/geometry/algorithms/equals.hpp`. Two polygons are equal when
+/// their areas and their edges agree, whatever vertex a ring starts at and
+/// whatever vertices lie on a straight edge; see
+/// [`EqualsStrategy`].
 #[inline]
 #[must_use]
 pub fn equals<A, B>(a: &A, b: &B) -> bool
@@ -45,8 +46,9 @@ mod tests {
         assert!(!equals(&pt(1.0, 2.0), &pt(1.0, 2.1)));
     }
 
+    /// The same ring started at another vertex is the same polygon.
     #[test]
-    fn equals_polygon_rotated_and_reversed() {
+    fn equals_polygon_rotated() {
         let a: Polygon<P> = polygon![[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)]];
         let b: Polygon<P> = polygon![[(4.0, 4.0), (0.0, 4.0), (0.0, 0.0), (4.0, 0.0), (4.0, 4.0)]];
         assert!(equals(&a, &b));

@@ -1,6 +1,6 @@
 # `geometry-cs`
 
-**Layer 0 — foundation.** No domain dependencies. `#![no_std]`.
+**Layer 0 — foundation.** Depends on `geometry-coords` only. `#![no_std]`.
 
 Mirrors `boost/geometry/core/cs.hpp` and `boost/geometry/core/coordinate_system.hpp`,
 plus `boost/geometry/srs/spheroid.hpp`.

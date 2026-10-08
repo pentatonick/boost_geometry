@@ -1,7 +1,9 @@
 //! `area(&g)` — see `boost/geometry/algorithms/area.hpp`.
 //!
-//! Cartesian-only in v1; spherical / geographic area strategies arrive
-//! alongside the Haversine / Andoyer / Vincenty work in later tasks.
+//! [`area`] dispatches a polygon on its coordinate system's family
+//! (Cartesian, spherical or geographic); [`ring_area`], [`box_area`] and
+//! [`multi_polygon_area`] are Cartesian, and [`area_with`] takes any
+//! strategy.
 //!
 //! # Why four entry points
 //!
@@ -67,7 +69,7 @@ where
 /// [`geometry_strategy::ShoelacePolygonArea`] (identical to the v1
 /// behaviour), spherical to the spherical-excess
 /// [`geometry_strategy::SphericalPolygonArea`], geographic to the
-/// authalic-sphere [`geometry_strategy::GeographicPolygonArea`]. For an
+/// spheroidal [`geometry_strategy::GeographicPolygonArea`]. For an
 /// explicit strategy use [`area_with`].
 ///
 /// # Behaviour on "wrong" kinds
@@ -115,9 +117,10 @@ where
 /// Mirrors `boost::geometry::area(box)` from
 /// `boost/geometry/algorithms/area.hpp` resolved through the
 /// `dispatch::area<Box, box_tag>` arm at
-/// `algorithms/area.hpp:149-151`. Always non-negative — the Cartesian
-/// box formula is sign-blind to corner ordering
-/// (`test/algorithms/area/area.cpp:56-57`).
+/// `algorithms/area.hpp:149-151`: the product of the box's two extents,
+/// positive for a box whose corners are swapped in both dimensions too
+/// (`test/algorithms/area/area.cpp:56-57`), negative for one swapped in
+/// a single dimension.
 #[inline]
 #[must_use]
 pub fn box_area<B>(b: &B) -> <ShoelaceBoxArea as AreaStrategy<B>>::Out
@@ -261,8 +264,7 @@ mod tests {
             sp(0., 0.),
         ]));
         let got = area(&pg);
-        // Default SphericalPolygonArea uses R = 6_371_000 m.
-        let r = 6_371_000.0_f64;
+        let r = geometry_strategy::SphericalPolygonArea::EARTH.radius;
         let expected = core::f64::consts::FRAC_PI_2 * r * r;
         assert!(
             (got - expected).abs() / expected < 1e-6,
@@ -341,12 +343,13 @@ mod tests {
         assert!(got < 0.2, "expected a small sliver area, got {got}");
     }
 
-    /// `area_geo.cpp` — strategy-less `area` on a geographic polygon
-    /// resolves to the authalic-sphere `GeographicPolygonArea`; a
-    /// 1° × 1° box near the equator on WGS84 ≈ `12_309` km² (within 2 %).
+    /// Strategy-less `area` on a geographic polygon resolves to the
+    /// spheroidal `GeographicPolygonArea`: a 1° × 1° box at the equator,
+    /// walked counter-clockwise, measures `−12_308_778_368.75034` m² on
+    /// WGS84 in Boost (`aed7bc3`).
     #[cfg(feature = "std")]
     #[test]
-    fn geographic_area_dispatches_to_authalic_sphere() {
+    fn geographic_area_dispatches_to_the_spheroidal_series() {
         use geometry_adapt::{Adapt, WithCs};
         use geometry_cs::{Degree, Geographic};
 
@@ -360,9 +363,12 @@ mod tests {
             gg(0., 1.),
             gg(0., 0.),
         ]));
-        let got = area(&pg).abs();
-        let expected = 12_309e6;
-        assert!((got - expected).abs() / expected < 0.02);
+        let got = area(&pg);
+        let expected = -12_308_778_368.750_34;
+        assert!(
+            (got - expected).abs() <= 1e-12 * expected.abs(),
+            "got {got} expected {expected}"
+        );
     }
 
     /// `area_geo.cpp` — a geographic polygon with a hole wound opposite
@@ -404,8 +410,8 @@ mod tests {
     }
 
     /// A geographic ring declared *open* closes implicitly: same area
-    /// as the explicitly closed ring (the closing-edge branch of the
-    /// excess accumulator).
+    /// as the explicitly closed ring (the closing edge Boost's
+    /// `closed_clockwise_view` adds).
     #[cfg(feature = "std")]
     #[test]
     fn geographic_open_ring_closes_implicitly() {
@@ -437,8 +443,8 @@ mod tests {
     }
 
     /// A counter-clockwise-declared geographic polygon negates the
-    /// signed area (the `PointOrder::CounterClockwise` arm): same
-    /// vertices, opposite declared order → opposite sign.
+    /// signed area (walked reversed, as Boost's `closed_clockwise_view`
+    /// does): same vertices, opposite declared order → opposite sign.
     #[cfg(feature = "std")]
     #[test]
     fn geographic_ccw_declared_polygon_negates_sign() {

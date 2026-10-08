@@ -92,7 +92,7 @@ fn thomas_direct_covers_reflections_meridians_poles_and_first_order() {
 
 /// `formulas/thomas_direct.hpp` — a due-south course spelled as `-π`
 /// keeps the sign of its reverse azimuth (Boost 1.83: lon2 = 10°,
-/// lat2 = 10.962936519310402°, reverse azimuth = −180°), and `+π`
+/// lat2 = 10.962936519310404°, reverse azimuth = −180°), and `+π`
 /// reaches the same latitude with a `+180°` reverse azimuth.
 #[test]
 fn thomas_direct_negative_pi_azimuth_is_due_south() {
@@ -106,7 +106,7 @@ fn thomas_direct_negative_pi_azimuth_is_due_south() {
         minus.lon2 * R2D
     );
     assert!(
-        (minus.lat2 * R2D - 10.962_936_519_310_402).abs() < 1e-9,
+        (minus.lat2 * R2D - 10.962_936_519_310_404).abs() < 1e-9,
         "lat2 {}",
         minus.lat2 * R2D
     );
@@ -120,4 +120,119 @@ fn thomas_direct_negative_pi_azimuth_is_due_south() {
     let vincenty =
         VincentyDirect::WGS84.apply(10.0 * D2R, 20.0 * D2R, 1_000_000.0, -core::f64::consts::PI);
     assert!((minus.lat2 - vincenty.lat2).abs() * R2D < 1e-6);
+}
+
+/// `formulas/thomas_direct.hpp:94,130,179` test the pole, `sin θ0 = 0`, and
+/// `M = 0` cases with `math::equals`, not exactly. From a pole `cos θ1` is
+/// about 6e-17 rather than 0, so `M` must count as zero there; dividing by
+/// it sent the destination latitude kilometres off. Boost: lon2 = −126°,
+/// lat2 = 0.017 777 348 844 594°, reverse azimuth = −180° from the north
+/// pole, and lon2 = 150°, lat2 = −45.153 161 682 740 134° from the south.
+#[test]
+fn thomas_direct_from_a_pole_follows_the_meridian() {
+    let north = ThomasDirect::WGS84.apply(0.0, 90.0 * D2R, 10_000_000.0, -54.0 * D2R);
+    assert!(
+        (north.lon2 * R2D + 126.0).abs() < 1e-9,
+        "lon2 {}",
+        north.lon2 * R2D
+    );
+    assert!(
+        (north.lat2 * R2D - 0.017_777_348_844_594).abs() < 1e-12,
+        "lat2 {}",
+        north.lat2 * R2D
+    );
+    assert!((north.reverse_azimuth * R2D + 180.0).abs() < 1e-9);
+
+    let south = ThomasDirect::WGS84.apply(30.0 * D2R, -90.0 * D2R, 5_000_000.0, 120.0 * D2R);
+    assert!(
+        (south.lon2 * R2D - 150.0).abs() < 1e-9,
+        "lon2 {}",
+        south.lon2 * R2D
+    );
+    assert!(
+        (south.lat2 * R2D + 45.153_161_682_740_134).abs() < 1e-12,
+        "lat2 {}",
+        south.lat2 * R2D
+    );
+
+    // Thomas is a second-order series; Karney is exact to round-off.
+    let karney = KarneyDirect::WGS84.apply(0.0, 90.0 * D2R, 10_000_000.0, -54.0 * D2R);
+    assert!((north.lat2 - karney.lat2).abs() * R2D < 1e-6);
+}
+
+/// Boost normalizes the destination longitude only after computing the
+/// differential quantities (`vincenty_direct.hpp:169-176`). Folded first, an
+/// equatorial line across the antimeridian measured its arc a turn short, a
+/// turn the division by `1 − f` no longer cancels: 863 km of reduced length
+/// instead of 996 km. Turning the start about the axis changes neither
+/// quantity. Boost (`aed7bc3`): 995 880.535 435 932 6 m and
+/// 0.987 651 801 508 027 2 from 3 rad, as from 0.
+#[test]
+fn equatorial_lines_across_the_antimeridian_keep_their_quantities() {
+    let east = core::f64::consts::FRAC_PI_2;
+    for (crossing, from_zero) in [
+        (
+            VincentyDirect::WGS84.apply(3.0, 0.0, 1_000_000.0, east),
+            VincentyDirect::WGS84.apply(0.0, 0.0, 1_000_000.0, east),
+        ),
+        (
+            ThomasDirect::WGS84.apply(3.0, 0.0, 1_000_000.0, east),
+            ThomasDirect::WGS84.apply(0.0, 0.0, 1_000_000.0, east),
+        ),
+        (
+            KarneyDirect::WGS84.apply(3.0, 0.0, 1_000_000.0, east),
+            KarneyDirect::WGS84.apply(0.0, 0.0, 1_000_000.0, east),
+        ),
+    ] {
+        assert!(crossing.lon2 < -3.0, "lon2 {}", crossing.lon2);
+        assert!((crossing.reduced_length - 995_880.535_435_932_6).abs() < 1e-6);
+        assert!((crossing.reduced_length - from_zero.reduced_length).abs() < 1e-6);
+        assert!((crossing.geodesic_scale - 0.987_651_801_508_027_2).abs() < 1e-12);
+        assert!((crossing.geodesic_scale - from_zero.geodesic_scale).abs() < 1e-12);
+    }
+}
+
+/// Boost brings the destination longitude into `(−π, π]`: due north from
+/// `−180°`, each formula arrives at `+180°` (Boost `aed7bc3`).
+#[test]
+fn a_line_from_the_negative_antimeridian_arrives_at_positive_180() {
+    let pi = core::f64::consts::PI;
+    for result in [
+        VincentyDirect::WGS84.apply(-pi, 0.5, 1_000.0, 0.0),
+        ThomasDirect::WGS84.apply(-pi, 0.5, 1_000.0, 0.0),
+        KarneyDirect::WGS84.apply(-pi, 0.5, 1_000.0, 0.0),
+    ] {
+        assert_eq!(result.lon2, pi);
+    }
+}
+
+/// Boost instantiates `differential_quantities` at the second order for
+/// the Vincenty and Thomas formulas (`vincenty_direct.hpp:162`,
+/// `thomas_direct.hpp:202`); the third order is 18 mm off here. Boost
+/// (`aed7bc3`) gives these.
+#[test]
+fn vincenty_and_thomas_quantities_take_the_second_order() {
+    let (lon1, lat1, distance, azimuth) = (
+        0.872_819_066_926_347_8,
+        -0.382_807_371_821_806_44,
+        1_109_197.692_814_7,
+        -2.747_077_888_584_542_4,
+    );
+    let vincenty = VincentyDirect::WGS84.apply(lon1, lat1, distance, azimuth);
+    assert!((vincenty.reduced_length - 1_103_592.658_879_181_1).abs() < 1e-6);
+    assert!((vincenty.geodesic_scale - 0.984_851_375_357_535_1).abs() < 1e-12);
+    let thomas = ThomasDirect::WGS84.apply(lon1, lat1, distance, azimuth);
+    assert!((thomas.reduced_length - 1_103_592.662_260_444).abs() < 1e-6);
+    assert!((thomas.geodesic_scale - 0.984_851_375_264_021_8).abs() < 1e-12);
+}
+
+/// Boost's Karney formula takes its reduced length and geodesic scale from
+/// its own order-8 series (`karney_direct.hpp:219-249`), not from the
+/// flattening expansion the other formulas use, which is a millimetre off
+/// over 15 000 km. Boost (`aed7bc3`) gives these.
+#[test]
+fn karney_quantities_follow_its_own_series() {
+    let result = KarneyDirect::WGS84.apply(0.2, 0.5, 15_000_000.0, 0.7);
+    assert!((result.reduced_length - 4_532_361.710_864_253).abs() < 1e-6);
+    assert!((result.geodesic_scale + 0.703_318_048_269_265_1).abs() < 1e-12);
 }

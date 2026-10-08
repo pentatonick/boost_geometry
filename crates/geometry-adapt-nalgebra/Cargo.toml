@@ -19,6 +19,7 @@ nalgebra        = "0.32"
 
 [dev-dependencies]
 geometry-algorithm = { path = "../geometry-algorithm" }
+geometry-model     = { path = "../geometry-model" }
 
 [lints]
 workspace = true

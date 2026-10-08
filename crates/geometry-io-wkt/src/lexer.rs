@@ -33,6 +33,7 @@ pub enum Token {
 }
 
 /// One-token-at-a-time scanning preserves positions in the original input.
+#[derive(Clone)]
 pub(crate) struct Lexer<'a> {
     input: &'a str,
     pos: usize,

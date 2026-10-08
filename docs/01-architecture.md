@@ -75,11 +75,11 @@ graph BT
     coords --> trait_
     cs --> trait_
     tag --> trait_
+    coords --> cs
     trait_ --> model
     trait_ --> derive
-    model --> adapt
     trait_ --> adapt
-    adapt --> strategy
+    model --> strategy
     cs --> strategy
     coords --> strategy
     strategy --> algorithm
@@ -87,7 +87,6 @@ graph BT
     algorithm --> overlay
     strategy --> overlay
     model --> overlay
-    overlay --> rtree
     model --> rtree
     algorithm --> facade
     overlay --> facade
@@ -125,11 +124,13 @@ below it?" at a glance.
 
 ### Layer 0 — Foundation
 
-No domain dependencies. These are the nouns every other crate is built from.
+Nothing outside the layer: `geometry-cs` builds on `geometry-coords`'s scalar,
+and the rest depend on nothing. These are the nouns every other crate is built
+from.
 
 | Crate | Mirrors | Owns |
 |---|---|---|
-| [`geometry-tag`](crates/geometry-tag.md) | `core/{tags,tag,tag_cast}.hpp` | 11 zero-sized kind tags (`PointTag`, `PolygonTag`, …) + 8 hierarchy marker traits (`Single`, `Linear`, `Areal`, …) |
+| [`geometry-tag`](crates/geometry-tag.md) | `core/{tags,tag,tag_cast}.hpp` | 12 zero-sized kind tags (`PointTag`, `PolygonTag`, …) + 8 hierarchy marker traits (`Single`, `Linear`, `Areal`, …) |
 | [`geometry-coords`](crates/geometry-coords.md) | `util/{select_most_precise,calculation_type,math}.hpp` | `CoordinateScalar`, `Promote` (type widening), `Comparable<T>` (skip-sqrt distance) |
 | [`geometry-cs`](crates/geometry-cs.md) | `core/cs.hpp`, `srs/spheroid.hpp` | `Cartesian`, `Spherical<U>`, `Geographic<U>`, `Polar<U>`, the `*Family` classifiers, `Spheroid` |
 | [`geometry-srid`](crates/geometry-srid.md) | none — PostGIS manual §4.1.3/§4.2.1 and `liblwgeom/lwutil.c` (`clamp_srid`) | `Srid` — the PostGIS spatial-reference id newtype, and `Srid::UNKNOWN` |
@@ -163,20 +164,20 @@ No domain dependencies. These are the nouns every other crate is built from.
 
 | Crate | Mirrors | Owns |
 |---|---|---|
-| [`geometry-algorithm`](crates/geometry-algorithm.md) | `algorithms/*.hpp` | Free functions users call: `distance`, `area`, `length`, `within`, `intersects`, `centroid`, `convex_hull`, `simplify`, `transform`, `correct`, … (34 modules) |
+| [`geometry-algorithm`](crates/geometry-algorithm.md) | `algorithms/*.hpp` | Free functions users call: `distance`, `area`, `length`, `within`, `intersects`, `centroid`, `convex_hull`, `simplify`, `transform`, `correct`, … |
 
 ### Layer 6 — Overlay engine
 
 | Crate | Mirrors | Owns |
 |---|---|---|
-| [`geometry-overlay`](crates/geometry-overlay.md) | `algorithms/detail/overlay/` | The boolean-overlay pipeline: robust predicates → turn graph → traversal → ring assembly → `intersection`/`union`/`difference`/`sym_difference`/`buffer`/`relate`/`is_valid`. See the [overlay deep-dive](03-overlay-engine.md). |
+| [`geometry-overlay`](crates/geometry-overlay.md) | `algorithms/detail/overlay/` | Robust predicates and the split-edge arrangement behind `intersection`/`union`/`difference`/`sym_difference`, with `buffer`/`relate`/`is_valid` on top, and the standalone turn graph and two-ring traversal. See the [overlay deep-dive](03-overlay-engine.md). |
 
 ### Layer 7 — Spatial index & facade
 
 | Crate | Mirrors | Owns |
 |---|---|---|
-| [`geometry-rtree`](crates/geometry-rtree.md) | `index/rtree.hpp` | `Rtree<T, Params>` — bounding-box spatial index, `Linear`/`Quadratic` split strategies, k-NN |
-| [`boost_geometry`](crates/geometry.md) | `geometry.hpp` | Umbrella facade — re-exports every crate above under one namespace |
+| [`geometry-rtree`](crates/geometry-rtree.md) | `index/rtree.hpp` | `Rtree<T, Params>` — bounding-box spatial index, R\*/quadratic/linear split strategies, k-NN |
+| [`boost_geometry`](crates/geometry.md) | `geometry.hpp` | Umbrella facade — re-exports every crate above but `geometry-srid` under one namespace |
 
 ### Peers — ecosystem adapters (same layer as `geometry-adapt`)
 

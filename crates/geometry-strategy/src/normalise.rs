@@ -13,11 +13,14 @@
 //! pattern is uniform: multiply by `math::d2r<T>()` when the units
 //! tag is `degree`, otherwise pass through).
 //!
+//! It also folds the angles strategies compute — a longitude, or a
+//! difference of longitudes — into `(−π, π]` the way Boost's formulas do.
+//!
 //! [`Degree`]: geometry_cs::Degree
 //! [`Radian`]: geometry_cs::Radian
 
 use geometry_coords::CoordinateScalar;
-use geometry_cs::{AngleUnit, FromF64, Geographic, Polar, Spherical};
+use geometry_cs::{AngleUnit, FromF64, Geographic, Polar, Radian, Spherical, normalize_longitude};
 use geometry_trait::Point;
 
 /// Extracts the `Units` associated type from a coordinate system that
@@ -71,6 +74,43 @@ where
         <P::Cs as HasAngularUnits>::Units::to_radians(lon),
         <P::Cs as HasAngularUnits>::Units::to_radians(lat),
     )
+}
+
+/// A longitude in radians folded into `(−π, π]`, one within `math::equals`
+/// of ±π becoming π.
+///
+/// Mirrors `math::normalize_longitude<radian>` ([`normalize_longitude`]).
+pub(crate) fn normalized_longitude(mut longitude: f64) -> f64 {
+    normalize_longitude::<Radian, f64>(&mut longitude);
+    longitude
+}
+
+/// The longitude difference `lon2 − lon1`, in radians, folded into
+/// `(−π, π]`.
+///
+/// Mirrors `math::longitude_distance_signed<radian>`
+/// (`util/normalize_spheroidal_coordinates.hpp:429-435`), which normalises
+/// the difference as [`normalized_longitude`] does: a difference that
+/// equals ±π within `math::equals` becomes π.
+pub(crate) fn longitude_distance_signed(lon1: f64, lon2: f64) -> f64 {
+    normalized_longitude(lon2 - lon1)
+}
+
+/// An angle in radians one turn back into `(−π, π]` when it lies beyond
+/// either end, as the direct formulas leave their final longitude.
+///
+/// Mirrors `math::detail::normalize_angle_cond<radian>`
+/// (`util/normalize_spheroidal_coordinates.hpp:322-332`): a single turn,
+/// compared exactly, so `−π` becomes `π`.
+pub(crate) fn normalize_angle_cond(angle: f64) -> f64 {
+    let pi = core::f64::consts::PI;
+    if angle > pi {
+        angle - 2.0 * pi
+    } else if angle <= -pi {
+        angle + 2.0 * pi
+    } else {
+        angle
+    }
 }
 
 #[cfg(test)]

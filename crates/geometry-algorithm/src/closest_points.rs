@@ -23,10 +23,10 @@ use geometry_strategy::{CartesianClosestPoints, ClosestPointsStrategy};
 ///
 /// # Panics
 ///
-/// Panics if a linestring operand has fewer than 2 points — Boost
-/// treats empty input as an error (`empty_input_exception`); the
-/// Rust port panics with a clear message. Point and segment
-/// operands cannot be empty and never panic.
+/// Panics if a linestring operand is empty — Boost treats empty input
+/// as an error (`empty_input_exception`); the Rust port panics with a
+/// clear message. A one-point linestring is that point, as in Boost.
+/// Point and segment operands cannot be empty and never panic.
 #[inline]
 #[must_use]
 pub fn closest_points<A, B>(
@@ -117,10 +117,25 @@ mod tests {
         assert!((Pythagoras.distance(&ca, &cb) - 3.0).abs() < 1e-9);
     }
 
+    /// A one-point linestring is that point: Boost (`aed7bc3`) pairs
+    /// `(0.5 2)` with `(0.5 0)`, either way round.
     #[test]
-    #[should_panic(expected = "empty or degenerate linestring in closest_points")]
-    fn degenerate_linestring_panics() {
-        let a: Linestring<Pt> = Linestring::from_vec(alloc::vec![Pt::new(0., 0.)]);
+    fn one_point_linestring_is_that_point() {
+        let a: Linestring<Pt> = Linestring::from_vec(alloc::vec![Pt::new(0.5, 2.)]);
+        let b: Linestring<Pt> =
+            Linestring::from_vec(alloc::vec![Pt::new(0., 0.), Pt::new(1., 0.),]);
+        let (ca, cb) = closest_points(&a, &b);
+        assert_eq!((ca.get::<0>(), ca.get::<1>()), (0.5, 2.));
+        assert_eq!((cb.get::<0>(), cb.get::<1>()), (0.5, 0.));
+        let (cb, ca) = closest_points(&b, &a);
+        assert_eq!((ca.get::<0>(), ca.get::<1>()), (0.5, 2.));
+        assert_eq!((cb.get::<0>(), cb.get::<1>()), (0.5, 0.));
+    }
+
+    #[test]
+    #[should_panic(expected = "empty linestring in closest_points")]
+    fn empty_linestring_panics() {
+        let a: Linestring<Pt> = Linestring::from_vec(alloc::vec![]);
         let b: Linestring<Pt> =
             Linestring::from_vec(alloc::vec![Pt::new(0., 0.), Pt::new(1., 0.),]);
         let _ = closest_points(&a, &b);

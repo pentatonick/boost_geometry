@@ -85,12 +85,16 @@ pub(crate) fn ring<'a, P: Point<Scalar = f64> + 'a>(
             actual: count,
         });
     }
-    if !same_ordinate(first.get::<0>(), last.get::<0>())
-        || !same_ordinate(first.get::<1>(), last.get::<1>())
-    {
+    if !same_position(first, last) {
         return Err(GeometryStructureError::UnclosedRing);
     }
     Ok(())
+}
+
+/// Whether two positions are spelled the same, so a ring ending on the
+/// second is closed.
+pub(crate) fn same_position<P: Point<Scalar = f64>>(a: &P, b: &P) -> bool {
+    same_ordinate(a.get::<0>(), b.get::<0>()) && same_ordinate(a.get::<1>(), b.get::<1>())
 }
 
 #[cfg(test)]

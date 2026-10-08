@@ -86,7 +86,7 @@ fn disjoint_polygons_empty_graph() {
     let a: Polygon<P> = polygon![[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)]];
     let b: Polygon<P> = polygon![[(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 6.0), (5.0, 5.0)]];
     let turns = get_turns_polygon_polygon(&a, &b);
-    assert!(turns.is_empty());
+    assert_eq!(turns.len(), 0);
 }
 
 /// Every turn names both source geometries (`source_index` 0 and 1),
@@ -121,7 +121,7 @@ fn short_and_open_rings_use_the_public_ring_entry() {
         P::new(0.0, 2.0),
         P::new(0.0, 0.0),
     ]);
-    assert!(
+    assert_eq!(
         get_turns_ring_ring(
             &short,
             0,
@@ -130,15 +130,16 @@ fn short_and_open_rings_use_the_public_ring_entry() {
             1,
             RingKind::Exterior,
         )
-        .is_empty()
+        .len(),
+        0
     );
 
     // The source omits the repeated first point. The turn builder must add
     // its closing segment before classifying intersections.
     let open: Ring<P> = Ring::from_vec(vec![P::new(-1.0, 1.0), P::new(1.0, 3.0), P::new(3.0, 1.0)]);
-    assert!(
-        !get_turns_ring_ring(&open, 0, RingKind::Exterior, &square, 1, RingKind::Exterior,)
-            .is_empty()
+    assert_ne!(
+        get_turns_ring_ring(&open, 0, RingKind::Exterior, &square, 1, RingKind::Exterior,).len(),
+        0
     );
 }
 

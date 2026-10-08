@@ -6,16 +6,17 @@
 
 use geometry_cs::Spheroid;
 
+#[cfg(feature = "std")]
 use super::direct::DirectResult;
 
 #[cfg(feature = "std")]
 use geometry_coords::series_expansion::{
-    coefficients_a3, coefficients_c1, coefficients_c1p, coefficients_c3, evaluate_a1,
-    sin_cos_series,
+    coefficients_a3, coefficients_c1, coefficients_c1p, coefficients_c2, coefficients_c3,
+    evaluate_a1, evaluate_a2, sin_cos_series,
 };
-
 #[cfg(feature = "std")]
-use super::direct::normalize_longitude;
+use geometry_cs::{Degree, normalize_longitude};
+
 #[cfg(feature = "std")]
 use super::spheroid_calc::SpheroidCalc;
 
@@ -40,10 +41,10 @@ impl KarneyDirect {
     /// Solve the direct geodesic problem.
     ///
     /// Mirrors `karney_direct::apply` at
-    /// `formulas/karney_direct.hpp:76-253`. The Rust calculation stays in
-    /// radians instead of temporarily converting angles to degrees; both
-    /// forms evaluate the same trigonometric quantities, while the final
-    /// longitude is normalized identically.
+    /// `formulas/karney_direct.hpp:76-253`. The trigonometry stays in radians
+    /// where Boost converts angles to degrees for `sin_cos_degrees`; both
+    /// forms evaluate the same quantities. The final longitude is summed and
+    /// normalized in degrees, as Boost does.
     #[cfg(feature = "std")]
     #[inline]
     #[must_use]
@@ -51,7 +52,8 @@ impl KarneyDirect {
         clippy::many_single_char_names,
         clippy::similar_names,
         clippy::float_cmp,
-        reason = "names and exact zero branches follow the cited Karney formula"
+        clippy::too_many_lines,
+        reason = "names, exact zero branches and length follow the cited Karney formula"
     )]
     pub fn apply(&self, lon1: f64, lat1: f64, distance: f64, azimuth12: f64) -> DirectResult {
         let calc = SpheroidCalc::from(self.spheroid);
@@ -147,15 +149,43 @@ impl KarneyDirect {
         let b32 = sin_cos_series(sin_sigma2, cos_sigma2, &coefficients_c3);
         let lambda12 = omega12 + a3c * (sigma12 + b32 - b31);
 
-        DirectResult::solved(
-            lon1,
-            lat1,
-            azimuth12,
-            self.spheroid,
-            normalize_longitude(lon1 + lambda12),
+        // Boost sums the longitudes in degrees (`karney_direct.hpp:199-216`),
+        // normalizing the start, the difference and the sum in turn, each
+        // within `math::equals` of ±180° going to +180°.
+        let radians_to_degrees = 180.0 / core::f64::consts::PI;
+        let mut start = lon1 * radians_to_degrees;
+        let mut difference = lambda12 * radians_to_degrees;
+        normalize_longitude::<Degree, f64>(&mut start);
+        normalize_longitude::<Degree, f64>(&mut difference);
+        let mut lon2 = start + difference;
+        normalize_longitude::<Degree, f64>(&mut lon2);
+        let lon2 = lon2 * (core::f64::consts::PI / 180.0);
+
+        // Karney's own series for the reduced length and the geodesic scale
+        // (`karney_direct.hpp:219-249`), not the flattening expansion of
+        // `differential_quantities` the other formulas use.
+        let coefficients_c2 = coefficients_c2(epsilon);
+        let b21 = sin_cos_series(sin_sigma1, cos_sigma1, &coefficients_c2);
+        let b22 = sin_cos_series(sin_sigma2, cos_sigma2, &coefficients_c2);
+        let expansion_a2 = evaluate_a2(epsilon);
+        let ab1 = (1.0 + expansion_a1) * (b12 - b11);
+        let ab2 = (1.0 + expansion_a2) * (b22 - b21);
+        let j12 = (expansion_a1 - expansion_a2) * sigma12 + (ab1 - ab2);
+        let dn1 = (1.0 + ep2 * (sin_beta1 * sin_beta1)).sqrt();
+        let dn2 = (1.0 + k2 * (sin_sigma2 * sin_sigma2)).sqrt();
+        let reduced_length = b
+            * ((dn2 * (cos_sigma1 * sin_sigma2) - dn1 * (sin_sigma1 * cos_sigma2))
+                - cos_sigma1 * cos_sigma2 * j12);
+        let t = k2 * (sin_sigma2 - sin_sigma1) * (sin_sigma2 + sin_sigma1) / (dn1 + dn2);
+        let geodesic_scale = cos_sigma12 + (t * sin_sigma2 - cos_sigma2 * j12) * sin_sigma1 / dn1;
+
+        DirectResult {
+            lon2,
             lat2,
             reverse_azimuth,
-        )
+            reduced_length,
+            geodesic_scale,
+        }
     }
 }
 

@@ -13,6 +13,7 @@ use geometry_overlay::relate::Dimension;
 use geometry_overlay::{
     ValidityFailure, crosses, is_valid_polygon, overlaps, point_on_surface, relate_matrix, touches,
 };
+use geometry_trait::Point as _;
 
 type P = Point2D<f64, Cartesian>;
 
@@ -98,21 +99,23 @@ fn valid_and_invalid_polygons() {
 
 // ---- point_on_surface ----------------------------------------------
 
+/// Non-convex "U" shape, clockwise: the extremes of its left arm's top
+/// average to `(0.5 3)`, inside it, as in Boost (`aed7bc3`).
 #[test]
 fn representative_point_is_interior() {
-    // Non-convex "U" shape; the sweep point must be inside.
     let u: Polygon<P> = polygon![[
         (0.0, 0.0),
-        (5.0, 0.0),
-        (5.0, 5.0),
-        (4.0, 5.0),
-        (4.0, 1.0),
-        (1.0, 1.0),
-        (1.0, 5.0),
         (0.0, 5.0),
+        (1.0, 5.0),
+        (1.0, 1.0),
+        (4.0, 1.0),
+        (4.0, 5.0),
+        (5.0, 5.0),
+        (5.0, 0.0),
         (0.0, 0.0)
     ]];
     let p = point_on_surface(&u).unwrap();
+    assert_eq!((p.get::<0>(), p.get::<1>()), (0.5, 3.0));
     assert!(within(&p, &u));
 }
 
@@ -126,13 +129,18 @@ fn representative_point_rejects_degenerate_surfaces() {
         ])))
         .is_none()
     );
-    assert!(
-        point_on_surface(&Polygon::new(Ring::<P>::from_vec(vec![
-            P::new(0.0, 0.0),
-            P::new(1.0, 0.0),
-            P::new(2.0, 0.0),
-        ])))
-        .is_none()
+    // A collinear ring has no extremes in `y` but has them in `x`: its
+    // rightmost point with the legs either side cut level, averaged to
+    // `(4/3 0)` as in Boost (`aed7bc3`).
+    let collinear = point_on_surface(&Polygon::new(Ring::<P>::from_vec(vec![
+        P::new(0.0, 0.0),
+        P::new(1.0, 0.0),
+        P::new(2.0, 0.0),
+    ])))
+    .unwrap();
+    assert_eq!(
+        (collinear.get::<0>(), collinear.get::<1>()),
+        (4.0 / 3.0, 0.0)
     );
 
     let with_empty_hole: Polygon<P> = Polygon::with_inners(

@@ -5,9 +5,9 @@
 //! `FormulaPolicy` is `strategy::andoyer`
 //! (`strategies/geographic/azimuth.hpp:33`, `:137-145`). The forward
 //! azimuth is the `alpha_1` output of
-//! `formula::andoyer_inverse` — the same iteration
-//! [`Andoyer`](crate::geographic::Andoyer) runs for distance — computed
-//! here from the closed-form Andoyer expansion in
+//! `formula::andoyer_inverse` — the same formula
+//! [`Andoyer`] runs for distance — computed
+//! from the closed-form Andoyer expansion in
 //! `boost/geometry/formulas/andoyer_inverse.hpp:165-219`:
 //!
 //! ```text
@@ -25,17 +25,23 @@
 //! convention, matching [`SphericalAzimuth`](crate::spherical::SphericalAzimuth)
 //! and *differing* from
 //! [`CartesianAzimuth`](crate::azimuth::CartesianAzimuth). `azimuth(p, p)`
-//! and coincident / antipodal short-circuits return `0`, mirroring
-//! `andoyer_inverse.hpp:127-163`.
+//! and other very close pairs return `0`; an antipodal pair heads north
+//! (`0`), or south (`π`) from the north pole, mirroring
+//! `andoyer_inverse.hpp:69-72` and `:127-163`.
 
-use geometry_cs::{CoordinateSystem, GeographicFamily, Spheroid};
+use geometry_cs::Spheroid;
+#[cfg(feature = "std")]
+use geometry_cs::{CoordinateSystem, GeographicFamily};
+#[cfg(feature = "std")]
 use geometry_tag::SameAs;
+#[cfg(feature = "std")]
 use geometry_trait::Point;
 
+#[cfg(feature = "std")]
 use crate::azimuth::AzimuthStrategy;
 
 #[cfg(feature = "std")]
-use crate::geographic::spheroid_calc::SpheroidCalc;
+use crate::geographic::Andoyer;
 #[cfg(feature = "std")]
 use crate::normalise::{HasAngularUnits, lonlat_radians};
 
@@ -80,99 +86,15 @@ where
 {
     type Out = f64;
 
-    // The single-letter names `A, B, U, V, T, M, N, d` mirror
-    // `formula::andoyer_inverse::apply` in
-    // `formulas/andoyer_inverse.hpp:165-219` letter-for-letter; the
-    // epsilon-aware short-circuits mirror Boost's `math::equals` guards on
-    // the same lines.
-    #[allow(clippy::many_single_char_names, clippy::float_cmp)]
     #[inline]
     fn azimuth(&self, p1: &P1, p2: &P2) -> f64 {
-        let calc = SpheroidCalc::from(self.spheroid);
-        let f = calc.f;
         let (lon1, lat1) = lonlat_radians(p1);
         let (lon2, lat2) = lonlat_radians(p2);
-
-        let dlon = lon2 - lon1;
-        let sin_dlon = dlon.sin();
-        let cos_dlon = dlon.cos();
-        let sin_lat1 = lat1.sin();
-        let cos_lat1 = lat1.cos();
-        let sin_lat2 = lat2.sin();
-        let cos_lat2 = lat2.cos();
-
-        // Spherical central angle, clamped to the acos domain — mirrors
-        // `andoyer_inverse.hpp:90-97`.
-        let cos_d = (sin_lat1 * sin_lat2 + cos_lat1 * cos_lat2 * cos_dlon).clamp(-1.0, 1.0);
-        let d = cos_d.acos();
-        let sin_d = d.sin();
-
-        // Coincident / antipodal short-circuit — mirrors
-        // `andoyer_inverse.hpp:127-163`. Boost returns 0 for the
-        // aligned case (which is all this port needs to reproduce the
-        // reference table).
-        if sin_d.abs() <= f64::EPSILON {
-            return 0.0;
+        Andoyer {
+            spheroid: self.spheroid,
         }
-
-        let pi = core::f64::consts::PI;
-
-        // Forward-azimuth term A + first-order flattening correction U.
-        let (a, u) = if cos_lat2.abs() <= f64::EPSILON {
-            (if sin_lat2 < 0.0 { pi } else { 0.0 }, 0.0)
-        } else {
-            let tan_lat2 = sin_lat2 / cos_lat2;
-            let m = cos_lat1 * tan_lat2 - sin_lat1 * cos_dlon;
-            let a = sin_dlon.atan2(m);
-            let u = (f / 2.0) * (cos_lat1 * cos_lat1) * (2.0 * a).sin();
-            (a, u)
-        };
-
-        // Correction term V (from the reverse-azimuth term B), needed
-        // for the forward `dA = V·T − U`. B itself is not used forward.
-        let v = if cos_lat1.abs() <= f64::EPSILON {
-            0.0
-        } else {
-            let tan_lat1 = sin_lat1 / cos_lat1;
-            let n = cos_lat2 * tan_lat1 - sin_lat2 * cos_dlon;
-            let b = sin_dlon.atan2(n);
-            (f / 2.0) * (cos_lat2 * cos_lat2) * (2.0 * b).sin()
-        };
-
-        let t = d / sin_d;
-        let da = v * t - u;
-        let mut azimuth = a - da;
-        normalize_azimuth(&mut azimuth, a, da);
-        azimuth
-    }
-}
-
-/// Clamp the corrected forward azimuth so the flattening correction
-/// cannot push it past the pole it started on. Mirrors
-/// `formula::andoyer_inverse::normalize_azimuth` at
-/// `formulas/andoyer_inverse.hpp:246-286`.
-#[cfg(feature = "std")]
-#[inline]
-fn normalize_azimuth(azimuth: &mut f64, a: f64, da: f64) {
-    let pi = core::f64::consts::PI;
-    if a >= 0.0 {
-        // A in the Eastern hemisphere.
-        if da >= 0.0 {
-            if *azimuth < 0.0 {
-                *azimuth = 0.0;
-            }
-        } else if *azimuth > pi {
-            *azimuth = pi;
-        }
-    } else {
-        // A in the Western hemisphere.
-        if da <= 0.0 {
-            if *azimuth > 0.0 {
-                *azimuth = 0.0;
-            }
-        } else if *azimuth < -pi {
-            *azimuth = -pi;
-        }
+        .inverse::<true>(lon1, lat1, lon2, lat2)
+        .azimuth
     }
 }
 
@@ -233,41 +155,24 @@ mod tests {
         assert!((got - expected).abs() < 1e-9, "got {got}");
     }
 
-    /// The clamp branches of `normalize_azimuth`
-    /// (`andoyer_inverse.hpp:246-286`): the flattening correction must
-    /// not push an azimuth past 0 / ±π on the side it started.
+    /// Boost (`aed7bc3`) returns `0` for any coincident pair, and for an
+    /// antipodal pair heads north — or south from the north pole
+    /// (`andoyer_inverse.hpp:69-72`, `:127-163`).
     #[test]
-    fn normalize_azimuth_clamps_all_four_quadrants() {
-        use super::normalize_azimuth;
+    fn coincident_and_antipodal_pairs_take_fixed_azimuths() {
         let pi = core::f64::consts::PI;
-
-        // A ≥ 0, dA ≥ 0: an azimuth pushed below 0 clamps to 0.
-        let mut az = -0.1;
-        normalize_azimuth(&mut az, 0.05, 0.15);
-        assert_eq!(az, 0.0);
-
-        // A ≥ 0, dA < 0: an azimuth pushed above π clamps to π.
-        let mut az = pi + 0.1;
-        normalize_azimuth(&mut az, pi - 0.05, -0.15);
-        assert_eq!(az, pi);
-
-        // A < 0, dA ≤ 0: an azimuth pushed above 0 clamps to 0.
-        let mut az = 0.1;
-        normalize_azimuth(&mut az, -0.05, -0.15);
-        assert_eq!(az, 0.0);
-
-        // A < 0, dA > 0: an azimuth pushed below −π clamps to −π.
-        let mut az = -pi - 0.1;
-        normalize_azimuth(&mut az, -pi + 0.05, 0.15);
-        assert_eq!(az, -pi);
-
-        // In-range azimuths pass through untouched.
-        let mut az = 0.5;
-        normalize_azimuth(&mut az, 0.4, -0.1);
-        assert_eq!(az, 0.5);
-
-        let mut az = -0.5;
-        normalize_azimuth(&mut az, -0.4, -0.1);
-        assert_eq!(az, -0.5);
+        let p = gg(99.933_576_284_940_61, -77.934_911_039_365_8);
+        assert_eq!(GeographicAzimuth::WGS84.azimuth(&p, &p), 0.0);
+        let north_to_south =
+            GeographicAzimuth::WGS84.azimuth(&gg(90.0, 90.0), &gg(270.000_753_943_940_54, -90.0));
+        assert_eq!(north_to_south, pi);
+        assert_eq!(
+            GeographicAzimuth::WGS84.azimuth(&gg(0.0, 90.0), &gg(0.0, -90.0)),
+            pi
+        );
+        assert_eq!(
+            GeographicAzimuth::WGS84.azimuth(&gg(0.0, -90.0), &gg(0.0, 90.0)),
+            0.0
+        );
     }
 }

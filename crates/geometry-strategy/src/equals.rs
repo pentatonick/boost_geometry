@@ -1,18 +1,18 @@
 //! Per-CS strategy for the `equals` set-relation algorithm.
 //!
-//! Compares two geometries for equality up to **vertex sequence**: a
-//! ring may start at a different vertex and run in either direction and
-//! still compare equal, but the two rings must have the *same distinct
-//! vertices*. This is a v1 simplification of `boost::geometry::equals`
-//! (`boost/geometry/algorithms/equals.hpp`), whose areal arm is fully
-//! topological (point-set + area via `collect_vectors`, so a ring with a
-//! redundant collinear vertex still equals the same ring without it).
+//! Mirrors `boost::geometry::equals` (`boost/geometry/algorithms/equals.hpp`)
+//! for Cartesian points, segments and polygons.
 //!
-//! Consequence: two polygons that describe the same region but differ in
-//! how many collinear vertices they list compare **not equal** here. Run
-//! `remove_spikes` / `unique` first to normalise vertices if full
-//! topological equality is needed. The full topological comparison is
-//! deferred; see `algorithms/detail/equals/implementation.hpp:36-160`.
+//! Points are equal as Boost's `equals_point_point` makes them: by
+//! `math::equals` in every dimension ([`CoordinateScalar::tolerant_eq`]);
+//! segments when their ends are, either way round. Two polygons are equal as
+//! Boost's Cartesian `equals_by_collection<area_check>` decides
+//! (`algorithms/detail/equals/implementation.hpp:135-237`): their areas agree
+//! by `math::equals`, and so do their edges, each taken as its start and its
+//! unit direction, with an edge running on in the direction of the one before
+//! merged into it (`algorithms/detail/equals/collect_vectors.hpp`). A ring may
+//! start at any vertex and carry vertices that do not turn it; it is read in
+//! its declared orientation.
 //!
 //! ## Symmetry
 //!
@@ -31,6 +31,8 @@
 //! resolves through the same path as the equivalent `geometry-model`
 //! value.
 
+use alloc::vec::Vec;
+
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_tag::{PointTag, PolygonTag, SameAs, SegmentTag};
@@ -38,6 +40,11 @@ use geometry_trait::{
     Point as PointTrait, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
     Segment as SegmentTrait, fold_dims, ordinate, segment_end, segment_start,
 };
+
+use crate::area::{AreaStrategy, ShoelacePolygonArea};
+use crate::clockwise_view::closed_clockwise_points;
+
+type Measure<P> = <<P as PointTrait>::Scalar as CoordinateScalar>::Measure;
 
 /// A strategy for "do these two geometries describe the same point
 /// set?".
@@ -61,7 +68,7 @@ pub struct EqPolygonPolygon;
 
 // ---- Point × Point ---------------------------------------------------
 //
-// Coordinate-wise equality. Mirrors the pointlike/pointlike arm at
+// Coordinate-wise `math::equals`. Mirrors the pointlike/pointlike arm at
 // `algorithms/detail/equals/implementation.hpp:36-71`.
 
 impl<A, B> EqualsStrategy<A, B> for EqPointPoint
@@ -75,10 +82,10 @@ where
         let mut i = 0;
         while i < A::DIM {
             let eq = match i {
-                0 => a.get::<0>() == b.get::<0>(),
-                1 => a.get::<1>() == b.get::<1>(),
-                2 => a.get::<2>() == b.get::<2>(),
-                3 => a.get::<3>() == b.get::<3>(),
+                0 => a.get::<0>().tolerant_eq(b.get::<0>()),
+                1 => a.get::<1>().tolerant_eq(b.get::<1>()),
+                2 => a.get::<2>().tolerant_eq(b.get::<2>()),
+                3 => a.get::<3>().tolerant_eq(b.get::<3>()),
                 _ => panic!("CartesianEquals: dimension exceeds MAX_DIM (4)"),
             };
             if !eq {
@@ -114,11 +121,10 @@ where
 
 // ---- Polygon × Polygon -----------------------------------------------
 //
-// Two polygons are equal iff their exterior rings describe the same
-// closed loop (modulo starting vertex and traversal direction) and
-// their interior rings match pairwise under some permutation.
-// Mirrors the polygon/polygon arm at
-// `algorithms/detail/equals/implementation.hpp:120-160`.
+// Equal areas, then equal collected vectors once both collections are
+// sorted. Mirrors `equals_by_collection<area_check>`, the Cartesian
+// polygon/polygon arm at `algorithms/detail/equals/implementation.hpp:
+// 135-237,334-336`.
 
 impl<A, B, P> EqualsStrategy<A, B> for EqPolygonPolygon
 where
@@ -131,33 +137,25 @@ where
     P: PointTrait,
     P::Scalar: CoordinateScalar,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+    ShoelacePolygonArea: AreaStrategy<A, Out = Measure<P>> + AreaStrategy<B, Out = Measure<P>>,
 {
     fn equals(&self, a: &A, b: &B) -> bool {
-        if !rings_equal(a.exterior(), b.exterior()) {
+        let first_area = <ShoelacePolygonArea as AreaStrategy<A>>::area(&ShoelacePolygonArea, a);
+        let second_area = <ShoelacePolygonArea as AreaStrategy<B>>::area(&ShoelacePolygonArea, b);
+        if !first_area.tolerant_eq(second_area) {
             return false;
         }
-        if a.interiors().count() != b.interiors().count() {
+        let mut first = polygon_vectors(a);
+        let mut second = polygon_vectors(b);
+        if first.len() != second.len() {
             return false;
         }
-        // For each inner ring in `a`, find a matching inner ring in
-        // `b` not yet consumed. v1: O(n^2) — interior counts are
-        // tiny in practice.
-        let bh: alloc::vec::Vec<&B::Ring> = b.interiors().collect();
-        let mut matched = alloc::vec![false; bh.len()];
-        for ha in a.interiors() {
-            let mut found = false;
-            for (j, hb) in bh.iter().enumerate() {
-                if !matched[j] && rings_equal(ha, *hb) {
-                    matched[j] = true;
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                return false;
-            }
-        }
-        true
+        sort_collected(&mut first);
+        sort_collected(&mut second);
+        first
+            .iter()
+            .zip(&second)
+            .all(|(first, second)| first.matches(second))
     }
 }
 
@@ -188,7 +186,7 @@ extern crate alloc;
 
 // ---- Kernels ---------------------------------------------------------
 
-/// Do two points coincide in every dimension of `a`?
+/// Do two points coincide in every dimension of `a`, by `math::equals`?
 #[inline]
 fn point_eq<Pa, Pb>(a: &Pa, b: &Pb) -> bool
 where
@@ -196,117 +194,129 @@ where
     Pb: PointTrait<Scalar = Pa::Scalar>,
 {
     fold_dims(true, a, |equal, a, d| {
-        equal && ordinate(a, d) == ordinate(b, d)
+        equal && ordinate(a, d).tolerant_eq(ordinate(b, d))
     })
 }
 
-/// Is `curr` a redundant vertex — a repeat of `prev`, or a point lying
-/// strictly between `prev` and `next` on one straight edge? Planar test
-/// on the first two ordinates, since rings are areal.
-#[inline]
-fn redundant_vertex<P: PointTrait>(prev: &P, curr: &P, next: &P) -> bool {
-    if point_eq(curr, prev) {
-        return true;
-    }
-    let zero = P::Scalar::ZERO;
-    let (ax, ay) = (
-        curr.get::<0>() - prev.get::<0>(),
-        curr.get::<1>() - prev.get::<1>(),
-    );
-    let (bx, by) = (
-        next.get::<0>() - curr.get::<0>(),
-        next.get::<1>() - curr.get::<1>(),
-    );
-    let cross = ax * by - ay * bx;
-    let dot = ax * bx + ay * by;
-    cross == zero && dot > zero
+/// An edge as Boost's `collected_vector_cartesian` keeps it: its start and
+/// its direction scaled to unit length
+/// (`algorithms/detail/equals/collect_vectors.hpp:41-128`).
+#[derive(Clone, Copy)]
+struct CollectedVector<T> {
+    x: T,
+    y: T,
+    dx: T,
+    dy: T,
 }
 
-/// Are two rings equal as closed loops? Equal vertex sequence up to
-/// rotation and reversal (free starting vertex, free direction) once
-/// repeated vertices and vertices lying inside a straight edge are
-/// dropped, so two rings describing the same region compare equal
-/// whatever redundant vertices either carries. This is the vertex-level
-/// counterpart of Boost's topological `equals::ring_or_polygon::apply`
-/// (`algorithms/detail/equals/implementation.hpp:120-160`).
-fn rings_equal<Ra, Rb>(a: &Ra, b: &Rb) -> bool
+impl<T: CoordinateScalar> CollectedVector<T> {
+    /// The edge from `start` to `end`; none when it has no length
+    /// (`normalize`).
+    fn new<P>(start: &P, end: &P) -> Option<Self>
+    where
+        P: PointTrait,
+        P::Scalar: CoordinateScalar<Measure = T>,
+    {
+        let (x, y) = (start.get::<0>().to_measure(), start.get::<1>().to_measure());
+        let dx = end.get::<0>().to_measure() - x;
+        let dy = end.get::<1>().to_measure() - y;
+        let magnitude = (dx * dx + dy * dy).sqrt();
+        (magnitude > T::ZERO).then(|| Self {
+            x,
+            y,
+            dx: dx / magnitude,
+            dy: dy / magnitude,
+        })
+    }
+
+    /// `same_direction`: the unit directions agree by `math::equals`.
+    fn same_direction(&self, other: &Self) -> bool {
+        self.dx.tolerant_eq(other.dx) && self.dy.tolerant_eq(other.dy)
+    }
+
+    /// `operator==`.
+    fn matches(&self, other: &Self) -> bool {
+        self.x.tolerant_eq(other.x) && self.y.tolerant_eq(other.y) && self.same_direction(other)
+    }
+
+    /// `operator<`.
+    fn precedes(&self, other: &Self) -> bool {
+        if !self.x.tolerant_eq(other.x) {
+            self.x < other.x
+        } else if !self.y.tolerant_eq(other.y) {
+            self.y < other.y
+        } else if !self.dx.tolerant_eq(other.dx) {
+            self.dx < other.dx
+        } else {
+            self.dy < other.dy
+        }
+    }
+}
+
+/// The collected vectors of a polygon, exterior ring first
+/// (`polygon_collect_vectors`).
+fn polygon_vectors<G>(polygon: &G) -> Vec<CollectedVector<Measure<G::Point>>>
 where
-    Ra: RingTrait,
-    Rb: RingTrait,
-    Ra::Point: PointTrait,
-    Rb::Point: PointTrait<Scalar = <Ra::Point as PointTrait>::Scalar>,
+    G: PolygonTrait,
+    G::Point: PointTrait,
 {
-    let av = normalise_ring(a);
-    let bv = normalise_ring(b);
-    if av.len() != bv.len() {
-        return false;
+    let mut vectors = Vec::new();
+    collect_ring_vectors(polygon.exterior(), &mut vectors);
+    for ring in polygon.interiors() {
+        collect_ring_vectors(ring, &mut vectors);
     }
-    let n = av.len();
-    if n == 0 {
-        return true;
-    }
-    // Try every rotation of `b`, forward and reversed.
-    for start in 0..n {
-        if cyclic_match(&av, &bv, start, false) {
-            return true;
-        }
-        if cyclic_match(&av, &bv, start, true) {
-            return true;
-        }
-    }
-    false
+    vectors
 }
 
-/// Strip the trailing closing vertex from a closed ring, then every
-/// redundant vertex (see [`redundant_vertex`]), so the rotation search
-/// compares only the vertices that shape the loop.
-fn normalise_ring<R>(r: &R) -> alloc::vec::Vec<&R::Point>
+/// Append a ring's edges, walked as `closed_clockwise_view` presents it:
+/// an edge without length is skipped, one running on in the direction of
+/// the last kept is merged into it, and a last edge running on into the
+/// first takes the first's place (`range_collect_vectors`).
+fn collect_ring_vectors<R>(ring: &R, vectors: &mut Vec<CollectedVector<Measure<R::Point>>>)
 where
     R: RingTrait,
     R::Point: PointTrait,
 {
-    let mut pts: alloc::vec::Vec<&R::Point> = r.points().collect();
-    if pts.len() >= 2 && point_eq(pts[0], pts[pts.len() - 1]) {
-        pts.pop();
-    }
-    // Removing one vertex can make its neighbour redundant in turn, so
-    // sweep until a full pass removes nothing.
-    let mut removed = true;
-    while removed && pts.len() >= 3 {
-        removed = false;
-        let mut i = 0;
-        while pts.len() >= 3 && i < pts.len() {
-            let n = pts.len();
-            if redundant_vertex(pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]) {
-                pts.remove(i);
-                removed = true;
-            } else {
-                i += 1;
+    let points = closed_clockwise_points(ring);
+    let start = vectors.len();
+    let mut is_first = true;
+    for edge in points.windows(2) {
+        if let Some(vector) = CollectedVector::new(edge[0], edge[1]) {
+            if is_first || !vectors[vectors.len() - 1].same_direction(&vector) {
+                vectors.push(vector);
             }
+            is_first = false;
         }
     }
-    pts
+    if vectors.len() > start + 1 && vectors[vectors.len() - 1].same_direction(&vectors[start]) {
+        vectors[start] = vectors.pop().expect("more than one vector was collected");
+    }
 }
 
-/// Does `a` match `b` when `b` is read starting at `start` and
-/// optionally in reverse?
-fn cyclic_match<Pa, Pb>(a: &[&Pa], b: &[&Pb], start: usize, reverse: bool) -> bool
-where
-    Pa: PointTrait,
-    Pb: PointTrait<Scalar = Pa::Scalar>,
-{
-    let n = a.len();
-    for (i, ai) in a.iter().enumerate() {
-        let j = if reverse {
-            (start + n - i) % n
+/// Order collected vectors by Boost's `operator<`, as `std::sort` orders
+/// them. Its tolerance keeps it from being a total order, for which
+/// `slice::sort_by` may panic; a merge sort settles on an order regardless.
+fn sort_collected<T: CoordinateScalar>(vectors: &mut [CollectedVector<T>]) {
+    if vectors.len() < 2 {
+        return;
+    }
+    let middle = vectors.len() / 2;
+    sort_collected(&mut vectors[..middle]);
+    sort_collected(&mut vectors[middle..]);
+    let mut merged = Vec::with_capacity(vectors.len());
+    let (mut left, mut right) = (0, middle);
+    while left < middle && right < vectors.len() {
+        if vectors[right].precedes(&vectors[left]) {
+            merged.push(vectors[right]);
+            right += 1;
         } else {
-            (start + i) % n
-        };
-        if !point_eq(*ai, b[j]) {
-            return false;
+            merged.push(vectors[left]);
+            left += 1;
         }
     }
-    true
+    merged.extend_from_slice(&vectors[left..middle]);
+    merged.extend_from_slice(&vectors[right..]);
+    vectors.copy_from_slice(&merged);
 }
 
 #[cfg(test)]
@@ -344,11 +354,37 @@ mod tests {
         assert!(EqPolygonPolygon.equals(&a, &b));
     }
 
+    /// A ring is read in its declared orientation: the square run the other
+    /// way has the opposite signed area, so Boost's `area_check` already
+    /// tells the two apart.
     #[test]
-    fn equals_polygon_reversed_direction() {
+    fn a_ring_run_against_its_orientation_is_another_polygon() {
         let a: Polygon<P> = polygon![[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)]];
         let b: Polygon<P> = polygon![[(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (0.0, 0.0)]];
+        assert!(!EqPolygonPolygon.equals(&a, &b));
+    }
+
+    /// A vertex computed onto an edge turns it only by rounding, and Boost
+    /// merges edges whose unit directions agree by `math::equals`. Boost
+    /// (`aed7bc3`): the triangle equals itself rotated with an edge's
+    /// midpoint inserted.
+    #[test]
+    fn a_vertex_rounded_onto_an_edge_does_not_turn_it() {
+        let a: Polygon<P> = polygon![[
+            (7.242_133_728_502_334, 6.467_601_271_821),
+            (2.206_707_654_691_149_5, 6.086_749_332_056_838),
+            (6.166_629_904_416_364, 7.389_201_017_986_58),
+            (7.242_133_728_502_334, 6.467_601_271_821)
+        ]];
+        let b: Polygon<P> = polygon![[
+            (6.166_629_904_416_364, 7.389_201_017_986_58),
+            (7.242_133_728_502_334, 6.467_601_271_821),
+            (4.724_420_691_596_742, 6.277_175_301_938_919),
+            (2.206_707_654_691_149_5, 6.086_749_332_056_838),
+            (6.166_629_904_416_364, 7.389_201_017_986_58)
+        ]];
         assert!(EqPolygonPolygon.equals(&a, &b));
+        assert!(EqPolygonPolygon.equals(&b, &a));
     }
 
     #[test]
@@ -438,5 +474,83 @@ mod tests {
             (0.0, 0.0)
         ]];
         assert!(!EqPolygonPolygon.equals(&a, &notch));
+    }
+
+    /// A ring starting partway along a straight side has its last edge run
+    /// on into its first, and Boost merges the two: the square started at
+    /// a side's midpoint is the square started at a corner.
+    #[test]
+    fn a_ring_started_mid_side_merges_its_split_side() {
+        let corner: Polygon<P> =
+            polygon![[(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (0.0, 0.0)]];
+        let mid_side: Polygon<P> = polygon![[
+            (2.0, 0.0),
+            (0.0, 0.0),
+            (0.0, 4.0),
+            (4.0, 4.0),
+            (4.0, 0.0),
+            (2.0, 0.0)
+        ]];
+        assert!(EqPolygonPolygon.equals(&corner, &mid_side));
+        assert!(EqPolygonPolygon.equals(&mid_side, &corner));
+    }
+
+    /// Edges leaving one vertex are ordered by direction: by `dx`, and
+    /// where `dx` agrees, by `dy`. Two lobes touching at the origin, the
+    /// ring started at either lobe, are one polygon; the lobes' edges
+    /// leave the origin with mirrored `dy`.
+    #[test]
+    fn edges_from_one_vertex_are_ordered_by_direction() {
+        let upper_first: Polygon<P> = polygon![[
+            (0.0, 0.0),
+            (3.0, 4.0),
+            (6.0, 4.0),
+            (0.0, 0.0),
+            (3.0, -4.0),
+            (6.0, -4.0),
+            (0.0, 0.0)
+        ]];
+        let lower_first: Polygon<P> = polygon![[
+            (0.0, 0.0),
+            (3.0, -4.0),
+            (6.0, -4.0),
+            (0.0, 0.0),
+            (3.0, 4.0),
+            (6.0, 4.0),
+            (0.0, 0.0)
+        ]];
+        assert!(EqPolygonPolygon.equals(&upper_first, &lower_first));
+        // A lobe leaving the origin in another direction is another
+        // polygon.
+        let steeper: Polygon<P> = polygon![[
+            (0.0, 0.0),
+            (4.0, 4.0),
+            (6.0, 4.0),
+            (0.0, 0.0),
+            (3.0, -4.0),
+            (6.0, -4.0),
+            (0.0, 0.0)
+        ]];
+        assert!(!EqPolygonPolygon.equals(&upper_first, &steeper));
+        // Lobes whose edges leave the origin with different `dx`.
+        let upper_first: Polygon<P> = polygon![[
+            (0.0, 0.0),
+            (3.0, 4.0),
+            (6.0, 4.0),
+            (0.0, 0.0),
+            (4.0, -3.0),
+            (4.0, -6.0),
+            (0.0, 0.0)
+        ]];
+        let lower_first: Polygon<P> = polygon![[
+            (0.0, 0.0),
+            (4.0, -3.0),
+            (4.0, -6.0),
+            (0.0, 0.0),
+            (3.0, 4.0),
+            (6.0, 4.0),
+            (0.0, 0.0)
+        ]];
+        assert!(EqPolygonPolygon.equals(&upper_first, &lower_first));
     }
 }

@@ -86,7 +86,7 @@ fn distance_dyn_unsupported_pair_returns_mismatch() {
     ]]);
     let err = distance_dyn(&a, &b).unwrap_err();
     assert_eq!(err.got, vec![DynKind::Polygon, DynKind::Polygon]);
-    assert!(!err.expected.is_empty());
+    assert_ne!(err.expected.len(), 0);
 }
 
 // -------- length_dyn --------
@@ -210,6 +210,51 @@ fn dyn_measures_over_deeply_nested_collection_do_not_overflow() {
     core::mem::forget(g);
 }
 
+#[test]
+fn collection_measures_add_in_boosts_breadth_first_order() {
+    // A floating-point sum depends on its order. Boost adds a collection's
+    // own members left to right, then each nested collection's
+    // (`visit_breadth_first`), and a multi's members from zero first. At
+    // 2^53 a further 1 rounds away, so each order below gives its own
+    // answer; Boost (`aed7bc3`) gives these four.
+    const BIG: f64 = 9_007_199_254_740_992.0; // 2^53
+    // A rectangle of area `w·h`, negative when wound counter-clockwise.
+    let rectangle = |w: f64, h: f64, clockwise: bool| {
+        DynGeometry::<S, Cartesian>::Polygon(if clockwise {
+            polygon![[(0.0, 0.0), (0.0, h), (w, h), (w, 0.0), (0.0, 0.0)]]
+        } else {
+            polygon![[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h), (0.0, 0.0)]]
+        })
+    };
+    let one = || rectangle(1.0, 1.0, true);
+    let big = || rectangle(134_217_728.0, 67_108_864.0, true); // 2^27 · 2^26
+    let minus_big = || rectangle(134_217_728.0, 67_108_864.0, false);
+    // (1 + 2^53) − 2^53 = 0: the 1 is lost before the cancellation.
+    let flat = DynGeometry::GeometryCollection(vec![one(), big(), minus_big()]);
+    assert_eq!(area_dyn(&flat), 0.0);
+    // The nested 1 comes last: (2^53 − 2^53) + 1 = 1.
+    let nested = DynGeometry::GeometryCollection(vec![
+        DynGeometry::GeometryCollection(vec![one()]),
+        big(),
+        minus_big(),
+    ]);
+    assert_eq!(area_dyn(&nested), 1.0);
+
+    let line = |l: f64| DynGeometry::<S, Cartesian>::LineString(linestring![(0.0, 0.0), (l, 0.0)]);
+    // (2^53 + 1) + 1 = 2^53: each 1 rounds away on its own.
+    let lines = DynGeometry::GeometryCollection(vec![line(BIG), line(1.0), line(1.0)]);
+    assert_eq!(length_dyn(&lines), BIG);
+    // A multi sums its own members first: 2^53 + (1 + 1) = 2^53 + 2.
+    let multi = DynGeometry::GeometryCollection(vec![
+        line(BIG),
+        DynGeometry::MultiLineString(geometry_model::MultiLinestring(vec![
+            linestring![(0.0, 0.0), (1.0, 0.0)],
+            linestring![(0.0, 0.0), (1.0, 0.0)],
+        ])),
+    ]);
+    assert_eq!(length_dyn(&multi), BIG + 2.0);
+}
+
 // -------- envelope_dyn --------
 
 #[test]
@@ -229,7 +274,7 @@ fn envelope_dyn_collection_returns_mismatch() {
     let gc = DynGeometry::<S, Cartesian>::GeometryCollection(vec![]);
     let err = envelope_dyn(&gc).unwrap_err();
     assert_eq!(err.got, vec![DynKind::GeometryCollection]);
-    assert!(!err.expected.is_empty());
+    assert_ne!(err.expected.len(), 0);
 }
 
 // -------- within_dyn --------
@@ -256,5 +301,5 @@ fn within_dyn_unsupported_pair_returns_mismatch() {
     let b = DynGeometry::<S, Cartesian>::Point(Pt::new(1.0, 1.0));
     let err = within_dyn(&a, &b).unwrap_err();
     assert_eq!(err.got, vec![DynKind::Point, DynKind::Point]);
-    assert!(!err.expected.is_empty());
+    assert_ne!(err.expected.len(), 0);
 }

@@ -3,25 +3,32 @@
 //! Mirrors `boost::geometry::remove_spikes` from
 //! `boost/geometry/algorithms/remove_spikes.hpp`. The predicate is
 //! Boost's `point_is_spike_or_equal`, and the `or_equal` half carries
-//! its weight: a triple `(a, b, c)` qualifies when `(b-a) × (c-b) == 0`
-//! (collinear) and `(b-a) · (c-b) <= 0`, which covers both a reversal
-//! and a zero-length step — that is, a repeated vertex. The middle
+//! its weight: a triple `(a, b, c)` qualifies when it is collinear and `c`
+//! does not lie beyond `b` along `a → b` — `(b-a) · (c-b) <= 0`, which
+//! covers both a reversal and a zero-length step, that is, a repeated
+//! vertex. The middle
 //! vertex `b` is removed; the walk repeats until nothing qualifies,
 //! because collapsing one spike can create a new one at the
 //! now-adjacent pair, and peeling a spike off a ring routinely leaves a
 //! repeated vertex behind.
 //!
 //! Per-kind:
-//! * `Linestring`, `Ring`  → spike-walk the backing `Vec<P>`
+//! * `Ring`                → spike-walk the backing `Vec<P>`, then its seam
 //! * `Polygon`             → walk outer + every inner ring
 //! * `MultiPolygon`        → walk each member
+//! * `Linestring`          → the walk without a seam. Boost dispatches only
+//!   the areal kinds and leaves a linestring untouched; this arm is the
+//!   port's extension.
 //!
-//! Cartesian-only: the collinearity / reversal predicate is the 2D
-//! cross/dot product. Spherical / geographic spike detection needs
-//! angle-aware predicates; deferred until a downstream caller appears.
+//! Cartesian only: the collinearity / reversal predicate is the 2D
+//! cross/dot product, so angular input does not compile. Boost also takes
+//! spherical and geographic rings, with the spherical side formula and a
+//! direction test of its own, which this port does not carry.
 
 use geometry_coords::CoordinateScalar;
+use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{Linestring, MultiPolygon, Polygon, Ring};
+use geometry_tag::SameAs;
 use geometry_trait::Point as PointTrait;
 
 /// Remove spikes from `g` in place.
@@ -39,40 +46,30 @@ pub trait RemoveSpikes {
 }
 
 /// True iff `b` is a spike between `a` and `c`, **or** duplicates one of
-/// them: 2D cross `== 0` and dot `<= 0`.
+/// them: on one line by Boost's side test, and `c` not beyond `b`.
 ///
 /// Mirrors `detail::point_is_spike_or_equal`
-/// (`algorithms/detail/point_is_spike_or_equal.hpp`). Requiring `dot < 0`
-/// instead would leave every repeated vertex in place, including the ones
-/// this function creates: removing the apex of `(4,0) (6,0) (4,0)` leaves
-/// `(4,0) (4,0)` adjacent, and Boost collapses that.
-///
-/// `dot <= 0` cannot over-match. Two non-zero vectors that are both
-/// parallel (`cross == 0`) and perpendicular (`dot == 0`) do not exist, so
-/// the equality arm fires only when one of the steps has zero length.
+/// (`algorithms/detail/point_is_spike_or_equal.hpp:46-65`), whose
+/// `direction_code(a, b, c) < 1` is the sign of `(b-a) · (c-b)` as Boost
+/// rounds it. Requiring a reversal instead would leave every repeated
+/// vertex in place, including the ones this function creates: removing
+/// the apex of `(4,0) (6,0) (4,0)` leaves `(4,0) (4,0)` adjacent, and
+/// Boost collapses that.
 fn is_spike_or_equal_2d<P: PointTrait>(a: &P, b: &P, c: &P) -> bool {
-    let ux = b.get::<0>() - a.get::<0>();
-    let uy = b.get::<1>() - a.get::<1>();
-    let vx = c.get::<0>() - b.get::<0>();
-    let vy = c.get::<1>() - b.get::<1>();
-    let cross = ux * vy - uy * vx;
-    let dot = ux * vx + uy * vy;
-    let zero = <P::Scalar as CoordinateScalar>::ZERO;
+    let (a2, b2, c2) = (
+        (a.get::<0>(), a.get::<1>()),
+        (b.get::<0>(), b.get::<1>()),
+        (c.get::<0>(), c.get::<1>()),
+    );
     // The collinearity half is Boost's `side_by_triangle`, which calls three
     // points collinear whenever any *two* of them are equal by `math::equals`
-    // — a relative epsilon — before it looks at any determinant
-    // (`side_by_triangle.hpp:150-164`). A hairline whose two ends are a few
-    // last bits apart at a large coordinate is a spike to Boost and a genuine
-    // sliver to an exact cross product, which is how one survived into a tile
-    // that the reference drew as nothing.
-    let same = |ax: P::Scalar, ay: P::Scalar, bx: P::Scalar, by: P::Scalar| {
-        ax.tolerant_eq(bx) && ay.tolerant_eq(by)
-    };
-    let collinear = cross == zero
-        || same(a.get::<0>(), a.get::<1>(), b.get::<0>(), b.get::<1>())
-        || same(a.get::<0>(), a.get::<1>(), c.get::<0>(), c.get::<1>())
-        || same(b.get::<0>(), b.get::<1>(), c.get::<0>(), c.get::<1>());
-    collinear && dot <= zero
+    // — a relative epsilon — before it looks at any determinant, and the
+    // determinant zero within an epsilon of it. A hairline whose two ends
+    // are a few last bits apart at a large coordinate is a spike to Boost
+    // and a genuine sliver to an exact cross product, which is how one
+    // survived into a tile that the reference drew as nothing.
+    P::Scalar::side_by_triangle(a2, b2, c2) == core::cmp::Ordering::Equal
+        && P::Scalar::direction_code(a2, b2, c2) != core::cmp::Ordering::Greater
 }
 
 fn walk_spikes<P: PointTrait>(pts: &mut alloc::vec::Vec<P>) {
@@ -96,7 +93,11 @@ fn walk_spikes<P: PointTrait>(pts: &mut alloc::vec::Vec<P>) {
     }
 }
 
-impl<P: PointTrait> RemoveSpikes for Linestring<P> {
+impl<P> RemoveSpikes for Linestring<P>
+where
+    P: PointTrait,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
     fn remove_spikes(&mut self) {
         walk_spikes(&mut self.0);
     }
@@ -106,24 +107,33 @@ impl<P: PointTrait> RemoveSpikes for Linestring<P> {
 /// seam that a linestring does not have.
 ///
 /// Mirrors `detail::remove_spikes::range_remove_spikes::apply`
-/// (`algorithms/remove_spikes.hpp:99-141`). After the interior pass,
-/// Boost drops the closing point of a closed ring, then repeatedly
-/// removes a spike formed at the *first* vertex — the triple
-/// `(back-1, back, front)` — and at the *second* — `(back, front,
-/// front+1)` — until neither fires, and re-adds the closing point. The
-/// interior [`walk_spikes`] alone never forms those seam triples, so a
-/// spike sitting on the ring's first/last vertex would otherwise survive.
+/// (`algorithms/remove_spikes.hpp:66-161`). A ring one point short of its
+/// closure's minimum size is left as it is. After the interior pass, Boost
+/// drops a closed ring's last point — its closing point, whatever it holds
+/// — then repeatedly removes a spike formed at the *first* vertex — the
+/// triple `(back-1, back, front)` — and at the *second* — `(back, front,
+/// front+1)` — until neither fires. Of two points left the second is, by
+/// definition, a spike (Boost ticket #9871), so only the first stays; a
+/// closed ring is closed again on it. The interior [`walk_spikes`] alone
+/// never forms the seam triples, so a spike sitting on the ring's
+/// first/last vertex would otherwise survive.
 ///
-/// `closed` is `true` when the backing vector repeats its first vertex as
-/// its last (the model's `CLOSED` const generic).
+/// `closed` is `true` for a ring whose backing vector repeats its first
+/// vertex as its last (the model's `CLOSED` const generic).
 fn walk_ring_spikes<P: PointTrait + Copy>(pts: &mut alloc::vec::Vec<P>, closed: bool) {
+    // A polygon with only one spike comes out as one point, so only rings
+    // shorter than that keep every point.
+    let minimum = if closed { 3 } else { 2 };
+    if pts.len() < minimum {
+        return;
+    }
+
     // Interior pass first.
     walk_spikes(pts);
 
-    // Work on the open sequence: drop the duplicated closing vertex, if
-    // any, so `first` and `last` are distinct ring vertices.
-    let had_closing = closed && pts.len() >= 2 && same_point(&pts[0], &pts[pts.len() - 1]);
-    if had_closing {
+    // Work on the open sequence, so `first` and `last` are distinct ring
+    // vertices.
+    if closed {
         pts.pop();
     }
 
@@ -146,25 +156,32 @@ fn walk_ring_spikes<P: PointTrait + Copy>(pts: &mut alloc::vec::Vec<P>, closed: 
         }
     }
 
-    // Re-add the closing vertex we removed, restoring the ring's closure.
-    if had_closing && !pts.is_empty() {
+    if pts.len() == 2 {
+        pts.pop();
+    }
+
+    // Close the ring again on its first vertex.
+    if closed {
         let first = pts[0];
         pts.push(first);
     }
 }
 
-/// Coordinate equality of two points (2D).
-fn same_point<P: PointTrait>(a: &P, b: &P) -> bool {
-    a.get::<0>() == b.get::<0>() && a.get::<1>() == b.get::<1>()
-}
-
-impl<P: PointTrait + Copy, const CW: bool, const CL: bool> RemoveSpikes for Ring<P, CW, CL> {
+impl<P, const CW: bool, const CL: bool> RemoveSpikes for Ring<P, CW, CL>
+where
+    P: PointTrait + Copy,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
     fn remove_spikes(&mut self) {
         walk_ring_spikes(&mut self.0, CL);
     }
 }
 
-impl<P: PointTrait + Copy, const CW: bool, const CL: bool> RemoveSpikes for Polygon<P, CW, CL> {
+impl<P, const CW: bool, const CL: bool> RemoveSpikes for Polygon<P, CW, CL>
+where
+    P: PointTrait + Copy,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
     fn remove_spikes(&mut self) {
         walk_ring_spikes(&mut self.outer.0, CL);
         for inner in &mut self.inners {
@@ -471,5 +488,73 @@ mod tests {
                 .collect();
             assert_eq!(pts, square, "{name}");
         }
+    }
+
+    /// Two points left of an open ring are one point and a spike to it
+    /// (Boost ticket #9871), so only the first stays: `(0 0) (2 0) (1 0)`
+    /// comes out as `(0 0)`, as in Boost (`aed7bc3`).
+    #[test]
+    fn an_open_ring_of_two_points_keeps_one() {
+        let mut ring: Ring<P, true, false> =
+            Ring::from_vec(vec![P::new(0.0, 0.0), P::new(2.0, 0.0), P::new(1.0, 0.0)]);
+        remove_spikes(&mut ring);
+        let pts: Vec<(f64, f64)> = ring
+            .points()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(pts, vec![(0.0, 0.0)]);
+    }
+
+    /// A closed ring of two points is below the size a spike could leave,
+    /// so Boost (`algorithms/remove_spikes.hpp:66-161`) keeps it as it is.
+    #[test]
+    fn a_closed_ring_of_two_points_is_kept() {
+        let mut ring = spike_ring(&[(0.0, 0.0), (2.0, 0.0)]);
+        remove_spikes(&mut ring);
+        let pts: Vec<(f64, f64)> = ring
+            .points()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(pts, vec![(0.0, 0.0), (2.0, 0.0)]);
+    }
+
+    /// A closed ring's last point is its closing point, whatever it holds:
+    /// Boost (`aed7bc3`) closes `(0 0) (0 4) (4 4) (4 0) (1 0)` on `(0 0)`.
+    #[test]
+    fn a_closed_rings_last_point_closes_it() {
+        let mut ring = spike_ring(&[(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (1.0, 0.0)]);
+        remove_spikes(&mut ring);
+        let pts: Vec<(f64, f64)> = ring
+            .points()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(
+            pts,
+            vec![(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (0.0, 0.0)]
+        );
+    }
+
+    /// Of two vertices a last bit apart, Boost (`aed7bc3`) keeps the one
+    /// its rounding of the direction test leaves: here the second.
+    #[test]
+    fn near_duplicates_collapse_where_boost_rounds_them() {
+        let a = (15_682.546_124_542_228, 174_769.657_699_793_93);
+        let c = (259_765.440_433_603_83, 585_953.745_039_905_3);
+        let mut ring = spike_ring(&[
+            a,
+            (-630_679.312_290_246_7, 23_817.278_083_611_003),
+            (-630_679.312_290_246_7, 23_817.278_083_611),
+            c,
+            a,
+        ]);
+        remove_spikes(&mut ring);
+        let pts: Vec<(f64, f64)> = ring
+            .points()
+            .map(|p| (p.get::<0>(), p.get::<1>()))
+            .collect();
+        assert_eq!(
+            pts,
+            vec![a, (-630_679.312_290_246_7, 23_817.278_083_611), c, a]
+        );
     }
 }

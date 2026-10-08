@@ -45,13 +45,19 @@
 //! this strategy. T42+ may add a `libm` fallback alongside the
 //! geographic strategies.
 
-use geometry_cs::{CoordinateSystem, SphericalFamily};
+#[cfg(feature = "std")]
+use geometry_cs::CoordinateSystem;
+use geometry_cs::SphericalFamily;
+#[cfg(feature = "std")]
 use geometry_tag::SameAs;
 use geometry_trait::Point;
 
-use crate::distance::{DefaultDistance, DistanceStrategy};
+#[cfg(not(feature = "std"))]
+use geometry_coords::math::Float;
 
+use crate::distance::DefaultDistance;
 #[cfg(feature = "std")]
+use crate::distance::DistanceStrategy;
 use crate::normalise::{HasAngularUnits, lonlat_radians};
 
 /// Haversine great-circle distance, parameterised by sphere radius.
@@ -230,9 +236,8 @@ impl DefaultDistance<SphericalFamily> for SphericalFamily {
 /// or `Radian` units — that mirrors Boost's implicit
 /// `math::d2r<T>()` multiplication at the entry of each spherical
 /// strategy.
-#[cfg(feature = "std")]
 #[inline]
-fn comparable_haversine_h<P1, P2>(a: &P1, b: &P2) -> f64
+pub(super) fn comparable_haversine_h<P1, P2>(a: &P1, b: &P2) -> f64
 where
     P1: Point<Scalar = f64>,
     P2: Point<Scalar = f64>,
@@ -248,7 +253,7 @@ where
     let s_lat = dlat_half.sin();
     let s_lon = dlon_half.sin();
 
-    s_lat * s_lat + lat1.cos() * lat2.cos() * s_lon * s_lon
+    s_lat * s_lat + lat1.cos() * lat2.cos() * (s_lon * s_lon)
 }
 
 // ---- Tests ----------------------------------------------------------

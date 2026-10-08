@@ -444,8 +444,8 @@ mod tests {
     #[test]
     fn an_empty_operand_yields_no_pairs() {
         let boxes = [box_at(0.0, 0.0, 1.0, 1.0)];
-        assert!(visit_order(&[], &boxes).is_empty());
-        assert!(visit_order(&boxes, &[]).is_empty());
+        assert_eq!(visit_order(&[], &boxes).len(), 0);
+        assert_eq!(visit_order(&boxes, &[]).len(), 0);
         assert_eq!(VisitRank::of(&[], &boxes).rank(0, 0), usize::MAX);
     }
 }

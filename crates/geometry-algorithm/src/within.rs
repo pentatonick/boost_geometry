@@ -9,8 +9,8 @@
 //! [`geometry_strategy::WithinStrategyForKind`] picker, so any
 //! concept-adapted foreign type resolves through the same path as the
 //! equivalent `geometry-model` value.
-//! Spherical / geographic variants arrive alongside the Haversine /
-//! Andoyer / Vincenty distance work in later tasks.
+//! A spherical or geographic point is refused at compile time rather
+//! than tested as if it were planar.
 
 use geometry_strategy::{WithinStrategy, WithinStrategyForKind};
 use geometry_trait::{Geometry, Point};

@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_tag::SameAs;
-use geometry_trait::{Linestring, Point, PointMut};
+use geometry_trait::{Linestring, Point, PointMut, ordinate, set_ordinate};
 
 use crate::cartesian::Pythagoras;
 use crate::distance::DistanceStrategy;
@@ -60,57 +60,48 @@ where
         }
 
         let target = t * total;
+        if target <= 0.0 {
+            return *pts[0];
+        }
 
-        // Walk segments accumulating length until we pass `target`.
-        let mut acc = 0.0_f64;
+        // C++: `interpolate_point_linear::apply`
+        // (`algorithms/line_interpolate.hpp`) walks the distances
+        // accumulated so far and takes the fraction over the segment's
+        // share of that sum, not over its own length.
+        let mut previous_distance = 0.0_f64;
         for w in pts.windows(2) {
-            let d = Pythagoras.distance(w[0], w[1]);
-            let next = acc + d;
-            if next >= target {
-                let frac = if d > 0.0 { (target - acc) / d } else { 0.0 };
-                return blend(w[0], w[1], frac);
+            let current_distance = previous_distance + Pythagoras.distance(w[0], w[1]);
+            if current_distance >= target {
+                let fraction =
+                    (target - previous_distance) / (current_distance - previous_distance);
+                return blend(w[0], w[1], fraction);
             }
-            acc = next;
+            previous_distance = current_distance;
         }
         *pts[pts.len() - 1]
     }
 }
 
-/// Linear per-dimension blend: `out[D] = a[D] + t·(b[D] − a[D])` for
-/// each dimension `D ∈ 0..P::DIM`.
+/// The point `fraction` of the way from `p0` to `p1`.
 ///
-/// Mirrors the per-coordinate interpolation inside
-/// `line_interpolate/cartesian.hpp::apply`.
+/// C++: `strategy::line_interpolate::cartesian::apply`
+/// (`strategies/cartesian/line_interpolate.hpp`), which evaluates the
+/// convex combination as `p1·fraction + p0·(1 − fraction)`, so a fraction
+/// of `1` lands on `p1` exactly.
 #[inline]
-fn blend<P>(a: &P, b: &P, t: f64) -> P
+fn blend<P>(p0: &P, p1: &P, fraction: f64) -> P
 where
     P: Point<Scalar = f64> + PointMut + Default,
 {
+    let one_minus_fraction = 1.0 - fraction;
     let mut out = P::default();
-    geometry_trait::fold_dims((), a, |(), _p, d| {
-        let av = match d {
-            0 => a.get::<0>(),
-            1 => a.get::<1>(),
-            2 => a.get::<2>(),
-            3 => a.get::<3>(),
-            _ => unreachable!(),
-        };
-        let bv = match d {
-            0 => b.get::<0>(),
-            1 => b.get::<1>(),
-            2 => b.get::<2>(),
-            3 => b.get::<3>(),
-            _ => unreachable!(),
-        };
-        let v = av + t * (bv - av);
-        match d {
-            0 => out.set::<0>(v),
-            1 => out.set::<1>(v),
-            2 => out.set::<2>(v),
-            3 => out.set::<3>(v),
-            _ => unreachable!(),
-        }
-    });
+    for dimension in 0..P::DIM {
+        set_ordinate(
+            &mut out,
+            dimension,
+            ordinate(p1, dimension) * fraction + ordinate(p0, dimension) * one_minus_fraction,
+        );
+    }
     out
 }
 
@@ -153,6 +144,19 @@ mod tests {
         let ls: Linestring<Pt> = linestring![(0., 0.), (10., 0.)];
         let p = CartesianLineInterpolate.interpolate(&ls, 0.5);
         assert!(close(p, 5., 0.));
+    }
+
+    /// The point is Boost's to the last bit: `p1·f + p0·(1 − f)` gives
+    /// `0.39999999999999997` here (`aed7bc3`), where `p0 + f·(p1 − p0)`
+    /// rounds to `0.4`.
+    #[test]
+    fn interpolated_point_is_boosts_convex_combination() {
+        let ls: Linestring<Pt> = linestring![(0.1, 0.), (0.7, 0.)];
+        let p = CartesianLineInterpolate.interpolate(&ls, 0.5);
+        assert_eq!(
+            (p.get::<0>(), p.get::<1>()),
+            (0.399_999_999_999_999_97, 0.0)
+        );
     }
 
     #[test]

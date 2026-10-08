@@ -50,6 +50,12 @@ type Pt = Point2D<f64, Cartesian>;
 /// objects are accepted. `"bbox"` and any unrecognised members are
 /// ignored.
 ///
+/// # Structure
+///
+/// Position counts and ring closure are read as written: a `LineString`
+/// of one position or an unclosed `Polygon` ring parses, although RFC 7946
+/// §3.1.4 and §3.1.6 require two positions and a closed ring of four.
+///
 /// # Errors
 ///
 /// Returns a [`GeoJsonError`] on a JSON syntax error, a missing or

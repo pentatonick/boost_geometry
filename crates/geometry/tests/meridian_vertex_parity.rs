@@ -225,3 +225,34 @@ fn geographic_vertex_longitude_handles_endpoints_meridians_and_poles() {
     );
     assert!(polar.is_finite());
 }
+
+/// Boost tells an endpoint from the vertex with `math::equals`, not within
+/// `1e-12`: a segment starting `1e-13` short of the north pole still has a
+/// vertex of its own. Boost (`aed7bc3`, the spheroid with Boost's
+/// flattening `(a − b) / a`): `−1.6581221077718085` on the sphere and
+/// `−1.6583065861681117` on the spheroid.
+#[test]
+fn a_start_just_short_of_the_pole_keeps_its_vertex() {
+    let spheroid = Spheroid {
+        equatorial_radius: 6_378_137.0,
+        flattening: (6_378_137.0 - 6_356_752.314_245_179) / 6_378_137.0,
+    };
+    let (lon1, lat1) = (-2.956_404_337_939_258_4, 1.570_796_326_794_796_6);
+    let (lon2, lat2) = (-0.087_325_780_976_985_18, 1.219_930_240_376_358);
+
+    let spherical_lat = spherical_vertex_latitude(lat1, 0.272_514_096_627_446_5);
+    let spherical_lon = spherical_vertex_longitude(lon1, lat1, lon2, lat2, spherical_lat);
+    assert!(
+        (spherical_lon + 1.658_122_107_771_808_5).abs() < 1e-12,
+        "{spherical_lon}"
+    );
+
+    let azimuth = 0.272_514_096_627_446_63;
+    let geographic_lat = geographic_vertex_latitude(lat1, azimuth, spheroid);
+    let geographic_lon =
+        geographic_vertex_longitude(lon1, lat1, lon2, lat2, geographic_lat, azimuth, spheroid);
+    assert!(
+        (geographic_lon + 1.658_306_586_168_111_7).abs() < 1e-12,
+        "{geographic_lon}"
+    );
+}

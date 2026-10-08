@@ -31,8 +31,20 @@ use nalgebra::{Scalar, Vector2, Vector3};
 /// let b = NaVector2::new(Vector2::new(3.0_f64, 4.0));
 /// assert_eq!(distance(&a, &b), 5.0);
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct NaVector2<T: Scalar>(pub Vector2<T>);
+
+/// The origin, where `nalgebra` has one for `T`.
+impl<T: Scalar> Default for NaVector2<T>
+where
+    Vector2<T>: Default,
+{
+    #[inline]
+    fn default() -> Self {
+        Self(Vector2::default())
+    }
+}
 
 impl<T: Scalar> NaVector2<T> {
     /// Wrap a `nalgebra::Vector2` so the geometry concepts apply to it.
@@ -89,8 +101,20 @@ impl<T: CoordinateScalar + Scalar> PointMut for NaVector2<T> {
 /// let z_axis = NaVector3::new(Vector3::new(0.0_f64, 0.0, 1.0));
 /// assert_eq!(distance(&origin, &z_axis), 1.0);
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct NaVector3<T: Scalar>(pub Vector3<T>);
+
+/// The origin, where `nalgebra` has one for `T`.
+impl<T: Scalar> Default for NaVector3<T>
+where
+    Vector3<T>: Default,
+{
+    #[inline]
+    fn default() -> Self {
+        Self(Vector3::default())
+    }
+}
 
 impl<T: Scalar> NaVector3<T> {
     /// Wrap a `nalgebra::Vector3` so the geometry concepts apply to it.

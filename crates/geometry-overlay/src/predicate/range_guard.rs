@@ -31,9 +31,8 @@ use geometry_trait::Point;
 /// 53-bit mantissa, so we take `2^26` as the coordinate bound to keep a
 /// full bit of headroom for the difference and the subtraction.
 ///
-/// Expressed as `f64`; integer scalars are always in range (their
-/// products are exact until they overflow the integer type itself,
-/// which is a separate concern).
+/// Expressed as `f64`, and applied to integer scalars too: the overlay
+/// converts every coordinate to `f64` before it computes with it.
 pub const SAFE_ABS_MAX: f64 = 67_108_864.0; // 2^26
 
 /// A coordinate that falls outside the safe arithmetic range of the
@@ -65,9 +64,8 @@ impl std::error::Error for RangeError {}
 
 /// True when every coordinate of `p` is within `±`[`SAFE_ABS_MAX`].
 ///
-/// The check is skipped (always `true`) for scalar types whose values
-/// convert to an `f64` magnitude — integer coordinates included, since
-/// their determinant is exact until the integer type overflows.
+/// Integer coordinates are checked like any other: the overlay computes
+/// with their `f64` conversions.
 ///
 /// # Examples
 ///

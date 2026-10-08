@@ -106,6 +106,7 @@ pub mod azimuth;
 pub mod buffer;
 pub mod cartesian;
 pub mod centroid;
+mod clockwise_view;
 pub mod closest_points;
 pub mod compare;
 pub mod convex_hull;
@@ -121,10 +122,14 @@ pub mod length;
 pub mod line_interpolate;
 pub(crate) mod normalise;
 mod reversal;
+mod segment_intersection;
 pub mod segmentize;
 pub mod simplify;
 pub mod spherical;
+#[cfg(feature = "std")]
+mod spherical_excess;
 pub mod transform;
+pub mod winding;
 pub mod within;
 
 pub use area::{
@@ -170,6 +175,7 @@ pub use length::{
 };
 pub use line_interpolate::{CartesianLineInterpolate, LineInterpolateStrategy};
 pub use reversal::Reversed;
+pub use segment_intersection::{SegmentMeeting, segment_meeting};
 pub use segmentize::{CartesianSegmentize, SegmentizeStrategy};
 pub use simplify::{
     DouglasPeucker, SimplifyStrategy, VisvalingamWhyatt, VisvalingamWhyattPreserve,
@@ -179,4 +185,5 @@ pub use spherical::{
     SphericalArea, SphericalAzimuth, SphericalLength, SphericalPerimeter, SphericalPolygonArea,
 };
 pub use transform::{Affine2, Affine3, Rotate, Scale, Skew, TransformStrategy, Translate};
+pub use winding::{PointLocation, Winding};
 pub use within::{WithinBox, WithinPoly, WithinRing, WithinStrategy, WithinStrategyForKind};

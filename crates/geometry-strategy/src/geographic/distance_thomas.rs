@@ -15,7 +15,7 @@
 //! Following Andoyer (T43) and Haversine (T40), we hardcode
 //! `Scalar = f64` on both inputs so the kernel reaches for `f64::sin`
 //! / `cos` / `acos` / `tan` / `atan` directly without growing the
-//! [`CoordinateScalar`](geometry_coords::CoordinateScalar) trait
+//! [`CoordinateScalar`] trait
 //! surface.
 //!
 //! `#[cfg(feature = "std")]` gates the impl: the standard library
@@ -38,11 +38,19 @@
 //! explicitly opt-in. We deliberately do **not** implement
 //! [`DefaultDistance`](crate::distance::DefaultDistance) here.
 
-use geometry_cs::{CoordinateSystem, GeographicFamily, Spheroid};
+use geometry_cs::Spheroid;
+#[cfg(feature = "std")]
+use geometry_cs::{CoordinateSystem, GeographicFamily};
+#[cfg(feature = "std")]
 use geometry_tag::SameAs;
+#[cfg(feature = "std")]
 use geometry_trait::Point;
 
+#[cfg(feature = "std")]
 use crate::distance::DistanceStrategy;
+
+#[cfg(feature = "std")]
+use geometry_coords::CoordinateScalar;
 
 #[cfg(feature = "std")]
 use crate::geographic::Meridian;
@@ -144,42 +152,36 @@ where
     type Out = f64;
     type Comparable = Self;
 
-    // `many_single_char_names`, `float_cmp`: the single-letter names
-    // `H, L, U, V, X, Y, T, D, E, A, B, C, F, G, M, Q` and the exact
-    // `== 0.0` / `== same-lonlat` checks mirror
+    // `many_single_char_names`: the single-letter names
+    // `H, L, U, V, X, Y, T, D, E, A, B, C, F, G, M, Q` mirror
     // `formula::thomas_inverse::apply` in
-    // `formulas/thomas_inverse.hpp:69-153` letter-for-letter; the
-    // exact-equality short-circuit is the intentional analogue of
-    // Boost's `math::equals` against zero on the same line numbers.
-    #[allow(
-        clippy::many_single_char_names,
-        clippy::similar_names,
-        clippy::float_cmp
-    )]
+    // `formulas/thomas_inverse.hpp:69-153` letter-for-letter.
+    #[allow(clippy::many_single_char_names, clippy::similar_names)]
     #[inline]
     fn distance(&self, a: &P1, b: &P2) -> Self::Out {
         let calc = SpheroidCalc::from(self.spheroid);
         let (lon1, lat1) = lonlat_radians(a);
         let (lon2, lat2) = lonlat_radians(b);
 
-        // Mirrors the `math::equals(lon1, lon2) && math::equals(lat1, lat2)`
-        // short-circuit at `formulas/thomas_inverse.hpp:70-73`.
-        if lon1 == lon2 && lat1 == lat2 {
-            return 0.0;
-        }
-
         // Boost's `strategy::distance::geographic` runs
         // `formula::meridian_inverse` before the general formula
-        // (`strategies/geographic/distance.hpp:91-112`): endpoints on one
-        // meridian, or on opposite meridians with the route over a pole,
-        // take the exact meridian-arc distance — the antipodal region
+        // (`strategies/geographic/distance.hpp:91-112`), at Thomas's
+        // order-two series (`strategies/geographic/parameters.hpp:191-194`):
+        // endpoints on one meridian, or on opposite meridians with the route
+        // over a pole, take the meridian-arc distance — the antipodal region
         // where the general formula is least trustworthy.
         let meridian = Meridian {
             spheroid: self.spheroid,
         }
-        .inverse(lon1, lat1, lon2, lat2);
+        .inverse_to_order(lon1, lat1, lon2, lat2, 2);
         if meridian.meridian {
             return meridian.distance;
+        }
+
+        // Mirrors the `math::equals(lon1, lon2) && math::equals(lat1, lat2)`
+        // short-circuit at `formulas/thomas_inverse.hpp:70-73`.
+        if lon1.tolerant_eq(lon2) && lat1.tolerant_eq(lat2) {
+            return 0.0;
         }
 
         let f = calc.f;
@@ -189,12 +191,12 @@ where
 
         // Reduced latitudes θ = atan((1 − f) · tan(lat)), with the
         // pole short-circuit from `formulas/thomas_inverse.hpp:89-94`.
-        let theta1 = if lat1 == pi_half || lat1 == -pi_half {
+        let theta1 = if lat1.tolerant_eq(pi_half) || lat1.tolerant_eq(-pi_half) {
             lat1
         } else {
             (one_minus_f * lat1.tan()).atan()
         };
-        let theta2 = if lat2 == pi_half || lat2 == -pi_half {
+        let theta2 = if lat2.tolerant_eq(pi_half) || lat2.tolerant_eq(-pi_half) {
             lat2
         } else {
             (one_minus_f * lat2.tan()).atan()
@@ -229,7 +231,7 @@ where
         // Degenerate guards from `formulas/thomas_inverse.hpp:120-125`:
         // `sin_d == 0` ⇒ coincident / antipodal where d=0 or π;
         // `L == 0` or `1 − L == 0` would divide by zero below.
-        if sin_d == 0.0 || l_term == 0.0 || one_minus_l == 0.0 {
+        if sin_d.tolerant_eq(0.0) || l_term.tolerant_eq(0.0) || one_minus_l.tolerant_eq(0.0) {
             return 0.0;
         }
 
@@ -400,5 +402,30 @@ mod tests {
             let d = Thomas::WGS84.distance(&a, &b);
             assert!((d - polar_route).abs() < 1.0, "{d} m vs {polar_route} m");
         }
+    }
+
+    /// Points on one meridian take Thomas's order-two meridian series
+    /// (`strategies/geographic/parameters.hpp:191-194`): Boost (`aed7bc3`)
+    /// gives `110_574.3906549899` m for a degree from the equator.
+    #[test]
+    fn meridian_pairs_take_the_order_two_series() {
+        let d = Thomas::WGS84.distance(&deg(0.0, 0.0), &deg(0.0, 1.0));
+        assert!((d - 110_574.390_654_989_9).abs() < 1e-8, "{d}");
+    }
+
+    /// Longitudes one ulp apart are one longitude by `math::equals`,
+    /// which scales its epsilon by their magnitude, yet their difference
+    /// is too large to make the pair a meridian: the coincident
+    /// short-circuit answers zero.
+    #[test]
+    fn longitudes_one_ulp_apart_are_coincident() {
+        use geometry_cs::Radian;
+
+        type Rad = WithCs<Adapt<[f64; 2]>, Geographic<Radian>>;
+        let lon = 3.0_f64;
+        let next = f64::from_bits(lon.to_bits() + 1);
+        let a: Rad = WithCs::new(Adapt([lon, 0.5]));
+        let b: Rad = WithCs::new(Adapt([next, 0.5]));
+        assert_eq!(Thomas::WGS84.distance(&a, &b), 0.0);
     }
 }

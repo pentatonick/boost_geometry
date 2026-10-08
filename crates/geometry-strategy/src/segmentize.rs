@@ -6,12 +6,16 @@
 
 use alloc::{vec, vec::Vec};
 
-use geometry_cs::{CartesianFamily, CoordinateSystem, SphericalFamily};
+#[cfg(feature = "std")]
+use geometry_cs::SphericalFamily;
+use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{Linestring as ModelLinestring, MultiLinestring};
 use geometry_tag::SameAs;
 use geometry_trait::{Linestring, Point, PointMut};
 
-use crate::{DistanceStrategy, Haversine, Pythagoras};
+#[cfg(feature = "std")]
+use crate::Haversine;
+use crate::{DistanceStrategy, Pythagoras};
 
 #[cfg(feature = "std")]
 use crate::normalise::{HasAngularUnits, lonlat_radians};

@@ -41,14 +41,21 @@ use crate::distance::DistanceStrategy;
 /// Mirrors `boost::geometry::strategy::distance::projected_point` from
 /// `boost/geometry/strategies/cartesian/distance_projected_point.hpp`.
 ///
+/// # Integer coordinates
+///
+/// The projection parameter `t` needs exact division, and the foot of the
+/// perpendicular is a fractional point. Boost builds that foot in
+/// `promote_floating_point<Scalar>`; this port builds it as a `P` and so
+/// requires a point-point strategy that measures in `P`'s own scalar.
+/// [`Pythagoras`] measures integer coordinates in `f64`
+/// ([`CoordinateScalar::Measure`]), so an integer `P` does not compile
+/// here. Convert integer coordinates to a floating scalar first.
+///
 /// # Panics
 ///
-/// The projection parameter `t` needs exact division. Boost computes it
-/// in `promote_floating_point<Scalar>`; this port computes in the point's
-/// own scalar, so an integer scalar — whose division truncates `t` to
-/// `0` or `1` and snaps every foot onto an endpoint — is refused with a
-/// panic rather than answering with a wrong distance. Promote integer
-/// coordinates to a floating scalar first.
+/// A custom scalar whose division truncates — which would snap every foot
+/// onto an endpoint — is refused with a panic rather than answered with a
+/// wrong distance.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PointToSegment<PP = Pythagoras>(pub PP);
 
@@ -85,8 +92,7 @@ where
 /// Compute the closest point on segment `seg` to point `p`.
 ///
 /// Builds the segment endpoints `start`, `end` from the indexed
-/// accessors, computes the clamped projection parameter, then
-/// assembles the foot of the perpendicular as a fresh [`Point`].
+/// accessors and hands them to [`closest_point_to_segment`].
 fn closest_point_on_segment<P, S>(p: &P, seg: &S) -> P
 where
     P: PointMut + Default,
@@ -98,15 +104,26 @@ where
     // require — `P: Default` already covers it for the foot below.
     let start = endpoint::<P, S, 0>(seg);
     let end = endpoint::<P, S, 1>(seg);
+    closest_point_to_segment(p, start, end)
+}
 
+/// The point of the segment `start → end` closest to `p`: `start` itself
+/// where `p` projects before it, `end` itself where it projects past it,
+/// and the foot of the perpendicular in between.
+///
+/// C++: `closest_points::detail::compute_closest_point_to_segment`
+/// (`strategies/cartesian/closest_points_pt_seg.hpp`), which tests
+/// `c1 = (p − start)·(end − start)` against `0` and then against
+/// `c2 = (end − start)·(end − start)` before dividing, so a projection
+/// that clamps lands on the endpoint exactly. A zero-length segment has
+/// `c1 = 0` and answers `start`.
+pub(crate) fn closest_point_to_segment<P: PointMut + Default>(p: &P, start: P, end: P) -> P {
     let (numerator, denominator) = dots::<P>(p, &start, &end);
-
-    // Degenerate segment: `start == end`. The foot is the start
-    // endpoint, and the distance becomes `|p − start|`. Mirrors the
-    // early-out path in `closest_points_pt_seg.hpp` where division by
-    // zero is avoided by checking `denominator <= 0`.
-    if denominator <= P::Scalar::ZERO {
+    if numerator <= P::Scalar::ZERO {
         return start;
+    }
+    if denominator <= numerator {
+        return end;
     }
 
     // `1 / 2 · 2 == 1` holds for floating and rational scalars and fails
@@ -117,15 +134,7 @@ where
         "PointToSegment needs a scalar with exact division; promote integer coordinates to a floating type first"
     );
 
-    let t = numerator / denominator;
-
-    if t <= P::Scalar::ZERO {
-        start
-    } else if t >= P::Scalar::ONE {
-        end
-    } else {
-        assemble_foot::<P>(&start, &end, t)
-    }
+    assemble_foot::<P>(&start, &end, numerator / denominator)
 }
 
 /// Materialise endpoint `I` of segment `s` into a [`Point`] via the
@@ -150,15 +159,15 @@ where
     out
 }
 
-/// Compute `(dot(p − a, b − a), dot(b − a, b − a))` in one pass.
+/// Compute `(dot(p − a, b − a), dot(b − a, b − a))` in one pass, each
+/// summed from the last dimension down as Boost's `dot_product` sums it.
 #[inline]
 fn dots<P: Point>(p: &P, a: &P, b: &P) -> (P::Scalar, P::Scalar) {
-    let init = (P::Scalar::ZERO, P::Scalar::ZERO);
     match P::DIM {
-        1 => <Walk<0, 1> as Dots<0, 1>>::run::<P>(init, p, a, b),
-        2 => <Walk<0, 2> as Dots<0, 2>>::run::<P>(init, p, a, b),
-        3 => <Walk<0, 3> as Dots<0, 3>>::run::<P>(init, p, a, b),
-        4 => <Walk<0, 4> as Dots<0, 4>>::run::<P>(init, p, a, b),
+        1 => <Walk<0, 1> as Dots<0, 1>>::run::<P>(p, a, b),
+        2 => <Walk<0, 2> as Dots<0, 2>>::run::<P>(p, a, b),
+        3 => <Walk<0, 3> as Dots<0, 3>>::run::<P>(p, a, b),
+        4 => <Walk<0, 4> as Dots<0, 4>>::run::<P>(p, a, b),
         _ => panic!("PointToSegment: P::DIM exceeds MAX_DIM (4)"),
     }
 }
@@ -201,9 +210,10 @@ trait WriteEndpoint<const I: usize, const N: usize>: sealed::Sealed<I, N> {
         S: Segment<Point = P>;
 }
 
-/// Walk that accumulates `(ap · ab, ab · ab)` one dimension at a time.
+/// Walk that sums `(ap · ab, ab · ab)` over dimensions `I..N`, adding each
+/// dimension's products to the sum of the dimensions after it.
 trait Dots<const I: usize, const N: usize>: sealed::Sealed<I, N> {
-    fn run<P: Point>(acc: (P::Scalar, P::Scalar), p: &P, a: &P, b: &P) -> (P::Scalar, P::Scalar);
+    fn run<P: Point>(p: &P, a: &P, b: &P) -> (P::Scalar, P::Scalar);
 }
 
 /// Walk that writes `out[D] = a[D] + t · (b[D] − a[D])` for each `D`.
@@ -226,13 +236,8 @@ impl<const N: usize> WriteEndpoint<N, N> for Walk<N, N> {
 
 impl<const N: usize> Dots<N, N> for Walk<N, N> {
     #[inline]
-    fn run<P: Point>(
-        acc: (P::Scalar, P::Scalar),
-        _p: &P,
-        _a: &P,
-        _b: &P,
-    ) -> (P::Scalar, P::Scalar) {
-        acc
+    fn run<P: Point>(_p: &P, _a: &P, _b: &P) -> (P::Scalar, P::Scalar) {
+        (P::Scalar::ZERO, P::Scalar::ZERO)
     }
 }
 
@@ -263,16 +268,17 @@ macro_rules! impl_walk {
 
         impl Dots<$i, $n> for Walk<$i, $n> {
             #[inline]
-            fn run<P: Point>(
-                acc: (P::Scalar, P::Scalar),
-                p: &P,
-                a: &P,
-                b: &P,
-            ) -> (P::Scalar, P::Scalar) {
+            fn run<P: Point>(p: &P, a: &P, b: &P) -> (P::Scalar, P::Scalar) {
                 let ap = p.get::<$i>() - a.get::<$i>();
                 let ab = b.get::<$i>() - a.get::<$i>();
-                let acc = (acc.0 + ap * ab, acc.1 + ab * ab);
-                <Walk<{ $i + 1 }, $n> as Dots<{ $i + 1 }, $n>>::run::<P>(acc, p, a, b)
+                // C++: `dot_product_maker` — the last dimension's product
+                // alone, every earlier one added to the sum after it.
+                if $i + 1 == $n {
+                    (ap * ab, ab * ab)
+                } else {
+                    let rest = <Walk<{ $i + 1 }, $n> as Dots<{ $i + 1 }, $n>>::run::<P>(p, a, b);
+                    (ap * ab + rest.0, ab * ab + rest.1)
+                }
             }
         }
 
@@ -431,17 +437,5 @@ mod tests {
         let p = P5::default();
         assert!(std::panic::catch_unwind(|| dots(&p, &p, &p)).is_err());
         assert!(std::panic::catch_unwind(|| assemble_foot(&p, &p, 0.5)).is_err());
-    }
-
-    /// An integer scalar cannot carry the projection parameter (its
-    /// division truncates `t` and snaps every foot to an endpoint), so the
-    /// strategy refuses it rather than returning the distance to a vertex.
-    #[test]
-    #[should_panic(expected = "exact division")]
-    fn integer_scalars_are_refused_rather_than_snapped_to_an_endpoint() {
-        type IP = Point2D<i32, Cartesian>;
-        let p = IP::new(5, 7);
-        let s = Segment::new(IP::new(0, 0), IP::new(10, 0));
-        let _ = PointToSegment::<ComparablePythagoras>::default().distance(&p, &s);
     }
 }

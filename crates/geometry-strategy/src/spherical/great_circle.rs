@@ -1,135 +1,104 @@
-//! Great-circle point-to-segment projection shared by spherical strategies.
+//! Where a point's great-circle perpendicular meets a segment, the walk the
+//! spherical cross-track distance and closest-point strategies share.
+//!
+//! Mirrors the common body of Boost's two spherical `cross_track`
+//! strategies (`strategies/spherical/distance_cross_track.hpp:441-513`,
+//! `strategies/spherical/closest_points_pt_seg.hpp:86-187`): comparable
+//! haversine terms to both endpoints, the course differences of
+//! `detail::compute_cross_track_pair`, and the projections whose signs say
+//! whether the perpendicular foot falls inside the segment.
 
 #[cfg(not(feature = "std"))]
 use geometry_coords::math::Float;
-use geometry_cs::AngleUnit;
-use geometry_trait::{Point, PointMut};
+use geometry_trait::Point;
 
 use crate::normalise::{HasAngularUnits, lonlat_radians};
 
-pub(super) struct Projection<P> {
-    pub(super) point: P,
-    pub(super) angular_distance: f64,
+use super::azimuth::spherical_azimuth;
+use super::distance_haversine::comparable_haversine_h;
+
+/// Where a point lies nearest a segment, with the comparable distances —
+/// the haversine `h = sin²(d/2)` of the angular distance `d` — Boost's
+/// comparable strategies return.
+pub(super) enum Foot {
+    /// The segment's start, at `h`: the segment is a single point, or the
+    /// foot falls outside the segment nearer the start.
+    Start(f64),
+    /// The segment's end, at `h`: the foot falls outside the segment no
+    /// nearer the start.
+    End(f64),
+    /// The foot itself, inside the segment: `h` from the point, which lies
+    /// `d1` (comparable) from the segment's start.
+    Inside { h: f64, d1: f64 },
 }
 
-pub(super) fn project<P>(point: &P, start: &P, end: &P) -> Projection<P>
+/// Where `point` lies nearest the segment from `start` to `end`.
+pub(super) fn foot<P1, P2>(point: &P1, start: &P2, end: &P2) -> Foot
 where
-    P: Point<Scalar = f64> + PointMut + Default + Copy,
-    P::Cs: HasAngularUnits,
+    P1: Point<Scalar = f64>,
+    P2: Point<Scalar = f64>,
+    P1::Cs: HasAngularUnits,
+    P2::Cs: HasAngularUnits,
 {
-    let point_vector = vector(point);
-    let start_vector = vector(start);
-    let end_vector = vector(end);
-    let normal = cross(start_vector, end_vector);
-    let normal_length = magnitude(normal);
-    if normal_length <= f64::EPSILON {
-        return nearest_endpoint(point_vector, start, start_vector, end, end_vector);
+    let d1 = comparable_haversine_h(start, point);
+    let d3 = comparable_haversine_h(start, end);
+    if geometry_coords::CoordinateScalar::tolerant_eq(d3, 0.0) {
+        return Foot::Start(d1);
     }
-    let normal = scale(normal, 1.0 / normal_length);
-    let projected = subtract(point_vector, scale(normal, dot(point_vector, normal)));
-    let projected_length = magnitude(projected);
-    if projected_length <= f64::EPSILON {
-        return nearest_endpoint(point_vector, start, start_vector, end, end_vector);
-    }
-    let mut projected = scale(projected, 1.0 / projected_length);
-    if dot(point_vector, projected) < 0.0 {
-        projected = scale(projected, -1.0);
-    }
-
-    let segment_angle = angle(start_vector, end_vector);
-    let on_minor_arc =
-        angle(start_vector, projected) + angle(projected, end_vector) <= segment_angle + 1e-10;
-    if !on_minor_arc {
-        return nearest_endpoint(point_vector, start, start_vector, end, end_vector);
-    }
-
-    Projection {
-        point: point_from_vector::<P>(projected),
-        angular_distance: angle(point_vector, projected),
-    }
-}
-
-fn nearest_endpoint<P>(
-    point: [f64; 3],
-    start: &P,
-    start_vector: [f64; 3],
-    end: &P,
-    end_vector: [f64; 3],
-) -> Projection<P>
-where
-    P: Point<Scalar = f64> + Copy,
-{
-    let start_distance = angle(point, start_vector);
-    let end_distance = angle(point, end_vector);
-    if start_distance <= end_distance {
-        Projection {
-            point: *start,
-            angular_distance: start_distance,
+    let d2 = comparable_haversine_h(end, point);
+    let (d_crs1, d_crs2) = course_differences(point, start, end);
+    // Only the signs matter: the foot is inside when the point is ahead of
+    // both endpoints along the segment.
+    let projection1 = d_crs1.cos() * d1 / d3;
+    let projection2 = d_crs2.cos() * d2 / d3;
+    if projection1 > 0.0 && projection2 > 0.0 {
+        Foot::Inside {
+            h: cross_track_h(d_crs1, d1),
+            d1,
         }
+    } else if d1 < d2 {
+        Foot::Start(d1)
     } else {
-        Projection {
-            point: *end,
-            angular_distance: end_distance,
-        }
+        Foot::End(d2)
     }
 }
 
-fn vector<P>(point: &P) -> [f64; 3]
+/// The course from each endpoint to the point less the segment's course
+/// at that endpoint, in radians.
+///
+/// Mirrors `detail::compute_cross_track_pair`
+/// (`strategies/spherical/distance_cross_track.hpp:56-98`).
+#[allow(
+    clippy::similar_names,
+    reason = "the names are those of `compute_cross_track_pair`"
+)]
+fn course_differences<P1, P2>(point: &P1, start: &P2, end: &P2) -> (f64, f64)
 where
-    P: Point<Scalar = f64>,
-    P::Cs: HasAngularUnits,
+    P1: Point<Scalar = f64>,
+    P2: Point<Scalar = f64>,
+    P1::Cs: HasAngularUnits,
+    P2::Cs: HasAngularUnits,
 {
-    let (longitude, latitude) = lonlat_radians(point);
-    let cos_latitude = latitude.cos();
-    [
-        cos_latitude * longitude.cos(),
-        cos_latitude * longitude.sin(),
-        latitude.sin(),
-    ]
+    let (lon1, lat1) = lonlat_radians(start);
+    let (lon2, lat2) = lonlat_radians(end);
+    let (lon, lat) = lonlat_radians(point);
+    let crs_ad = spherical_azimuth::<false>(lon1, lat1, lon, lat).0;
+    let (crs_ab, reverse) = spherical_azimuth::<true>(lon1, lat1, lon2, lat2);
+    let crs_ba = reverse - core::f64::consts::PI;
+    let crs_bd = spherical_azimuth::<false>(lon2, lat2, lon, lat).0;
+    (crs_ad - crs_ab, crs_bd - crs_ba)
 }
 
-fn point_from_vector<P>(vector: [f64; 3]) -> P
-where
-    P: Point<Scalar = f64> + PointMut + Default,
-    P::Cs: HasAngularUnits,
-{
-    type Units<P> = <<P as Point>::Cs as HasAngularUnits>::Units;
-    let longitude = vector[1].atan2(vector[0]);
-    let latitude = vector[2].atan2(vector[0].hypot(vector[1]));
-    let mut point = P::default();
-    point.set::<0>(Units::<P>::from_radians(longitude));
-    point.set::<1>(Units::<P>::from_radians(latitude));
-    point
-}
-
-fn angle(first: [f64; 3], second: [f64; 3]) -> f64 {
-    magnitude(cross(first, second)).atan2(dot(first, second).clamp(-1.0, 1.0))
-}
-
-fn dot(first: [f64; 3], second: [f64; 3]) -> f64 {
-    first[0] * second[0] + first[1] * second[1] + first[2] * second[2]
-}
-
-fn cross(first: [f64; 3], second: [f64; 3]) -> [f64; 3] {
-    [
-        first[1] * second[2] - first[2] * second[1],
-        first[2] * second[0] - first[0] * second[2],
-        first[0] * second[1] - first[1] * second[0],
-    ]
-}
-
-fn subtract(first: [f64; 3], second: [f64; 3]) -> [f64; 3] {
-    [
-        first[0] - second[0],
-        first[1] - second[1],
-        first[2] - second[2],
-    ]
-}
-
-fn scale(vector: [f64; 3], factor: f64) -> [f64; 3] {
-    [vector[0] * factor, vector[1] * factor, vector[2] * factor]
-}
-
-fn magnitude(vector: [f64; 3]) -> f64 {
-    dot(vector, vector).sqrt()
+/// The comparable cross-track distance of a point `d1` (comparable) from
+/// the segment's start, whose course turns `d_crs1` off the segment's.
+///
+/// Mirrors `detail::compute_cross_track_distance`
+/// (`strategies/spherical/distance_cross_track.hpp:100-124`), Boost's
+/// rearrangement of `(1 − sqrt(1 − 4·(d1 − d1²)·sin²(d_crs1))) / 2` that
+/// keeps the small distances precise.
+fn cross_track_h(d_crs1: f64, d1: f64) -> f64 {
+    let sin_d_crs1 = d_crs1.sin();
+    let d1_x_sin = d1 * sin_d_crs1;
+    let d = d1_x_sin * (sin_d_crs1 - d1_x_sin);
+    d / (0.5 + (0.25 - d).sqrt())
 }

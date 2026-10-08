@@ -47,7 +47,7 @@ where
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::{destination, destination_with};
-    use geometry_cs::{Degree, Geographic, Spherical};
+    use geometry_cs::{Degree, Geographic, Radian, Spherical};
     use geometry_model::Point2D;
     use geometry_strategy::{Haversine, VincentyDirect};
     use geometry_trait::Point as _;
@@ -71,5 +71,21 @@ mod tests {
             VincentyDirect::WGS84,
         );
         assert!((geographic.get::<0>() - 0.898_315_284_1).abs() < 1e-6);
+    }
+
+    /// The spherical default is Boost's `formula::spherical_direct`
+    /// (`formulas/spherical.hpp:220-280`), its longitude brought into
+    /// `(−π, π]`: due north from −180°, it arrives at +180°. Boost
+    /// (`aed7bc3`) gives these.
+    #[test]
+    fn spherical_destination_is_boosts_spherical_direct() {
+        type RadianPoint = Point2D<f64, Spherical<Radian>>;
+
+        let reached = destination(&RadianPoint::new(0.2, 0.7), 1.0, 5_000_000.0);
+        assert!((reached.get::<0>() - 1.309_738_830_948_33).abs() < 1e-14);
+        assert!((reached.get::<1>() - 0.844_851_117_662_983_8).abs() < 1e-14);
+
+        let north = destination(&RadianPoint::new(-core::f64::consts::PI, 0.0), 0.0, 1_000.0);
+        assert_eq!(north.get::<0>(), core::f64::consts::PI);
     }
 }

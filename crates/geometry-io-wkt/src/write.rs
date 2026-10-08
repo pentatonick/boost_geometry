@@ -32,7 +32,7 @@ use geometry_model::{
     Polygon, Ring,
 };
 use geometry_trait::{
-    Linestring as LinestringTrait, MultiLinestring as MultiLinestringTrait,
+    Closure, Linestring as LinestringTrait, MultiLinestring as MultiLinestringTrait,
     MultiPoint as MultiPointTrait, MultiPolygon as MultiPolygonTrait, Point as PointTrait,
     Polygon as PolygonTrait, Ring as RingTrait,
 };
@@ -84,7 +84,9 @@ pub fn to_wkt<G: WriteWkt + ?Sized>(g: &G) -> Result<String, WktWriteError> {
 ///
 /// This is the bring-your-own-type counterpart to [`to_wkt`]. It reads the
 /// polygon through the public geometry traits, including its interior rings,
-/// without first converting it to a `geometry_model` type.
+/// without first converting it to a `geometry_model` type. An open ring
+/// ([`Closure::Open`]) is written closed, its first point repeated at the
+/// end, as Boost's writer does.
 ///
 /// # Errors
 ///
@@ -346,15 +348,37 @@ where
 {
     out.write_char('(')?;
     out.write_char('(')?;
-    write_point_seq(out, pg.exterior().points())?;
+    write_point_seq(out, ring_positions(pg.exterior()))?;
     out.write_char(')')?;
     for ring in pg.interiors() {
         out.write_char(',')?;
         out.write_char('(')?;
-        write_point_seq(out, ring.points())?;
+        write_point_seq(out, ring_positions(ring))?;
         out.write_char(')')?;
     }
     out.write_char(')').map_err(WktWriteError::from)
+}
+
+/// A ring's positions as the text spells them: closed. An open ring
+/// ([`Closure::Open`]) repeats its first point at the end unless its last
+/// point already is that one.
+///
+/// C++: `wkt_range` force-closes a polygon's rings the same way, appending
+/// the first point where it is disjoint from the last.
+fn ring_positions<R>(ring: &R) -> impl Iterator<Item = &R::Point> + Clone
+where
+    R: RingTrait,
+    R::Point: PointTrait<Scalar = f64>,
+{
+    let closing = match ring.closure() {
+        Closure::Open => ring.points().next().filter(|first| {
+            ring.points()
+                .last()
+                .is_some_and(|last| !geometry_structure::same_position(*first, last))
+        }),
+        Closure::Closed => None,
+    };
+    ring.points().chain(closing)
 }
 
 fn write_point<P: PointTrait<Scalar = f64>>(
@@ -448,7 +472,8 @@ impl<P: PointTrait<Scalar = f64>> WriteWkt for Polygon<P, true, true> {
     }
 }
 
-/// Write any XY polygon through its geometry traits.
+/// Write any XY polygon through its geometry traits. An open ring
+/// ([`Closure::Open`]) is written closed, as by [`to_wkt_polygon`].
 ///
 /// # Errors
 ///
@@ -775,12 +800,12 @@ where
             Err(GeometryStructureError::MissingExterior)
         };
     }
-    geometry_structure::ring(polygon.exterior().points())?;
+    geometry_structure::ring(ring_positions(polygon.exterior()))?;
     for ring in polygon.interiors() {
         if ring.points().next().is_none() {
             return Err(GeometryStructureError::EmptyInterior);
         }
-        geometry_structure::ring(ring.points())?;
+        geometry_structure::ring(ring_positions(ring))?;
     }
     Ok(())
 }

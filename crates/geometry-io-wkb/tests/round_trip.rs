@@ -301,7 +301,7 @@ fn malformed_documents_cover_the_public_error_contract() {
         },
     ];
     for error in errors {
-        assert!(!error.to_string().is_empty());
+        assert_ne!(error.to_string().len(), 0);
     }
 }
 
@@ -641,5 +641,66 @@ fn polygon_writer_and_length_agree_on_every_shape() {
             // one allocation, sized exactly
             assert_eq!(via_to.capacity(), via_to.len(), "{order:?}");
         }
+    }
+}
+
+/// A ring its polygon declares open is written closed. WKB has no open
+/// ring, so it would otherwise read back as an unclosed one.
+#[test]
+fn open_polygon_is_written_closed() {
+    type Open = Polygon<Pt, true, false>;
+    let open = Open {
+        outer: Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(0.0, 2.0),
+            Pt::new(2.0, 2.0),
+            Pt::new(2.0, 0.0),
+        ]),
+        inners: vec![Ring::from_vec(vec![
+            Pt::new(0.5, 0.5),
+            Pt::new(1.5, 0.5),
+            Pt::new(1.0, 1.5),
+        ])],
+    };
+    // An open ring whose last point already repeats its first gets no
+    // second copy.
+    let repeated = Open::new(Ring::from_vec(vec![
+        Pt::new(0.0, 0.0),
+        Pt::new(0.0, 2.0),
+        Pt::new(2.0, 2.0),
+        Pt::new(0.0, 0.0),
+    ]));
+    let closed = Polygon::<Pt>::with_inners(
+        Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(0.0, 2.0),
+            Pt::new(2.0, 2.0),
+            Pt::new(2.0, 0.0),
+            Pt::new(0.0, 0.0),
+        ]),
+        vec![Ring::from_vec(vec![
+            Pt::new(0.5, 0.5),
+            Pt::new(1.5, 0.5),
+            Pt::new(1.0, 1.5),
+            Pt::new(0.5, 0.5),
+        ])],
+    );
+    let closed_repeated = Polygon::<Pt>::new(Ring::from_vec(repeated.outer.0.clone()));
+    for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+        let bytes = to_wkb_polygon(&open, order);
+        assert_eq!(polygon_wkb_len(&open), Some(bytes.len()));
+        assert_eq!(from_wkb(&bytes).unwrap(), Dyn::Polygon(closed.clone()));
+        assert_eq!(
+            from_wkb(&to_wkb_polygon(&repeated, order)).unwrap(),
+            Dyn::Polygon(closed_repeated.clone())
+        );
+
+        let multi = MultiPolygon(vec![open.clone(), repeated.clone()]);
+        let bytes = to_wkb(&multi, order);
+        assert_eq!(multi.wkb_len(), Some(bytes.len()));
+        assert_eq!(
+            from_wkb(&bytes).unwrap(),
+            Dyn::MultiPolygon(MultiPolygon(vec![closed.clone(), closed_repeated.clone()]))
+        );
     }
 }

@@ -207,7 +207,7 @@ pub fn fast_expansion_sum_zeroelim(left: &[f64], right: &[f64], output: &mut [f6
 /// Panics if `output` has fewer than `2 * expansion.len()` slots or if the
 /// input expansion is empty.
 pub fn scale_expansion_zeroelim(expansion: &[f64], scalar: f64, output: &mut [f64]) -> usize {
-    assert!(!expansion.is_empty());
+    assert_ne!(expansion.len(), 0);
     assert!(output.len() >= 2 * expansion.len());
     let mut qh = two_product(expansion[0], scalar);
     let mut output_index = 0;

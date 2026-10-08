@@ -3,9 +3,9 @@
 //!
 //! Wraps [`proj4rs::Proj`]. A CRS is built from a proj4 string, an EPSG
 //! code, or a WKT definition (parsed to a proj string by
-//! [`proj4wkt`]). There is no Boost.Geometry counterpart — Boost defers
-//! projections to its unsupported `extensions/gis/projections/`; the
-//! Rust port fills the gap with the pure-Rust `proj4rs` engine.
+//! [`proj4wkt`]). No Boost.Geometry code is ported here: Boost keeps its
+//! projections in `boost/geometry/srs/`, outside its documented reference,
+//! and the Rust port uses the pure-Rust `proj4rs` engine instead.
 
 use proj4rs::Proj;
 
