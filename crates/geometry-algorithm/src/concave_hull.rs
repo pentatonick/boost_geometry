@@ -3,18 +3,19 @@
 //! Boost.Geometry has no concave-hull algorithm. The edge-refinement shape is
 //! based on Park & Oh (2012), while the `k`-nearest entry exposes the candidate
 //! breadth described by Moreira & Santos (2007). Both variants begin with the
-//! existing convex hull and preserve a simple clockwise boundary.
+//! existing convex hull and preserve a simple clockwise boundary that covers
+//! every input point.
 
 use alloc::vec::Vec;
 
 #[cfg(not(feature = "std"))]
 use geometry_coords::math::Float;
-use geometry_coords::precise_math;
 use geometry_model::{Polygon, Ring};
 use geometry_strategy::{CollectPoints, ConvexHullStrategy, MonotoneChain};
 use geometry_trait::{Point, PointMut};
 
 use crate::convex_hull::convex_hull;
+use crate::exact_orientation::{orientation, segments_intersect};
 
 /// Parameters controlling edge-refinement concave hulls.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -144,6 +145,7 @@ where
                 if detour > concavity
                     || point_segment_distance(candidate, first, second) <= f64::EPSILON
                     || !insertion_is_simple(&boundary, edge, candidate)
+                    || uncovers_a_candidate(first, candidate, second, &candidates)
                 {
                     continue;
                 }
@@ -226,50 +228,24 @@ where
     true
 }
 
-fn segments_intersect<P>(a: P, b: P, c: P, d: P) -> bool
+/// Whether digging `candidate` into the edge `first → second` would leave
+/// another candidate outside the boundary: strictly inside the triangle the
+/// dig removes, or on the edge it replaces. A candidate on either new edge
+/// stays on the boundary.
+fn uncovers_a_candidate<P>(first: P, candidate: P, second: P, candidates: &[P]) -> bool
 where
     P: Point<Scalar = f64> + Copy,
 {
-    let ab_c = orientation(a, b, c);
-    let ab_d = orientation(a, b, d);
-    let cd_a = orientation(c, d, a);
-    let cd_b = orientation(c, d, b);
-    if ab_c == 0.0 && on_segment(a, b, c) {
-        return true;
-    }
-    if ab_d == 0.0 && on_segment(a, b, d) {
-        return true;
-    }
-    if cd_a == 0.0 && on_segment(c, d, a) {
-        return true;
-    }
-    if cd_b == 0.0 && on_segment(c, d, b) {
-        return true;
-    }
-    (ab_c > 0.0) != (ab_d > 0.0) && (cd_a > 0.0) != (cd_b > 0.0)
-}
-
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "the hull operates on Copy point handles throughout"
-)]
-fn orientation<P: Point<Scalar = f64>>(first: P, second: P, third: P) -> f64 {
-    precise_math::orient2d(
-        [first.get::<0>(), first.get::<1>()],
-        [second.get::<0>(), second.get::<1>()],
-        [third.get::<0>(), third.get::<1>()],
-    )
-}
-
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "the hull operates on Copy point handles throughout"
-)]
-fn on_segment<P: Point<Scalar = f64>>(first: P, second: P, point: P) -> bool {
-    point.get::<0>() >= first.get::<0>().min(second.get::<0>())
-        && point.get::<0>() <= first.get::<0>().max(second.get::<0>())
-        && point.get::<1>() >= first.get::<1>().min(second.get::<1>())
-        && point.get::<1>() <= first.get::<1>().max(second.get::<1>())
+    let turn = orientation(first, candidate, second);
+    let with_turn = |value: f64| {
+        if turn > 0.0 { value > 0.0 } else { value < 0.0 }
+    };
+    candidates.iter().any(|&other| {
+        with_turn(orientation(first, candidate, other))
+            && with_turn(orientation(candidate, second, other))
+            && (orientation(second, first, other) == 0.0
+                || with_turn(orientation(second, first, other)))
+    })
 }
 
 #[allow(
@@ -331,6 +307,7 @@ mod tests {
 
     use super::*;
     use crate::area::area;
+    use crate::within::covered_by;
 
     #[test]
     fn square_digs_toward_an_interior_point() {
@@ -351,6 +328,35 @@ mod tests {
         );
         assert!(hull.outer.0.contains(&P::new(2.0, 1.0)));
         assert!(area(&hull).abs() < 16.0);
+    }
+
+    /// A dig removes the triangle between an edge and the point dug in, so
+    /// it is refused while another input point lies inside that triangle or
+    /// on the edge it replaces: `(1, 0.5)` dug into the bottom edge would
+    /// leave `(2, 0)` outside, behind edges too short to dig again, and goes
+    /// into the left edge instead.
+    #[test]
+    fn digging_never_uncovers_an_input_point() {
+        type P = Point2D<f64, Cartesian>;
+        let points = MultiPoint::from_vec(alloc::vec![
+            P::new(0.0, 0.0),
+            P::new(0.0, 4.0),
+            P::new(4.0, 4.0),
+            P::new(4.0, 0.0),
+            P::new(2.0, 0.0),
+            P::new(1.0, 0.5),
+        ]);
+        let hull = concave_hull_with(
+            &points,
+            ConcaveHullParams {
+                concavity: 1.2,
+                length_threshold: 3.5,
+            },
+        );
+        assert!(hull.outer.0.contains(&P::new(1.0, 0.5)));
+        for point in &points.0 {
+            assert!(covered_by(point, &hull), "{point:?} outside {hull:?}");
+        }
     }
 
     #[test]

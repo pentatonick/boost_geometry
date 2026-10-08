@@ -98,7 +98,7 @@ fn disjoint_squares_intersection_is_empty() {
     let a = square(0.0, 0.0, 1.0);
     let b = square(5.0, 5.0, 1.0);
     let rings = intersection_rings(&a, &b);
-    assert!(rings.is_empty());
+    assert_eq!(rings.len(), 0);
 }
 
 /// Open rings (no closing duplicate) carry `n` directed segments, not

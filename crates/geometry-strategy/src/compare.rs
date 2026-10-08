@@ -9,13 +9,15 @@
 //! only that dimension. Spherical and geographic longitude comparison treats
 //! `-180°` and `180°` as the same meridian, orders the antimeridian after
 //! ordinary longitudes, and ignores longitude differences at a shared pole.
+//! Angles compare in the points' own unit when they share one, and in
+//! radians when they do not, as Boost reads them.
 
 use core::cmp::Ordering;
 
 use geometry_coords::{CoordinateScalar, Rational, RationalInteger};
 use geometry_cs::{
     AngleUnit, CartesianFamily, CoordinateSystem, Geographic, GeographicFamily, Spherical,
-    SphericalFamily,
+    SphericalFamily, SpheroidalUnits,
 };
 use geometry_tag::SameAs;
 use geometry_trait::Point;
@@ -356,17 +358,23 @@ where
     P1::Scalar: AngularScalar,
     P2::Scalar: AngularScalar,
 {
-    let left_longitude = P1::Cs::to_radians(left.get::<0>());
-    let right_longitude = P2::Cs::to_radians(right.get::<0>());
+    let ([left_longitude, left_latitude], [right_longitude, right_latitude], half_period) =
+        angular_coordinates(left, right);
     let epsilon = angular_epsilon::<P1::Scalar, P2::Scalar>();
     let coordinates_equal = values_equal(left_longitude, right_longitude, epsilon, exact);
-    let left_antimeridian = is_antimeridian(left_longitude, epsilon, exact);
-    let right_antimeridian = is_antimeridian(right_longitude, epsilon, exact);
+    // Boost tests for the antimeridian and a pole with `math::equals` on
+    // each point's own coordinate type, whatever equality the policy uses
+    // (`util/normalize_spheroidal_coordinates.hpp:161-179`).
+    let left_epsilon = <P1::Scalar as AngularScalar>::EPSILON;
+    let left_antimeridian = is_antimeridian(left_longitude, half_period, left_epsilon);
+    let right_antimeridian = is_antimeridian(
+        right_longitude,
+        half_period,
+        <P2::Scalar as AngularScalar>::EPSILON,
+    );
 
-    let left_latitude = P1::Cs::to_radians(left.get::<1>());
-    let right_latitude = P2::Cs::to_radians(right.get::<1>());
     let same_latitude = values_equal(left_latitude, right_latitude, epsilon, exact);
-    let shared_pole = same_latitude && is_pole(left_latitude, epsilon, exact);
+    let shared_pole = same_latitude && is_pole(left_latitude, half_period, left_epsilon);
 
     if coordinates_equal || (left_antimeridian && right_antimeridian) || shared_pole {
         None
@@ -409,8 +417,7 @@ where
     P1::Scalar: AngularScalar,
     P2::Scalar: AngularScalar,
 {
-    let left_latitude = P1::Cs::to_radians(left.get::<1>());
-    let right_latitude = P2::Cs::to_radians(right.get::<1>());
+    let ([_, left_latitude], [_, right_latitude], _) = angular_coordinates(left, right);
     let epsilon = angular_epsilon::<P1::Scalar, P2::Scalar>();
     if values_equal(left_latitude, right_latitude, epsilon, exact) {
         None
@@ -419,6 +426,45 @@ where
             left_latitude.partial_cmp(&right_latitude),
             relation,
         ))
+    }
+}
+
+/// The longitudes and latitudes of both points as Boost's spherical
+/// compare reads them (`strategies/spherical/compare.hpp`, `detail::get`):
+/// in the points' own unit when they share one, in radians when they do
+/// not; with half a turn in that unit.
+fn angular_coordinates<P1, P2>(left: &P1, right: &P2) -> ([f64; 2], [f64; 2], f64)
+where
+    P1: Point,
+    P2: Point,
+    P1::Cs: AngularCoordinateSystem,
+    P2::Cs: AngularCoordinateSystem,
+    P1::Scalar: AngularScalar,
+    P2::Scalar: AngularScalar,
+{
+    #[allow(
+        clippy::float_cmp,
+        reason = "half a turn is exactly 180 in degrees and exactly π in radians"
+    )]
+    let same_unit = P1::Cs::HALF_PERIOD == P2::Cs::HALF_PERIOD;
+    if same_unit {
+        (
+            [left.get::<0>().to_f64(), left.get::<1>().to_f64()],
+            [right.get::<0>().to_f64(), right.get::<1>().to_f64()],
+            P1::Cs::HALF_PERIOD,
+        )
+    } else {
+        (
+            [
+                P1::Cs::to_radians(left.get::<0>()),
+                P1::Cs::to_radians(left.get::<1>()),
+            ],
+            [
+                P2::Cs::to_radians(right.get::<0>()),
+                P2::Cs::to_radians(right.get::<1>()),
+            ],
+            core::f64::consts::PI,
+        )
     }
 }
 
@@ -497,12 +543,12 @@ fn scaled_equal(left: f64, right: f64, epsilon: f64) -> bool {
             && (left - right).abs() <= epsilon * left.abs().max(right.abs()).max(1.0))
 }
 
-fn is_antimeridian(value: f64, epsilon: f64, exact: bool) -> bool {
-    values_equal(value.abs(), core::f64::consts::PI, epsilon, exact)
+fn is_antimeridian(value: f64, half_period: f64, epsilon: f64) -> bool {
+    scaled_equal(value.abs(), half_period, epsilon)
 }
 
-fn is_pole(value: f64, epsilon: f64, exact: bool) -> bool {
-    values_equal(value.abs(), core::f64::consts::FRAC_PI_2, epsilon, exact)
+fn is_pole(value: f64, half_period: f64, epsilon: f64) -> bool {
+    scaled_equal(value.abs(), half_period / 2.0, epsilon)
 }
 
 fn angular_epsilon<L: AngularScalar, R: AngularScalar>() -> f64 {
@@ -576,18 +622,26 @@ impl<I: RationalInteger> AngularScalar for Rational<I> {
 /// Angle-unit extraction for spherical and geographic coordinate systems.
 #[doc(hidden)]
 pub trait AngularCoordinateSystem: CoordinateSystem {
+    /// Half a turn in the system's unit: `180` in degrees, `π` in radians.
+    #[doc(hidden)]
+    const HALF_PERIOD: f64;
+
     #[doc(hidden)]
     fn to_radians<T: AngularScalar>(value: T) -> f64;
 }
 
-impl<U: AngleUnit> AngularCoordinateSystem for Spherical<U> {
+impl<U: AngleUnit + SpheroidalUnits<f64>> AngularCoordinateSystem for Spherical<U> {
+    const HALF_PERIOD: f64 = U::HALF_PERIOD;
+
     #[inline]
     fn to_radians<T: AngularScalar>(value: T) -> f64 {
         U::to_radians(value.to_f64())
     }
 }
 
-impl<U: AngleUnit> AngularCoordinateSystem for Geographic<U> {
+impl<U: AngleUnit + SpheroidalUnits<f64>> AngularCoordinateSystem for Geographic<U> {
+    const HALF_PERIOD: f64 = U::HALF_PERIOD;
+
     #[inline]
     fn to_radians<T: AngularScalar>(value: T) -> f64 {
         U::to_radians(value.to_f64())

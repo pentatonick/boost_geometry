@@ -608,3 +608,16 @@ fn write_errors_identify_the_prefix_body_or_sink() {
         assert_eq!(error.to_string(), message);
     }
 }
+
+#[test]
+fn open_polygon_is_written_closed() {
+    let open = Polygon::<Pt, true, false>::new(Ring::from_vec(vec![
+        Pt::new(0.0, 0.0),
+        Pt::new(0.0, 2.0),
+        Pt::new(2.0, 2.0),
+    ]));
+    assert_eq!(
+        to_ewkt_polygon(&open, Some(Srid::new(4326))).unwrap(),
+        "SRID=4326;POLYGON((0 0,0 2,2 2,0 0))"
+    );
+}

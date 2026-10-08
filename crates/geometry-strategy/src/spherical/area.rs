@@ -1,49 +1,53 @@
 //! Spherical surface area via the trapezoidal (spherical-excess) rule.
 //!
 //! Mirrors `boost::geometry::strategy::area::spherical` from
-//! `boost/geometry/strategies/spherical/area.hpp` together with the
+//! `boost/geometry/strategy/spherical/area.hpp` together with the
 //! per-segment kernel `formula::area_formulas::spherical<false>` in
-//! `boost/geometry/formulas/area_formulas.hpp:365-416`.
+//! `boost/geometry/formulas/area_formulas.hpp:358-416`.
 //!
 //! For each polygon edge `(p1, p2)` whose endpoints differ in
 //! longitude, Boost accumulates the segment's spherical excess via the
 //! trapezoidal formula
-//! (`area_formulas.hpp:347-356`):
+//! (`area_formulas.hpp:347-355`):
 //!
 //! ```text
 //! e = 2·atan( ((tan(lat1/2) + tan(lat2/2)) / (1 + tan(lat1/2)·tan(lat2/2)))
 //!             · tan(Δlon/2) )
 //! ```
 //!
-//! where `Δlon` is normalised to `(-π, π]`. The running sum of excesses
-//! is multiplied by `R²` to give the surface area
-//! (`strategies/spherical/area.hpp:80-107`). On a unit sphere
+//! where `Δlon` is normalised to `(-π, π]`, and an edge spanning exactly
+//! half a turn of longitude counts `π`. The running sum of excesses is
+//! multiplied by `R²` to give the surface area
+//! (`strategy/spherical/area.hpp:82-110`). On a unit sphere
 //! (`radius = 1`) the result is the *solid angle* the polygon subtends;
 //! a polygon covering `1/8` of the sphere returns `4π/8 = π/2`
 //! (`test/algorithms/area/area_sph_geo.cpp:93-106`).
 //!
+//! A ring whose edges cross the prime meridian an odd number of times
+//! winds around a pole; as in Boost, its area is then the part of the
+//! sphere the ring encircles (`strategy/spherical/area.hpp:85-100`).
+//!
 //! # Sign convention
 //!
-//! Follows the Cartesian [`ShoelaceArea`](crate::area::ShoelaceArea):
-//! a ring traversed in its declared [`PointOrder`] yields a positive
-//! area, the opposite traversal a negative one — Boost's
-//! `closed_clockwise_view` wrap, expressed here as a sign flip for a
-//! [`PointOrder::CounterClockwise`] ring.
+//! Follows Boost: a ring traversed in its declared [`PointOrder`]
+//! yields a positive area, the opposite traversal a negative one, and a
+//! ring below its minimum size (four points closed, three open) has none
+//! (`algorithms/area.hpp:82-118`). Holes contribute negatively, same as
+//! the Cartesian shoelace.
 //!
-//! # Caveats
-//!
-//! This implements Boost's `LongSegment = false` branch — the default.
-//! The pole-encircling correction (`m_crosses_prime_meridian`) is *not*
-//! reproduced: polygons that wind around a pole or cross the antimeridian
-//! an odd number of times are out of scope, matching the "convex
-//! spherical polygon" clamp documented on the spherical centroid. Holes
-//! contribute negatively, same as the Cartesian shoelace.
+//! [`PointOrder`]: geometry_trait::PointOrder
 
+#[cfg(feature = "std")]
 use geometry_cs::{CoordinateSystem, SphericalFamily};
+#[cfg(feature = "std")]
 use geometry_tag::SameAs;
-use geometry_trait::{Closure, Point, PointOrder, Polygon, Ring};
+#[cfg(feature = "std")]
+use geometry_trait::{Point, Polygon, Ring};
 
+#[cfg(feature = "std")]
 use crate::area::AreaStrategy;
+
+use super::Haversine;
 
 // Rust coherence cannot prove a single type is not both a `Ring` and a
 // `Polygon`, so — exactly as the Cartesian `ShoelaceArea` /
@@ -51,7 +55,14 @@ use crate::area::AreaStrategy;
 // spherical area is two sibling types, one per geometry kind.
 
 #[cfg(feature = "std")]
+use geometry_coords::CoordinateScalar;
+
+#[cfg(feature = "std")]
+use crate::clockwise_view::clockwise_points;
+#[cfg(feature = "std")]
 use crate::normalise::{HasAngularUnits, lonlat_radians};
+#[cfg(feature = "std")]
+use crate::spherical_excess::{crosses_prime_meridian, edge_excess, pole_corrected};
 
 /// Spherical surface area via the trapezoidal spherical-excess rule.
 ///
@@ -61,7 +72,7 @@ use crate::normalise::{HasAngularUnits, lonlat_radians};
 /// `Default::default()` produces [`SphericalArea::EARTH`].
 ///
 /// Mirrors `boost::geometry::strategy::area::spherical<>` from
-/// `strategies/spherical/area.hpp`.
+/// `strategy/spherical/area.hpp`.
 #[derive(Debug, Clone, Copy)]
 pub struct SphericalArea {
     /// Sphere radius. The area comes back in these units squared.
@@ -69,11 +80,10 @@ pub struct SphericalArea {
 }
 
 impl SphericalArea {
-    /// Mean Earth radius in metres, matching Boost's spherical Earth
-    /// convention (`test/algorithms/area/area_sph_geo.cpp` uses
-    /// per-test radii; `6_371_000` m is the WGS84 mean radius).
+    /// The Earth sphere of [`Haversine::EARTH`], in metres, so a
+    /// spherical polygon's default area and perimeter share one sphere.
     pub const EARTH: Self = Self {
-        radius: 6_371_000.0,
+        radius: Haversine::EARTH.radius,
     };
 
     /// Unit sphere (`radius = 1`): the area is then the solid angle
@@ -103,9 +113,9 @@ pub struct SphericalPolygonArea {
 }
 
 impl SphericalPolygonArea {
-    /// Mean Earth radius in metres. See [`SphericalArea::EARTH`].
+    /// The Earth sphere, in metres. See [`SphericalArea::EARTH`].
     pub const EARTH: Self = Self {
-        radius: 6_371_000.0,
+        radius: SphericalArea::EARTH.radius,
     };
 
     /// Unit sphere. See [`SphericalArea::UNIT`].
@@ -121,10 +131,10 @@ impl Default for SphericalPolygonArea {
 
 // ---- Ring ------------------------------------------------------------
 
-// `std`-gated: the excess kernel it calls (`excess_accumulator` /
-// `segment_excess`) needs `f64::tan`/`atan`, which `geometry-coords`
-// does not shim under `libm`. Mirrors the identical gate on the
-// geographic sibling (`geographic::area::GeographicArea`'s impl).
+// `std`-gated: the excess kernel needs `f64::tan`/`atan`, which
+// `geometry-coords` does not shim under `libm`. Mirrors the identical
+// gate on the geographic sibling (`geographic::area::GeographicArea`'s
+// impl).
 #[cfg(feature = "std")]
 impl<R> AreaStrategy<R> for SphericalArea
 where
@@ -136,24 +146,32 @@ where
 {
     type Out = f64;
 
+    /// Mirrors `strategy::area::spherical::apply` and `result`
+    /// (`strategy/spherical/area.hpp:82-110`, `:134-160`): edges along a
+    /// meridian add
+    /// nothing, the rest add their excess and count their prime-meridian
+    /// crossings.
     #[inline]
     fn area(&self, r: &R) -> f64 {
-        let excess = excess_accumulator::<R>(r);
-        let signed = excess * self.radius * self.radius;
-        match r.point_order() {
-            PointOrder::Clockwise => signed,
-            PointOrder::CounterClockwise => -signed,
+        let mut sum = 0.0;
+        let mut crossings = 0;
+        for edge in clockwise_points(r).windows(2) {
+            let (first, second) = (edge[0], edge[1]);
+            if first.get::<0>().tolerant_eq(second.get::<0>()) {
+                continue;
+            }
+            let (lon1, lat1) = lonlat_radians(first);
+            let (lon2, lat2) = lonlat_radians(second);
+            sum += edge_excess(lon1, lat1, lon2, lat2);
+            if crosses_prime_meridian(lon1, lon2) {
+                crossings += 1;
+            }
         }
+        pole_corrected(sum, crossings, 2.0 * core::f64::consts::PI) * (self.radius * self.radius)
     }
 }
 
 // ---- Polygon ---------------------------------------------------------
-//
-// Mirrors Boost's polygon area recursion: outer ring positive, each
-// inner ring subtracted. Interior rings are conventionally wound
-// opposite the exterior, so `ShoelaceArea`'s "plain sum of signed ring
-// areas" trick applies here too — the excess of an oppositely-wound
-// hole already carries the opposite sign.
 
 #[cfg(feature = "std")]
 impl<P> AreaStrategy<P> for SphericalPolygonArea
@@ -168,92 +186,11 @@ where
         let ring = SphericalArea {
             radius: self.radius,
         };
-        let mut total = ring.area(p.exterior());
-        for inner in p.interiors() {
-            total += ring.area(inner);
-        }
-        total
+        // The interiors summed from zero, then added to the exterior:
+        // `calculate_polygon_sum` (`algorithms/detail/calculate_sum.hpp:36-55`).
+        let interiors = p.interiors().fold(0.0, |sum, inner| sum + ring.area(inner));
+        ring.area(p.exterior()) + interiors
     }
-}
-
-/// Sum the per-segment spherical excess over the consecutive vertex
-/// pairs of `r`, mirroring the `apply` accumulation in
-/// `strategies/spherical/area.hpp:127-150` and the `spherical<false>`
-/// kernel in `area_formulas.hpp:365-416`.
-///
-/// For an open ring the implicit `last -> first` closing pair is added
-/// explicitly, mirroring the way [`crate::area`] closes an open ring.
-///
-/// The kernel only reads `(lon, lat)` in radians, so it is *family-
-/// agnostic* — the geographic authalic-sphere area
-/// ([`crate::geographic::GeographicArea`]) reuses it on the authalic
-/// sphere. The family fences live on the public `AreaStrategy` impls,
-/// not here.
-#[cfg(feature = "std")]
-#[inline]
-pub(crate) fn excess_accumulator<R>(r: &R) -> f64
-where
-    R: Ring,
-    R::Point: Point<Scalar = f64>,
-    <R::Point as Point>::Cs: HasAngularUnits,
-{
-    let mut acc = 0.0;
-    let it = r.points();
-    let next = it.clone().skip(1);
-    for (a, b) in it.zip(next) {
-        acc += segment_excess::<R::Point>(a, b);
-    }
-    if matches!(r.closure(), Closure::Open) {
-        let mut points = r.points();
-        if let Some(first) = points.next() {
-            let last = points.last().unwrap_or(first);
-            acc += segment_excess::<R::Point>(last, first);
-        }
-    }
-    acc
-}
-
-/// One segment's spherical excess via Boost's trapezoidal formula
-/// (`area_formulas.hpp:347-356`, `:395-403`). Returns `0` for a
-/// meridional edge (`lon1 == lon2`), mirroring the `! math::equals(
-/// get<0>(p1), get<0>(p2))` guard at
-/// `strategies/spherical/area.hpp:129`.
-// The `lon1 == lon2` check mirrors Boost's `! math::equals(get<0>(p1),
-// get<0>(p2))` guard at `strategies/spherical/area.hpp:129`
-// letter-for-letter — an intentional exact float comparison, the same
-// stance the Andoyer distance kernel takes.
-#[allow(clippy::float_cmp)]
-#[cfg(feature = "std")]
-#[inline]
-fn segment_excess<P>(a: &P, b: &P) -> f64
-where
-    P: Point<Scalar = f64>,
-    P::Cs: HasAngularUnits,
-{
-    let (lon1, lat1) = lonlat_radians(a);
-    let (lon2, lat2) = lonlat_radians(b);
-
-    // Meridional segments contribute no excess — mirrors the
-    // `! equals(get<0>(p1), get<0>(p2))` guard in area.hpp:129.
-    if lon1 == lon2 {
-        return 0.0;
-    }
-
-    // Δlon normalised to (-π, π], mirroring
-    // `math::normalize_longitude` in area_formulas.hpp:378.
-    let mut dlon = lon2 - lon1;
-    let pi = core::f64::consts::PI;
-    let two_pi = 2.0 * pi;
-    while dlon > pi {
-        dlon -= two_pi;
-    }
-    while dlon <= -pi {
-        dlon += two_pi;
-    }
-
-    let tan_lat1 = (lat1 / 2.0).tan();
-    let tan_lat2 = (lat2 / 2.0).tan();
-    2.0 * (((tan_lat1 + tan_lat2) / (1.0 + tan_lat1 * tan_lat2)) * (dlon / 2.0).tan()).atan()
 }
 
 #[cfg(all(test, feature = "std"))]
@@ -264,9 +201,14 @@ mod tests {
         clippy::float_cmp,
         reason = "areas are compared with an explicit relative tolerance, not `==`"
     )]
+    #![allow(
+        clippy::excessive_precision,
+        reason = "reference values are copied verbatim from Boost's output"
+    )]
 
     use super::{SphericalArea, SphericalPolygonArea};
     use crate::area::AreaStrategy;
+    use crate::spherical::Haversine;
     use geometry_adapt::{Adapt, WithCs};
     use geometry_cs::{Degree, Spherical};
     use geometry_model::{Polygon, Ring};
@@ -329,11 +271,80 @@ mod tests {
         assert!((got - expected).abs() / expected < 1e-6, "got {got}");
     }
 
-    /// Both strategies default to the mean-Earth radius.
+    /// Both strategies default to the Earth sphere the spherical distance
+    /// and perimeter use.
     #[test]
-    fn defaults_are_mean_earth_radius() {
-        assert_eq!(SphericalArea::default().radius, 6_371_000.0);
-        assert_eq!(SphericalPolygonArea::default().radius, 6_371_000.0);
+    fn defaults_are_the_haversine_earth() {
+        assert_eq!(SphericalArea::default().radius, Haversine::EARTH.radius);
+        assert_eq!(
+            SphericalPolygonArea::default().radius,
+            Haversine::EARTH.radius
+        );
+    }
+
+    /// A ring around the north pole crosses the prime meridian once, so
+    /// its area is the cap it encloses: positive walked westward
+    /// (clockwise seen from outside the sphere), negative eastward. Boost
+    /// (`aed7bc3`) gives `±0.061232934148970131` on the unit sphere.
+    #[test]
+    fn a_ring_around_a_pole_has_the_area_it_encircles() {
+        let west: Ring<Sp> = Ring::from_vec(vec![
+            sp(0., 80.),
+            sp(-90., 80.),
+            sp(-180., 80.),
+            sp(90., 80.),
+            sp(0., 80.),
+        ]);
+        let mut east = west.clone();
+        east.0.reverse();
+        let expected = 0.061_232_934_148_970_131;
+        let got = SphericalArea::UNIT.area(&west);
+        assert!((got - expected).abs() < 1e-15, "got {got}");
+        let got = SphericalArea::UNIT.area(&east);
+        assert!((got + expected).abs() < 1e-15, "got {got}");
+    }
+
+    /// A closed ring of fewer than four points encloses nothing, as in
+    /// Boost's `ring_area`.
+    #[test]
+    fn a_ring_too_short_has_no_area() {
+        let short: Ring<Sp> = Ring::from_vec(vec![sp(0., 0.), sp(1., 1.), sp(0., 0.)]);
+        assert_eq!(SphericalArea::UNIT.area(&short), 0.0);
+        let two: Ring<Sp> = Ring::from_vec(vec![sp(0., 0.), sp(1., 1.)]);
+        assert_eq!(SphericalArea::UNIT.area(&two), 0.0);
+    }
+
+    /// The interiors are summed from zero and then added to the exterior,
+    /// as `calculate_polygon_sum` adds them
+    /// (`algorithms/detail/calculate_sum.hpp:36-55`); added one by one, these
+    /// two holes round to `0.03004801376321785`. Boost (`aed7bc3`), on the
+    /// unit sphere: `0.030048013763217845`.
+    #[test]
+    fn interiors_are_summed_before_the_exterior() {
+        let ring = |points: &[(f64, f64)]| -> Ring<Sp> {
+            Ring::from_vec(points.iter().map(|&(lon, lat)| sp(lon, lat)).collect())
+        };
+        let pg: Polygon<Sp> = Polygon::with_inners(
+            ring(&[(0., 0.), (0., 10.), (10., 10.), (10., 0.), (0., 0.)]),
+            vec![
+                ring(&[
+                    (2.298, 3.689),
+                    (2.59, 2.906),
+                    (3.999, 3.705),
+                    (2.298, 3.689),
+                ]),
+                ring(&[
+                    (7.952, 6.907),
+                    (6.976, 7.459),
+                    (6.958, 6.582),
+                    (7.952, 6.907),
+                ]),
+            ],
+        );
+        assert_eq!(
+            SphericalPolygonArea::UNIT.area(&pg),
+            0.030_048_013_763_217_845
+        );
     }
 
     /// Holes contribute negatively: a polygon's area is its outer ring's

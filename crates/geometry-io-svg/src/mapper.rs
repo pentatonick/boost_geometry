@@ -229,9 +229,11 @@ struct Transform {
 
 impl Transform {
     /// Build the fit transform for `bbox` onto a `width` × `height`
-    /// canvas. A degenerate or absent box (a single point, or a zero
-    /// extent on either axis) falls back to unit scale so the drawing
-    /// still lands on the canvas rather than dividing by zero.
+    /// canvas. An axis with no extent (a horizontal or vertical line)
+    /// does not limit the scale, as its infinite scale does not in
+    /// Boost's `map_transformer`; a box with no extent on either axis (a
+    /// single point, or nothing at all) falls back to unit scale, so the
+    /// drawing still lands on the canvas rather than dividing by zero.
     fn fit(bbox: Option<(f64, f64, f64, f64)>, width: f64, height: f64) -> Self {
         let margin = MARGIN_FRACTION * width.min(height);
         let (min_x, min_y, max_x, max_y) = bbox.unwrap_or((0.0, 0.0, 0.0, 0.0));
@@ -239,14 +241,13 @@ impl Transform {
         let span_x = max_x - min_x;
         let span_y = max_y - min_y;
 
-        // Guard against a zero extent on either axis (single point, a
-        // horizontal or vertical line): fall back to unit scale.
-        let scale = if span_x > 0.0 && span_y > 0.0 {
-            let scale_x = (width - 2.0 * margin) / span_x;
-            let scale_y = (height - 2.0 * margin) / span_y;
-            scale_x.min(scale_y)
-        } else {
-            1.0
+        let scale_x = (width - 2.0 * margin) / span_x;
+        let scale_y = (height - 2.0 * margin) / span_y;
+        let scale = match (span_x > 0.0, span_y > 0.0) {
+            (true, true) => scale_x.min(scale_y),
+            (true, false) => scale_x,
+            (false, true) => scale_y,
+            (false, false) => 1.0,
         };
 
         Self {
@@ -734,6 +735,23 @@ mod tests {
             mapper
                 .to_svg()
                 .contains("<circle cx=\"30\" cy=\"270\" r=\"5\" style=\"fill:red\" />")
+        );
+    }
+
+    /// A horizontal line has no height, which must not stop it fitting
+    /// the width: on a 300×200 canvas (margin 20) the line from `(0 7)` to
+    /// `(100 7)` scales by `260/100`, from the left margin to the right.
+    #[test]
+    fn a_line_with_no_height_still_fits_the_width() {
+        let mut mapper = SvgMapper::new(300, 200);
+        mapper.add(
+            &Linestring(vec![Pt::new(0.0, 7.0), Pt::new(100.0, 7.0)]),
+            "stroke:black",
+        );
+        let svg = mapper.to_svg();
+        assert!(
+            svg.contains("<polyline points=\"20,180 280,180\" style=\"stroke:black\" />"),
+            "{svg}"
         );
     }
 }

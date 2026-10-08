@@ -5,12 +5,16 @@
 
 use geometry_cs::Spheroid;
 
+#[cfg(feature = "std")]
 use super::direct::DirectResult;
 
 #[cfg(feature = "std")]
-use super::direct::normalize_longitude;
+use geometry_coords::CoordinateScalar;
+
 #[cfg(feature = "std")]
 use super::spheroid_calc::SpheroidCalc;
+#[cfg(feature = "std")]
+use crate::normalise::normalize_angle_cond;
 
 /// Forsyth–Andoyer–Lambert direct approximation with Thomas's second-order
 /// terms.
@@ -71,7 +75,11 @@ impl ThomasDirect {
             false
         };
 
-        let theta1 = if lat1_alt == pi_half || lat1_alt == -pi_half {
+        // Boost tests these three degenerate cases with `math::equals`, the
+        // tolerance `tolerant_eq` mirrors, not exactly: at a pole `cos θ1`
+        // is about 6e-17 rather than 0, and dividing by the resulting `M`
+        // below sends the destination latitude kilometres off.
+        let theta1 = if lat1_alt.tolerant_eq(pi_half) || lat1_alt.tolerant_eq(-pi_half) {
             lat1_alt
         } else {
             (one_minus_f * lat1_alt.tan()).atan()
@@ -94,7 +102,7 @@ impl ThomasDirect {
             (d, c2 / d)
         };
 
-        let cos_sigma1 = if sin_theta0 == 0.0 {
+        let cos_sigma1 = if sin_theta0.tolerant_eq(0.0) {
             1.0
         } else {
             (sin_theta1 / sin_theta0).clamp(-1.0, 1.0)
@@ -136,7 +144,7 @@ impl ThomasDirect {
         let d_eta = (sin_d_sigma * sin_a12)
             .atan2(cos_theta1 * cos_d_sigma - sin_theta1 * sin_d_sigma * cos_a12);
         let d_lambda = d_eta - h;
-        let mut lat2 = if m != 0.0 {
+        let mut lat2 = if !m.tolerant_eq(0.0) {
             let sin_a21 = reverse_azimuth.sin();
             let tan_theta2 = (sin_theta1 * cos_d_sigma + n * sin_d_sigma) * sin_a21 / m;
             (tan_theta2 / one_minus_f).atan()
@@ -149,15 +157,17 @@ impl ThomasDirect {
             lat2 = -lat2;
         }
 
-        DirectResult::solved(
+        let mut result = DirectResult::solved::<2>(
             lon1,
             lat1,
             azimuth12,
             self.spheroid,
-            normalize_longitude(lon1 + d_lambda),
+            lon1 + d_lambda,
             lat2,
             reverse_azimuth,
-        )
+        );
+        result.lon2 = normalize_angle_cond(result.lon2);
+        result
     }
 }
 

@@ -121,3 +121,32 @@ fn radian_box_normalization_uses_pi_constants() {
     assert_close(lon1, -PI);
     assert_close(lon2, PI);
 }
+
+/// Boost recognizes the antimeridian, the poles and a full turn through
+/// `math::equals`, so a float a rounding step off still counts. Boost
+/// (`aed7bc3`) gives each of these; an exact test would leave one ulp above
+/// 180° on the far side of the antimeridian, at −180°, and read neither the
+/// band nor the poles.
+#[test]
+fn boundaries_are_recognized_up_to_rounding() {
+    let above = 180.000_000_000_000_03; // next float above 180
+    let (mut lon1, mut lat1, mut lon2, mut lat2) = (above, 0.0, -170.0, 10.0);
+    normalize_spheroidal_box_coordinates::<Degree, _>(&mut lon1, &mut lat1, &mut lon2, &mut lat2);
+    assert_eq!((lon1, lon2), (180.0, 190.0));
+
+    let below = 179.999_999_999_999_97; // next float below 180
+    let (mut lon1, mut lat1, mut lon2, mut lat2) = (-180.0, 0.0, below, 10.0);
+    normalize_spheroidal_box_coordinates::<Degree, _>(&mut lon1, &mut lat1, &mut lon2, &mut lat2);
+    assert_eq!((lon1, lon2), (-180.0, 180.0));
+
+    let near_pole = 89.999_999_999_999_99; // next float below 90
+    let (mut lon1, mut lat1, mut lon2, mut lat2) = (20.0, near_pole, 160.0, 90.0);
+    normalize_spheroidal_box_coordinates::<Degree, _>(&mut lon1, &mut lat1, &mut lon2, &mut lat2);
+    assert_eq!((lon1, lat1, lon2, lat2), (0.0, near_pole, 0.0, 90.0));
+
+    // Beyond the tolerance the turn is taken as given: 540 and the next
+    // float above it differ by more than an epsilon of 180.
+    let (mut lon1, mut lat1, mut lon2, mut lat2) = (540.000_000_000_000_1, 0.0, 550.0, 10.0);
+    normalize_spheroidal_box_coordinates::<Degree, _>(&mut lon1, &mut lat1, &mut lon2, &mut lat2);
+    assert_eq!((lon1, lon2), (-179.999_999_999_999_9, -170.0));
+}

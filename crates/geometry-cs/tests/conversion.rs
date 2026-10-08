@@ -39,9 +39,17 @@ fn radian_identity() {
 fn wgs84_constants() {
     let s = Spheroid::WGS84;
     assert!((s.equatorial_radius - 6_378_137.0).abs() < f64::EPSILON);
-    assert!((s.flattening - 1.0 / 298.257_223_563).abs() < 1e-18);
-    // Polar radius known value: 6_356_752.314_245 m.
-    assert!((s.polar_radius() - 6_356_752.314_245).abs() < 1e-3);
+    // Boost's default spheroid stores `b = 6356752.3142451793` and its
+    // formulas take `f = (a - b) / a`. Boost (`aed7bc3`):
+    // `0.0033528106647475126`.
+    assert_eq!(
+        s.flattening.to_bits(),
+        0.003_352_810_664_747_512_6_f64.to_bits()
+    );
+    assert_eq!(
+        s.polar_radius().to_bits(),
+        6_356_752.314_245_179_f64.to_bits()
+    );
 }
 
 #[test]

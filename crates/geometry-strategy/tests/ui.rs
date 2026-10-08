@@ -10,4 +10,5 @@
 fn ui() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/cartesian_only.rs");
+    t.compile_fail("tests/ui/integer_point_to_segment.rs");
 }

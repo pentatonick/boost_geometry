@@ -37,11 +37,9 @@ pub trait ConvexHullStrategy<G> {
 /// Andrew's monotone chain. Cartesian-only — the orientation predicate
 /// `((b − a) × (c − b))` is a 2-D Cartesian cross product.
 ///
-/// This implementation drops collinear boundary points (`<= 0` in the
-/// cross-product check), so the hull carries only its true corners.
-/// Boost's `hull_graham_andrew.hpp` uses a strict `< 0` and keeps
-/// collinear points on the boundary; the port trades that for a minimal
-/// vertex set.
+/// Collinear boundary points are dropped (`<= 0` in the cross-product
+/// check), so the hull carries only its true corners — as in Boost's
+/// `graham_andrew::add_to_hull`, which pops on `Factor * side <= 0`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MonotoneChain;
 
@@ -86,14 +84,15 @@ impl<P: Point + Copy, const CW: bool, const CL: bool> CollectPoints for Polygon<
     }
 }
 
-/// 2-D cross product of `(b − a)` and `(c − b)`. Positive = CCW turn,
-/// negative = CW turn, zero = collinear.
-fn cross_2d<P: Point>(a: &P, b: &P, c: &P) -> P::Scalar {
-    let ux = b.get::<0>() - a.get::<0>();
-    let uy = b.get::<1>() - a.get::<1>();
-    let vx = c.get::<0>() - b.get::<0>();
-    let vy = c.get::<1>() - b.get::<1>();
-    ux * vy - uy * vx
+/// Whether `a → b → c` turns clockwise or runs straight on: `b` is no
+/// corner of a counter-clockwise hull.
+///
+/// The side test is Boost's hull side strategy, `side_robust`
+/// ([`CoordinateScalar::side_robust`]): exact, so a point a rounding error
+/// outside a hull edge is a corner of it.
+fn no_left_turn<P: Point>(a: &P, b: &P, c: &P) -> bool {
+    let xy = |q: &P| (q.get::<0>(), q.get::<1>());
+    P::Scalar::side_robust(xy(a), xy(b), xy(c)) != core::cmp::Ordering::Greater
 }
 
 /// Andrew's monotone chain over `pts`. Returns the hull vertices in
@@ -117,7 +116,7 @@ where
     // 2/3. Lower hull, walking left to right.
     let mut h: Vec<P> = Vec::with_capacity(pts.len() * 2);
     for &p in &pts {
-        while h.len() >= 2 && cross_2d(&h[h.len() - 2], &h[h.len() - 1], &p) <= P::Scalar::ZERO {
+        while h.len() >= 2 && no_left_turn(&h[h.len() - 2], &h[h.len() - 1], &p) {
             h.pop();
         }
         h.push(p);
@@ -126,9 +125,7 @@ where
     // 4. Upper hull, walking right to left.
     let lower_len = h.len() + 1;
     for &p in pts.iter().rev().skip(1) {
-        while h.len() >= lower_len
-            && cross_2d(&h[h.len() - 2], &h[h.len() - 1], &p) <= P::Scalar::ZERO
-        {
+        while h.len() >= lower_len && no_left_turn(&h[h.len() - 2], &h[h.len() - 1], &p) {
             h.pop();
         }
         h.push(p);
@@ -151,23 +148,27 @@ where
     fn convex_hull(&self, g: &G) -> Self::Output {
         let mut pts = Vec::new();
         g.collect_points(&mut pts);
-        if pts.len() < 3 {
-            // Degenerate: a 0-, 1-, or 2-point hull is the input itself,
-            // closed onto its first vertex like every other hull so the
-            // closed-declared output ring keeps its invariant.
-            let mut ring = pts;
-            if let Some(&first) = ring.first() {
-                ring.push(first);
-            }
-            return Ring::from_vec(ring);
+        // `monotone_chain` returns a CCW hull from the lowest-leftmost
+        // point. The clockwise output ring starts there too — Boost's
+        // `graham_andrew::output_ranges` emits the upper hull from that
+        // point first — so it stays put and the rest is reversed.
+        let mut hull = if pts.len() > 1 {
+            monotone_chain(pts)
+        } else {
+            pts
+        };
+        if let Some(rest) = hull.get_mut(1..) {
+            rest.reverse();
         }
-
-        // `monotone_chain` returns a CCW hull; reverse for the
-        // clockwise output ring, then repeat the first point to close.
-        let mut hull = monotone_chain(pts);
-        hull.reverse();
-        let first = hull[0];
-        hull.push(first);
+        if let Some(&first) = hull.first() {
+            hull.push(first);
+            // A hull of one or two distinct points is padded with its
+            // first point to the minimum closed ring size, as
+            // `output_ranges` pads it.
+            while hull.len() < 4 {
+                hull.push(first);
+            }
+        }
         Ring::from_vec(hull)
     }
 }
@@ -220,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn hull_of_two_points_is_the_input_closed() {
+    fn hull_of_two_points_is_padded_to_a_closed_ring() {
         let mp = multi_point(&[(0., 0.), (1., 1.)]);
         let hull = MonotoneChain.convex_hull(&mp);
         let pts: alloc::vec::Vec<(f64, f64)> = hull
@@ -228,7 +229,7 @@ mod tests {
             .iter()
             .map(|p| (p.get::<0>(), p.get::<1>()))
             .collect();
-        assert_eq!(pts, alloc::vec![(0., 0.), (1., 1.), (0., 0.)]);
+        assert_eq!(pts, alloc::vec![(0., 0.), (1., 1.), (0., 0.), (0., 0.)]);
     }
 
     /// The hull is emitted clockwise and closed, carrying only the

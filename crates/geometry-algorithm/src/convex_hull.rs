@@ -84,27 +84,39 @@ mod tests {
         assert!(!has_reflex);
     }
 
-    /// A 0-, 1-, or 2-point input passes through the degenerate guard
-    /// unchanged.
+    /// A hull of fewer than three distinct points is padded to the
+    /// minimum closed ring size with its first point, as Boost pads it:
+    /// `(3 4,3 4,3 4,3 4)` and `(0 0,1 1,0 0,0 0)`.
     #[test]
-    fn hull_of_fewer_than_three_points_is_the_input_closed() {
-        let empty = MultiPoint::<Pt>(alloc::vec![]);
-        assert_eq!(convex_hull(&empty).points().count(), 0);
-        let one = MultiPoint(alloc::vec![Pt::new(3., 4.)]);
-        let hull = convex_hull(&one);
-        assert_eq!(hull.points().count(), 2);
-        assert_eq!(hull.0[0].get::<0>(), 3.0);
-        assert_eq!(hull.0[1].get::<0>(), 3.0);
-        // Two points: the closed-declared ring still repeats its first
-        // vertex (Boost: `(0 0,1 1,0 0,0 0)` — closed either way).
-        let two = MultiPoint(alloc::vec![Pt::new(0., 0.), Pt::new(1., 1.)]);
-        let hull = convex_hull(&two);
-        let pts: alloc::vec::Vec<(f64, f64)> = hull
-            .0
-            .iter()
-            .map(|p| (p.get::<0>(), p.get::<1>()))
-            .collect();
-        assert_eq!(pts, alloc::vec![(0., 0.), (1., 1.), (0., 0.)]);
+    fn hull_of_fewer_than_three_points_is_padded_to_a_closed_ring() {
+        let coordinates = |mp: &MultiPoint<Pt>| -> alloc::vec::Vec<(f64, f64)> {
+            convex_hull(mp)
+                .0
+                .iter()
+                .map(|p| (p.get::<0>(), p.get::<1>()))
+                .collect()
+        };
+        assert_eq!(coordinates(&MultiPoint(alloc::vec![])), alloc::vec![]);
+        assert_eq!(
+            coordinates(&MultiPoint(alloc::vec![Pt::new(3., 4.)])),
+            alloc::vec![(3., 4.); 4]
+        );
+        // The hull starts at the lowest-leftmost point, whichever order
+        // the input gives it in.
+        assert_eq!(
+            coordinates(&MultiPoint(alloc::vec![Pt::new(1., 1.), Pt::new(0., 0.)])),
+            alloc::vec![(0., 0.), (1., 1.), (0., 0.), (0., 0.)]
+        );
+        // Collinear points have the same hull as their two ends.
+        assert_eq!(
+            coordinates(&MultiPoint(alloc::vec![
+                Pt::new(0., 0.),
+                Pt::new(1., 1.),
+                Pt::new(2., 2.),
+                Pt::new(3., 3.)
+            ])),
+            alloc::vec![(0., 0.), (3., 3.), (0., 0.), (0., 0.)]
+        );
     }
 
     /// The hull of a linestring: only its convex corners survive.

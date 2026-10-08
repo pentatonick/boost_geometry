@@ -176,7 +176,7 @@ fn convex_hull_excludes_interior_point() {
 
 #[test]
 fn is_convex_square_true_reflex_false() {
-    let square: Polygon<Pt> = polygon![[(0., 0.), (4., 0.), (4., 4.), (0., 4.), (0., 0.)]];
+    let square: Polygon<Pt> = polygon![[(0., 0.), (0., 4.), (4., 4.), (4., 0.), (0., 0.)]];
     assert!(is_convex(&square));
     let reflex: Polygon<Pt> =
         polygon![[(0., 0.), (4., 0.), (2., 1.), (4., 4.), (0., 4.), (0., 0.)]];

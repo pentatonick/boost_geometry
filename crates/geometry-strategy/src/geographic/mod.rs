@@ -21,6 +21,7 @@ mod inverse_karney;
 pub mod length;
 mod meridian;
 pub mod rhumb;
+#[cfg(feature = "std")]
 pub mod spheroid_calc;
 mod vertex;
 

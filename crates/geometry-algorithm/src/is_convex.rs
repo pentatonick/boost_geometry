@@ -1,22 +1,23 @@
 //! `is_convex(&g) -> bool`.
 //!
 //! Mirrors `boost::geometry::is_convex(g)` from
-//! `boost/geometry/algorithms/is_convex.hpp`. A ring is convex iff every
-//! consecutive cross-product `((b − a) × (c − b))` has the same sign
-//! (zero allowed — collinear interior vertices don't disqualify). A
-//! polygon is convex iff its outer ring is convex AND it has no interior
-//! rings.
+//! `boost/geometry/algorithms/is_convex.hpp`. A ring is convex iff,
+//! walked clockwise, it never turns left (a straight run is allowed —
+//! collinear vertices don't disqualify), so a ring wound against its
+//! declared point order is not convex. A polygon is convex iff its outer
+//! ring is convex AND it has no interior rings, and a multi-polygon iff it
+//! has no member or one convex member.
 //!
-//! This is Cartesian-only: the cross-product predicate is the same in
-//! every Cartesian coordinate system, and spherical / geographic
-//! convexity is a different algorithm not yet in Boost, so no strategy
-//! layer is needed — Boost itself ships `is_convex` as a plain free
-//! function.
+//! Cartesian only, and angular input does not compile: Boost also tests
+//! spherical and geographic rings, with the spherical side formula and a
+//! geodesic side strategy, which this port does not carry.
 
 use alloc::vec::Vec;
 
 use geometry_coords::CoordinateScalar;
+use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{MultiPolygon, Polygon, Ring};
+use geometry_tag::SameAs;
 use geometry_trait::{Point as PointTrait, Polygon as _, Ring as RingTrait};
 
 /// True iff `g` is convex.
@@ -36,63 +37,95 @@ pub trait IsConvex {
     fn is_convex(&self) -> bool;
 }
 
-/// Convexity test for a ring: every consecutive cross-product shares one
-/// sign (zero permitted). A closing duplicate is dropped first and the
-/// walk indexes modularly, so the seam vertex's own turn is examined —
-/// kept, the duplicate makes both windows touching the seam degenerate
-/// and a reflex first vertex goes unnoticed.
+/// Convexity test for a ring: walked clockwise, no left turn.
+///
+/// C++: `ring_is_convex` (`algorithms/is_convex.hpp:46-120`). A ring
+/// below its closure's minimum size is convex. The walk goes round the
+/// ring as `closed_clockwise_view` presents it — closed, and reversed when
+/// counter-clockwise — on an ever-circling iterator: from the first point
+/// to the next one not equal to it by `math::equals`, and on, each step to
+/// the next point not equal to the current one, testing every turn with
+/// Boost's exact `side_robust`. Which of two points equal within an epsilon
+/// is kept depends on the direction of the walk, and the exact side test
+/// can tell them apart, so the walk keeps Boost's direction.
 fn ring_is_convex<P: PointTrait, const CW: bool, const CL: bool>(ring: &Ring<P, CW, CL>) -> bool {
-    let mut pts: Vec<&P> = ring.points().collect();
-    if pts.len() >= 2 {
-        let (first, last) = (pts[0], pts[pts.len() - 1]);
-        if first.get::<0>() == last.get::<0>() && first.get::<1>() == last.get::<1>() {
-            pts.pop();
-        }
-    }
-    let len = pts.len();
-    if len < 3 {
+    let n = ring.points().len();
+    let minimum_size = if CL { 4 } else { 3 };
+    if n < minimum_size {
         return true;
     }
+    let mut view: Vec<&P> = ring.points().collect();
+    if !CL {
+        view.push(view[0]);
+    }
+    if !CW {
+        view.reverse();
+    }
+    let at = |index: usize| view[index % view.len()];
+    let same = |a: &P, b: &P| {
+        a.get::<0>().tolerant_eq(b.get::<0>()) && a.get::<1>().tolerant_eq(b.get::<1>())
+    };
+    let xy = |q: &P| (q.get::<0>(), q.get::<1>());
 
-    let zero = P::Scalar::ZERO;
-    let mut sign: Option<bool> = None; // Some(true) = positive turn
-    for index in 0..len {
-        let prev = pts[index];
-        let curr = pts[(index + 1) % len];
-        let next = pts[(index + 2) % len];
-        let edge_in_x = curr.get::<0>() - prev.get::<0>();
-        let edge_in_y = curr.get::<1>() - prev.get::<1>();
-        let edge_out_x = next.get::<0>() - curr.get::<0>();
-        let edge_out_y = next.get::<1>() - curr.get::<1>();
-        let cross = edge_in_x * edge_out_y - edge_in_y * edge_out_x;
-        if cross == zero {
-            continue;
+    let mut previous = 0;
+    let mut current = 1;
+    while same(at(current), at(previous)) && current < n {
+        current += 1;
+    }
+    if current == n {
+        // All points are equal.
+        return true;
+    }
+    let mut next = current + 1;
+    while same(at(current), at(next)) {
+        next += 1;
+    }
+    for _ in 0..n {
+        // A left turn on a clockwise ring is a reflex corner.
+        if P::Scalar::side_robust(xy(at(previous)), xy(at(current)), xy(at(next)))
+            == core::cmp::Ordering::Greater
+        {
+            return false;
         }
-        let positive = cross > zero;
-        match sign {
-            None => sign = Some(positive),
-            Some(previous) if previous != positive => return false,
-            _ => {}
+        previous = current;
+        current = next;
+        next += 1;
+        while same(at(current), at(next)) {
+            next += 1;
         }
     }
     true
 }
 
-impl<P: PointTrait, const CW: bool, const CL: bool> IsConvex for Ring<P, CW, CL> {
+impl<P, const CW: bool, const CL: bool> IsConvex for Ring<P, CW, CL>
+where
+    P: PointTrait,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
     fn is_convex(&self) -> bool {
         ring_is_convex(self)
     }
 }
 
-impl<P: PointTrait, const CW: bool, const CL: bool> IsConvex for Polygon<P, CW, CL> {
+impl<P, const CW: bool, const CL: bool> IsConvex for Polygon<P, CW, CL>
+where
+    P: PointTrait,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
     fn is_convex(&self) -> bool {
         self.interiors().count() == 0 && ring_is_convex(self.exterior())
     }
 }
 
+/// C++: `multi_polygon_is_convex` — two members never make one convex
+/// region, so only an empty multi-polygon or a single convex member is.
 impl<Pg: IsConvex + geometry_trait::Polygon> IsConvex for MultiPolygon<Pg> {
     fn is_convex(&self) -> bool {
-        self.0.iter().all(IsConvex::is_convex)
+        match self.0.as_slice() {
+            [] => true,
+            [polygon] => polygon.is_convex(),
+            _ => false,
+        }
     }
 }
 
@@ -111,14 +144,53 @@ mod tests {
 
     #[test]
     fn triangle_is_convex() {
-        let pg: Polygon<Pt> = polygon![[(0., 0.), (4., 0.), (2., 3.), (0., 0.)]];
+        let pg: Polygon<Pt> = polygon![[(1., 1.), (1., 4.), (5., 1.), (1., 1.)]];
         assert!(is_convex(&pg));
     }
 
     #[test]
     fn square_is_convex() {
-        let pg: Polygon<Pt> = polygon![[(0., 0.), (4., 0.), (4., 4.), (0., 4.), (0., 0.)]];
+        let pg: Polygon<Pt> = polygon![[(1., 1.), (1., 4.), (4., 4.), (4., 1.), (1., 1.)]];
         assert!(is_convex(&pg));
+    }
+
+    /// `concave1` from `is_convex.cpp`: clockwise, with a notch.
+    #[test]
+    fn notched_rectangle_is_not_convex() {
+        let pg: Polygon<Pt> = polygon![[
+            (1., 1.),
+            (1., 4.),
+            (3., 4.),
+            (3., 3.),
+            (4., 3.),
+            (4., 4.),
+            (5., 4.),
+            (5., 1.),
+            (1., 1.)
+        ]];
+        assert!(!is_convex(&pg));
+    }
+
+    /// Boost walks a ring in its declared order and fails on a turn
+    /// against it, so a triangle wound counter-clockwise is convex only
+    /// where the polygon declares that winding.
+    #[test]
+    fn a_ring_wound_against_its_declared_order_is_not_convex() {
+        let counter_clockwise = [(1., 1.), (5., 1.), (1., 4.), (1., 1.)];
+        let declared_clockwise: Polygon<Pt> = Polygon::new(Ring::from_vec(
+            counter_clockwise
+                .iter()
+                .map(|&(x, y)| Pt::new(x, y))
+                .collect(),
+        ));
+        assert!(!is_convex(&declared_clockwise));
+        let declared_counter_clockwise: Polygon<Pt, false> = Polygon::new(Ring::from_vec(
+            counter_clockwise
+                .iter()
+                .map(|&(x, y)| Pt::new(x, y))
+                .collect(),
+        ));
+        assert!(is_convex(&declared_counter_clockwise));
     }
 
     #[test]
@@ -164,23 +236,23 @@ mod tests {
     fn convex_ring_direct() {
         let r: Ring<Pt> = Ring::from_vec(alloc::vec![
             Pt::new(0., 0.),
-            Pt::new(4., 0.),
-            Pt::new(4., 4.),
             Pt::new(0., 4.),
+            Pt::new(4., 4.),
+            Pt::new(4., 0.),
         ]);
         assert!(is_convex(&r));
     }
 
-    /// `MultiPolygon` is convex iff *every* member is.
+    /// `mpoly1` / `mpoly2` from `is_convex.cpp`: a multi-polygon is
+    /// convex only as a single convex member — two convex members never
+    /// make one convex region.
     #[test]
-    fn multi_polygon_all_members_must_be_convex() {
-        let convex: Polygon<Pt> = polygon![[(0., 0.), (4., 0.), (2., 3.), (0., 0.)]];
-        let reflex: Polygon<Pt> =
-            polygon![[(0., 0.), (4., 0.), (2., 1.), (4., 4.), (0., 4.), (0., 0.)]];
-        let all_convex = MultiPolygon(alloc::vec![convex.clone(), convex.clone()]);
-        assert!(is_convex(&all_convex));
-        let mixed = MultiPolygon(alloc::vec![convex, reflex]);
-        assert!(!is_convex(&mixed));
+    fn multi_polygon_is_convex_only_as_one_convex_member() {
+        let convex: Polygon<Pt> = polygon![[(1., 1.), (1., 4.), (5., 1.), (1., 1.)]];
+        let other: Polygon<Pt> = polygon![[(3., 0.), (3., 1.), (4., 0.), (3., 0.)]];
+        assert!(is_convex(&MultiPolygon::<Polygon<Pt>>(alloc::vec![])));
+        assert!(is_convex(&MultiPolygon(alloc::vec![convex.clone()])));
+        assert!(!is_convex(&MultiPolygon(alloc::vec![convex, other])));
     }
 
     /// The turn at the seam vertex counts: a polygon whose only reflex
@@ -213,5 +285,23 @@ mod tests {
 
         let single: Ring<Pt> = Ring::from_vec(alloc::vec![Pt::new(3., 7.)]);
         assert!(is_convex(&single));
+    }
+
+    /// Of two vertices a last bit apart Boost keeps the one its clockwise
+    /// walk reaches first, and the exact side test tells them apart: this
+    /// open counter-clockwise ring turns left at the one kept walking it
+    /// backwards, so it is not convex in Boost (`aed7bc3`).
+    #[test]
+    fn near_duplicates_are_walked_in_boosts_direction() {
+        let ring: Ring<Pt, false, false> = Ring::from_vec(vec![
+            Pt::new(-124.961_656_060_410_52, -276.892_766_837_829_87),
+            Pt::new(-849.223_249_721_270_6, 86.135_835_343_888_52),
+            Pt::new(-1_146.321_623_485_671_1, -1_591.643_032_235_419),
+            Pt::new(-1_195.115_813_186_1, -1_867.194_390_200_627_6),
+            Pt::new(-1_195.115_813_186_100_2, -1_867.194_390_200_627_8),
+            Pt::new(-96.609_059_576_314_4, -1_512.500_968_388_648_5),
+            Pt::new(-96.609_059_576_314_38, -1_512.500_968_388_648_5),
+        ]);
+        assert!(!is_convex(&ring));
     }
 }

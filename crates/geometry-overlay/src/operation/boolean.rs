@@ -19,7 +19,14 @@
 //!
 //! Polygon × polygon → `MultiPolygon`, including interior rings, contained
 //! holes/islands, shared edges, and colocated vertices. Coordinates outside
-//! the exact-predicate range surface as [`OverlayError::Unsupported`].
+//! the exact-predicate range surface as [`OverlayError::Unsupported`], as
+//! does an arrangement whose boundary does not close even when it is made
+//! again at a coarser snap.
+//!
+//! The crossings an overlay builds are fractional, so the coordinate scalar
+//! must be one that measures in itself — a float, not an integer
+//! (`CoordinateScalar<Measure = Scalar>`). Integer coordinates are refused
+//! at compile time rather than truncated onto the wrong vertices.
 
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
@@ -54,7 +61,9 @@ impl From<TraversalError> for OverlayError {
 ///
 /// # Errors
 ///
-/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range,
+/// or the operands meet in a sliver too fine for the result boundary to
+/// close even at the coarser snap (see `docs/03-overlay-engine.md`, OVL5).
 ///
 /// # Examples
 ///
@@ -77,7 +86,7 @@ where
     G1: PolygonTrait<Point = P>,
     G2: PolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     areal_overlay(g1, g2, ArealOp::Intersection)
@@ -91,7 +100,9 @@ where
 ///
 /// # Errors
 ///
-/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range,
+/// or the operands meet in a sliver too fine for the result boundary to
+/// close even at the coarser snap (see `docs/03-overlay-engine.md`, OVL5).
 ///
 /// # Examples
 ///
@@ -114,7 +125,7 @@ where
     G1: PolygonTrait<Point = P>,
     G2: PolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     areal_overlay(g1, g2, ArealOp::Union)
@@ -139,7 +150,7 @@ where
     G1: PolygonTrait<Point = P>,
     G2: PolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     union_poly(g1, g2)
@@ -153,7 +164,9 @@ where
 ///
 /// # Errors
 ///
-/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range,
+/// or the operands meet in a sliver too fine for the result boundary to
+/// close even at the coarser snap (see `docs/03-overlay-engine.md`, OVL5).
 ///
 /// # Examples
 ///
@@ -176,7 +189,7 @@ where
     G1: PolygonTrait<Point = P>,
     G2: PolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     areal_overlay(g1, g2, ArealOp::Difference)
@@ -190,7 +203,9 @@ where
 ///
 /// # Errors
 ///
-/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range,
+/// or the operands meet in a sliver too fine for the result boundary to
+/// close even at the coarser snap (see `docs/03-overlay-engine.md`, OVL5).
 ///
 /// # Examples
 ///
@@ -213,10 +228,13 @@ where
     G1: PolygonTrait<Point = P>,
     G2: PolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    areal_overlay(g1, g2, ArealOp::SymDifference)
+    // C++: `sym_difference_areal_areal` builds both differences and returns
+    // their union, and that union decides where each output ring starts and
+    // in which order the pieces come.
+    union_multi(&difference(g1, g2)?, &difference(g2, g1)?)
 }
 
 // ---- multi-polygon operands ------------------------------------------
@@ -232,7 +250,9 @@ where
 ///
 /// # Errors
 ///
-/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range,
+/// or the operands meet in a sliver too fine for the result boundary to
+/// close even at the coarser snap (see `docs/03-overlay-engine.md`, OVL5).
 pub fn intersection_multi<G1, G2, P>(
     g1: &G1,
     g2: &G2,
@@ -241,7 +261,7 @@ where
     G1: MultiPolygonTrait<Point = P>,
     G2: MultiPolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     areal_overlay_multi(g1, g2, ArealOp::Intersection)
@@ -251,13 +271,15 @@ where
 ///
 /// # Errors
 ///
-/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range,
+/// or the operands meet in a sliver too fine for the result boundary to
+/// close even at the coarser snap (see `docs/03-overlay-engine.md`, OVL5).
 pub fn union_multi<G1, G2, P>(g1: &G1, g2: &G2) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
 where
     G1: MultiPolygonTrait<Point = P>,
     G2: MultiPolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     areal_overlay_multi(g1, g2, ArealOp::Union)
@@ -267,7 +289,9 @@ where
 ///
 /// # Errors
 ///
-/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range,
+/// or the operands meet in a sliver too fine for the result boundary to
+/// close even at the coarser snap (see `docs/03-overlay-engine.md`, OVL5).
 pub fn difference_multi<G1, G2, P>(
     g1: &G1,
     g2: &G2,
@@ -276,7 +300,7 @@ where
     G1: MultiPolygonTrait<Point = P>,
     G2: MultiPolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     areal_overlay_multi(g1, g2, ArealOp::Difference)
@@ -286,7 +310,9 @@ where
 ///
 /// # Errors
 ///
-/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range.
+/// [`OverlayError::Unsupported`] when coordinates exceed the predicate range,
+/// or the operands meet in a sliver too fine for the result boundary to
+/// close even at the coarser snap (see `docs/03-overlay-engine.md`, OVL5).
 pub fn sym_difference_multi<G1, G2, P>(
     g1: &G1,
     g2: &G2,
@@ -295,10 +321,11 @@ where
     G1: MultiPolygonTrait<Point = P>,
     G2: MultiPolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    areal_overlay_multi(g1, g2, ArealOp::SymDifference)
+    // C++: `sym_difference_areal_areal`, as for `sym_difference`.
+    union_multi(&difference_multi(g1, g2)?, &difference_multi(g2, g1)?)
 }
 
 #[cfg(test)]

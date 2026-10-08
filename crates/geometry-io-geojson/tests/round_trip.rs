@@ -9,7 +9,7 @@ use geometry_cs::Cartesian;
 use geometry_io_geojson::{GeoJsonError, WriteGeoJson, from_geojson, to_geojson};
 use geometry_model::{DynGeometry, MultiPolygon, Point2D, Polygon, Ring};
 use geometry_tag::PointTag;
-use geometry_trait::Geometry;
+use geometry_trait::{Geometry, Point as _};
 
 type Pt = Point2D<f64, Cartesian>;
 
@@ -24,6 +24,21 @@ fn assert_round_trip(input: &str) {
 #[test]
 fn point_round_trips() {
     assert_round_trip(r#"{"type":"Point","coordinates":[100.0,0.0]}"#);
+}
+
+/// A negative zero is written `-0` and reads back with its sign, as the
+/// WKT and WKB writers keep it; `assert_round_trip`'s equality alone would
+/// not see the sign, since `-0.0 == 0.0`.
+#[test]
+fn negative_zero_keeps_its_sign() {
+    let point = Pt::new(-0.0, 0.0);
+    let emitted = to_geojson(&point);
+    assert_eq!(emitted, r#"{"type":"Point","coordinates":[-0,0]}"#);
+    let DynGeometry::Point(back) = from_geojson(&emitted).unwrap() else {
+        panic!("a point reads back as a point");
+    };
+    assert_eq!(back.get::<0>().to_bits(), (-0.0_f64).to_bits());
+    assert_eq!(back.get::<1>().to_bits(), 0.0_f64.to_bits());
 }
 
 #[test]
@@ -222,6 +237,17 @@ fn malformed_documents_cover_public_error_contract() {
 fn empty_polygon_and_bare_ring_use_the_public_geometry_api() {
     let empty = from_geojson(r#"{"type":"Polygon","coordinates":[]}"#).unwrap();
     assert_eq!(empty, DynGeometry::Polygon(Polygon::<Pt>::new(Ring::new())));
+    // Written back as it was read: no rings, not one ring of no positions.
+    assert_eq!(to_geojson(&empty), r#"{"type":"Polygon","coordinates":[]}"#);
+    assert_eq!(
+        to_geojson(&Ring::<Pt>::new()),
+        r#"{"type":"Polygon","coordinates":[]}"#
+    );
+    let member = from_geojson(r#"{"type":"MultiPolygon","coordinates":[[]]}"#).unwrap();
+    assert_eq!(
+        to_geojson(&member),
+        r#"{"type":"MultiPolygon","coordinates":[[]]}"#
+    );
 
     let ring = Ring::from_vec(vec![
         Pt::new(0.0, 0.0),
@@ -457,4 +483,41 @@ fn coordinate_shape_and_member_order_edge_cases() {
             from_geojson(malformed)
         );
     }
+}
+
+/// A ring its polygon declares open is written closed, as RFC 7946 §3.1.6
+/// requires of a linear ring.
+#[test]
+fn open_polygon_is_written_closed() {
+    use geometry_io_geojson::to_geojson_polygon;
+    type Open = Polygon<Pt, true, false>;
+    let open = Open {
+        outer: Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(0.0, 2.0),
+            Pt::new(2.0, 2.0),
+            Pt::new(2.0, 0.0),
+        ]),
+        inners: vec![Ring::from_vec(vec![
+            Pt::new(0.5, 0.5),
+            Pt::new(1.5, 0.5),
+            Pt::new(1.0, 1.5),
+        ])],
+    };
+    // An open ring whose last point already repeats its first gets no
+    // second copy.
+    let repeated = Open::new(Ring::from_vec(vec![
+        Pt::new(0.0, 0.0),
+        Pt::new(0.0, 2.0),
+        Pt::new(2.0, 2.0),
+        Pt::new(0.0, 0.0),
+    ]));
+    assert_eq!(
+        to_geojson_polygon(&open),
+        r#"{"type":"Polygon","coordinates":[[[0,0],[0,2],[2,2],[2,0],[0,0]],[[0.5,0.5],[1.5,0.5],[1,1.5],[0.5,0.5]]]}"#
+    );
+    assert_eq!(
+        to_geojson(&MultiPolygon(vec![repeated])),
+        r#"{"type":"MultiPolygon","coordinates":[[[[0,0],[0,2],[2,2],[0,0]]]]}"#
+    );
 }

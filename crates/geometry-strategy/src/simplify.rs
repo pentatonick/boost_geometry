@@ -16,9 +16,10 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_tag::SameAs;
-use geometry_trait::{Linestring, Point, PointMut};
+use geometry_trait::{Linestring, Point, PointMut, ordinate};
 
 use crate::cartesian::{PointToSegment, Pythagoras};
 use crate::distance::DistanceStrategy;
@@ -62,9 +63,13 @@ pub struct VisvalingamWhyatt;
 ///
 /// Uses the same area ranking as [`VisvalingamWhyatt`], and applies the Davies
 /// refinement when removing a vertex would introduce a self-intersection: the
-/// preceding retained vertex is removed next so the transient crossing is
-/// eliminated. The implementation uses an allocation-only quadratic scan,
-/// keeping the strategy available in `no_std` builds.
+/// preceding retained vertex is removed next, which usually clears the
+/// crossing. The result is not guaranteed to be simple: removing the
+/// predecessor need not clear the crossing, and an endpoint is never removed,
+/// so `(0 1, 1 1, 2 3, 0 5, 1 3, 1 2)` at tolerance 1 keeps `(1 2)` on the
+/// edge `(0 1)–(2 3)` that replaced `(1 1)`. The implementation uses an
+/// allocation-only quadratic scan, keeping the strategy available in `no_std`
+/// builds.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct VisvalingamWhyattPreserve;
 
@@ -88,20 +93,37 @@ where
         // the second recursive call would then be identical to its
         // parent and recurse forever (stack overflow). Returning early
         // keeps every vertex, matching Boost.
-        if pts.len() < 3 || max_distance < 0.0 {
-            return geometry_model::Linestring::from_vec(pts);
+        let mut out = if pts.len() < 3 || max_distance < 0.0 {
+            pts
+        } else {
+            let mut keep = vec![false; pts.len()];
+            keep[0] = true;
+            keep[pts.len() - 1] = true;
+            // C++: `douglas_peucker::apply` measures with the comparable form
+            // of the strategy, against the tolerance put in that form
+            // (`result_from_distance`) — what it measures for a point that
+            // far from a segment. Two vertices equally far by the real
+            // distance can differ by the comparable one, and the first of
+            // the furthest is the one kept.
+            let comparable = self.0.comparable();
+            let origin = P::default();
+            let mut probe = P::default();
+            probe.set::<0>(max_distance);
+            let tolerance =
+                comparable.distance(&probe, &geometry_model::Segment::new(origin, origin));
+            dp_recurse(&pts, 0, pts.len() - 1, tolerance, &comparable, &mut keep);
+            pts.iter()
+                .zip(keep.iter())
+                .filter_map(|(p, &k)| if k { Some(*p) } else { None })
+                .collect()
+        };
+        // C++: `simplify_range` — two points left that are one point, by
+        // `math::equals` on every ordinate, are kept as one.
+        let one_point = matches!(out.as_slice(), [first, last]
+            if (0..P::DIM).all(|d| ordinate(first, d).tolerant_eq(ordinate(last, d))));
+        if one_point {
+            out.truncate(1);
         }
-
-        let mut keep = vec![false; pts.len()];
-        keep[0] = true;
-        keep[pts.len() - 1] = true;
-        dp_recurse(&pts, 0, pts.len() - 1, max_distance, &self.0, &mut keep);
-
-        let out: Vec<P> = pts
-            .iter()
-            .zip(keep.iter())
-            .filter_map(|(p, &k)| if k { Some(*p) } else { None })
-            .collect();
         geometry_model::Linestring::from_vec(out)
     }
 }
@@ -379,6 +401,49 @@ mod tests {
         let ls: Linestring<Pt> = linestring![(0., 0.), (1., 1.)];
         let s = default_dp().simplify(&ls, 10.0);
         assert_eq!(coords(&s), vec![(0., 0.), (1., 1.)]);
+    }
+
+    /// Two points left that are one point are kept as one, whether the
+    /// tolerance collapsed a closed polyline onto its ends or the input
+    /// was already two equal points: Boost (`aed7bc3`) returns `(0 0)` for
+    /// each.
+    #[test]
+    fn two_equal_points_left_are_one() {
+        let closed: Linestring<Pt> = linestring![(0., 0.), (1., 0.), (0., 0.)];
+        assert_eq!(coords(&default_dp().simplify(&closed, 2.0)), vec![(0., 0.)]);
+        let square: Linestring<Pt> = linestring![(0., 0.), (1., 0.), (1., 1.), (0., 0.)];
+        assert_eq!(coords(&default_dp().simplify(&square, 5.0)), vec![(0., 0.)]);
+        let twice: Linestring<Pt> = linestring![(0., 0.), (0., 0.)];
+        assert_eq!(coords(&default_dp().simplify(&twice, -1.0)), vec![(0., 0.)]);
+    }
+
+    /// Of two vertices equally far from the chord by the real distance, the
+    /// one further by the squared distance Boost measures with is kept: the
+    /// later `(-9 -1.450125643892)` here, and with it goes the out-and-back
+    /// before it. Boost (`aed7bc3`) keeps six of the eight points.
+    #[test]
+    fn furthest_vertex_is_the_furthest_by_squared_distance() {
+        let ls: Linestring<Pt> = linestring![
+            (-2.718_774, 8.44),
+            (-9.0, -1.450_125_643_891_999_2),
+            (-2.718_774, 8.44),
+            (-9.0, -1.450_125_643_892),
+            (-2.0, 2.7),
+            (-2.8, -5.813_182_750_477),
+            (6.0, 5.938_117_057_195),
+            (4.0, -7.363_225)
+        ];
+        assert_eq!(
+            coords(&default_dp().simplify(&ls, 0.0005)),
+            vec![
+                (-2.718_774, 8.44),
+                (-9.0, -1.450_125_643_892),
+                (-2.0, 2.7),
+                (-2.8, -5.813_182_750_477),
+                (6.0, 5.938_117_057_195),
+                (4.0, -7.363_225)
+            ]
+        );
     }
 
     #[test]

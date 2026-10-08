@@ -9,6 +9,7 @@
 //! `ring_perimeter` use the parallel
 //! [`geometry_strategy::DefaultPerimeter`] family dispatch.
 
+use geometry_coords::CoordinateScalar;
 use geometry_cs::CoordinateSystem;
 use geometry_strategy::{
     DefaultLength, DefaultLengthStrategy, DefaultPerimeter, DefaultPerimeterStrategy,
@@ -105,11 +106,14 @@ where
     P: Polygon,
     S: LengthStrategy<P::Ring>,
 {
-    let mut total = strategy.length(p.exterior());
-    for inner in p.interiors() {
-        total = total + strategy.length(inner);
-    }
-    total
+    // The interiors summed from zero, then added to the exterior:
+    // `calculate_polygon_sum` (`algorithms/detail/calculate_sum.hpp:36-55`).
+    let interiors = p
+        .interiors()
+        .fold(<S::Out as CoordinateScalar>::ZERO, |sum, inner| {
+            sum + strategy.length(inner)
+        });
+    strategy.length(p.exterior()) + interiors
 }
 
 /// Standalone helper to compute the perimeter of a `Ring` directly,
@@ -160,6 +164,32 @@ mod tests {
     use super::{length, length_with, perimeter, ring_perimeter};
     use geometry_cs::Cartesian;
     use geometry_model::{Linestring, Point2D, Ring, linestring, polygon};
+
+    /// The interiors are summed from zero and then added to the exterior,
+    /// as `calculate_polygon_sum` adds them
+    /// (`algorithms/detail/calculate_sum.hpp:36-55`); added one by one, these
+    /// two holes round to `47.78388674978358`. Boost (`aed7bc3`):
+    /// `47.78388674978359`.
+    #[test]
+    fn perimeter_sums_the_interiors_before_the_exterior() {
+        let pg: geometry_model::Polygon<Point2D<f64, Cartesian>> = polygon![
+            [
+                (0.0, 0.0),
+                (0.0, 10.0),
+                (10.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0)
+            ],
+            [(3.759, 2.11), (2.758, 2.983), (2.047, 2.849), (3.759, 2.11)],
+            [
+                (7.813, 6.224),
+                (7.157, 7.791),
+                (7.194, 6.242),
+                (7.813, 6.224)
+            ]
+        ];
+        assert_eq!(perimeter(&pg), 47.783_886_749_783_59);
+    }
 
     #[test]
     fn length_of_3_4_5_segment() {

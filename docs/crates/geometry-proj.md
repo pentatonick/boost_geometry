@@ -2,8 +2,9 @@
 
 **Standalone — not in Boost.Geometry.** Depends on `geometry-model`, `geometry-trait`.
 
-Boost.Geometry defers CRS projections to its unsupported
-`extensions/gis/projections/`. This crate fills the gap using the pure-Rust
+Boost.Geometry keeps its CRS projections in `boost/geometry/srs/`
+(`srs::projection`, `srs::transformation`), outside its documented reference.
+This crate does not port them; it uses the pure-Rust
 [`proj4rs`](https://crates.io/crates/proj4rs) engine — no C dependency (in
 contrast to the usual [PROJ](https://proj.org/) C library most GIS stacks
 bind against).

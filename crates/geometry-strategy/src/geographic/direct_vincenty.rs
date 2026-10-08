@@ -5,12 +5,13 @@
 
 use geometry_cs::Spheroid;
 
+#[cfg(feature = "std")]
 use super::direct::DirectResult;
 
 #[cfg(feature = "std")]
-use super::direct::normalize_longitude;
-#[cfg(feature = "std")]
 use super::spheroid_calc::SpheroidCalc;
+#[cfg(feature = "std")]
+use crate::normalise::normalize_angle_cond;
 
 /// Vincenty's iterative direct geodesic formula.
 ///
@@ -125,15 +126,17 @@ impl VincentyDirect {
         let reverse_azimuth =
             sin_alpha.atan2(-sin_u1 * sin_sigma + cos_u1 * cos_sigma * cos_azimuth12);
 
-        DirectResult::solved(
+        let mut result = DirectResult::solved::<2>(
             lon1,
             lat1,
             azimuth12,
             self.spheroid,
-            normalize_longitude(lon1 + big_l),
+            lon1 + big_l,
             lat2,
             reverse_azimuth,
-        )
+        );
+        result.lon2 = normalize_angle_cond(result.lon2);
+        result
     }
 }
 

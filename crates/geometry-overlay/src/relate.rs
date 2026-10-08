@@ -15,6 +15,19 @@
 //! topology follows OGC boundary rules, including the mod-2 boundary of a
 //! multilinestring and absorption of members covered by areal interiors. The
 //! public mask-string interface consumes the completed matrix.
+//!
+//! Deliberate deviations: the matrix is a function of the point sets. Boost
+//! classifies a meeting by the segment it was found on, so where a line
+//! passes through one of its own ends it also reports an interior meeting
+//! there (`relation(LINESTRING(7 3, 3 7, 2 0), LINESTRING(3 6, 5 5, 8 7, 7 1,
+//! 5 5))` is `001FF0102`; `F01FF0102` here, `(5 5)` being boundary). Boost
+//! also varies with member order in places (`POLYGON((6 6, 7 3, 3 4, 6 6))`
+//! against the two members of `MULTILINESTRING((3 4, 4 8), (6 6, 0 2, 4 4))`
+//! has `EB` `F`, and `0` with the members swapped), and when a multipolygon's
+//! members touch at a point on the other operand's boundary it reports that
+//! operand partly outside (`POLYGON((3 0, 3 4, 5 4, 5 0, 3 0))` against
+//! `MULTIPOLYGON(((3 0, 3 5, 8 5, 8 0, 3 0)), ((3 3, 1 2, 1 3, 3 3)))` is
+//! `2F2111212`; `2FF11F212` here). Boost (`aed7bc3`).
 
 #![allow(
     clippy::float_cmp,
@@ -27,6 +40,7 @@ use geometry_coords::math::{hypot, mul_add};
 use geometry_coords::{CoordinateScalar, precise_math};
 use geometry_cs::{Cartesian, CartesianFamily, CoordinateSystem};
 use geometry_model::{DynGeometry, Point2D, Polygon, Ring};
+use geometry_strategy::winding::{PointLocation, polygon_location, range_location};
 use geometry_tag::{
     BoxTag, DynamicGeometryTag, GeometryCollectionTag, LinestringTag, MultiLinestringTag,
     MultiPointTag, MultiPolygonTag, PointTag, PolygonTag, RingTag, SameAs, SegmentTag,
@@ -775,6 +789,16 @@ enum Location {
     Exterior,
 }
 
+impl From<PointLocation> for Location {
+    fn from(location: PointLocation) -> Self {
+        match location {
+            PointLocation::Interior => Self::Interior,
+            PointLocation::Boundary => Self::Boundary,
+            PointLocation::Exterior => Self::Exterior,
+        }
+    }
+}
+
 impl Location {
     fn index(self) -> usize {
         match self {
@@ -879,8 +903,8 @@ where
             ) {
                 SegmentRelation::Disjoint => {}
                 SegmentRelation::Point(point) => {
-                    let first_location = xy_location_linestring(point, first);
-                    let second_location = xy_location_linestring(point, second);
+                    let first_location = location_on_linestring(point, first);
+                    let second_location = location_on_linestring(point, second);
                     matrix.m[first_location.index()][second_location.index()] = Dimension::Point;
                 }
                 SegmentRelation::Overlap => {
@@ -918,12 +942,15 @@ where
     matrix
 }
 
+/// Are two input points one point? C++: `equals_point_point`, which is
+/// `math::equals` per coordinate ([`CoordinateScalar::tolerant_eq`]).
 fn point_equal<A, B>(first: &A, second: &B) -> bool
 where
     A: Point,
     B: Point<Scalar = A::Scalar>,
 {
-    first.get::<0>() == second.get::<0>() && first.get::<1>() == second.get::<1>()
+    first.get::<0>().tolerant_eq(second.get::<0>())
+        && first.get::<1>().tolerant_eq(second.get::<1>())
 }
 
 fn line_has_curve<L>(line: &L) -> bool
@@ -963,46 +990,90 @@ where
     }
 }
 
+/// Where an input point lies relative to `line`: on it by the winding
+/// kernel, on its boundary at an end of an open line.
+///
+/// C++: `point_in_geometry<Linestring>` at
+/// `algorithms/detail/within/point_in_geometry.hpp`.
 fn point_location_linestring<P, L>(point: &P, line: &L) -> Location
 where
     P: Point,
     L: LinestringTrait<Point = P>,
-    P::Scalar: Into<f64>,
 {
-    xy_location_linestring(xy(point), line)
+    let planar = |q: &P| (q.get::<0>(), q.get::<1>());
+    let points = line.points();
+    if points.len() < 2 {
+        return Location::Exterior;
+    }
+    let (Some(front), Some(back)) = (points.clone().next(), points.last()) else {
+        return Location::Exterior;
+    };
+    if range_location(planar(point), line.points().map(planar)) != PointLocation::Boundary {
+        Location::Exterior
+    } else if !point_equal(front, back) && (point_equal(point, front) || point_equal(point, back)) {
+        Location::Boundary
+    } else {
+        Location::Interior
+    }
 }
 
+/// Where a computed point — a sample between two meetings — lies relative
+/// to `line`, within the rounding its construction left
+/// ([`point_near_segment`]).
 fn xy_location_linestring<L>(point: [f64; 2], line: &L) -> Location
 where
     L: LinestringTrait,
     L::Point: Point,
     <L::Point as Point>::Scalar: Into<f64>,
 {
-    for boundary in line_boundary_points(line) {
-        if xy_equal(point, xy(boundary)) {
-            return Location::Boundary;
-        }
-    }
-    let mut interior = false;
+    let mut on_line = false;
     for_each_line_segment(line, |first, second| {
-        if point_on_segment(point, xy(first), xy(second)) {
-            interior = true;
-        }
+        on_line |= point_near_segment(point, xy(first), xy(second));
     });
-    if interior {
-        Location::Interior
+    if on_line {
+        location_on_linestring(point, line)
     } else {
         Location::Exterior
     }
 }
 
+/// Where a point known to lie on `line` — where one of its segments meets
+/// another line's — falls: the boundary at an end of an open line, the
+/// interior anywhere else. A crossing is computed and so lies on neither
+/// segment exactly; it is not located again, as Boost places a turn on the
+/// segments it was found on.
+fn location_on_linestring<L>(point: [f64; 2], line: &L) -> Location
+where
+    L: LinestringTrait,
+    L::Point: Point,
+    <L::Point as Point>::Scalar: Into<f64>,
+{
+    if line_boundary_points(line)
+        .into_iter()
+        .any(|boundary| xy_equal(point, xy(boundary)))
+    {
+        Location::Boundary
+    } else {
+        Location::Interior
+    }
+}
+
+/// Where an input point lies relative to `polygon`, by the winding kernel.
+///
+/// C++: `point_in_geometry<Polygon>` at
+/// `algorithms/detail/within/point_in_geometry.hpp`.
 fn point_location_polygon<P, G>(point: &P, polygon: &G) -> Location
 where
-    P: Point + Copy,
+    P: Point,
     G: PolygonTrait<Point = P>,
-    P::Scalar: Into<f64>,
 {
-    xy_location_polygon(xy(point), polygon)
+    let planar = |q: &P| (q.get::<0>(), q.get::<1>());
+    polygon_location(
+        planar(point),
+        polygon.exterior().points().map(planar),
+        polygon.interiors().map(|ring| ring.points().map(planar)),
+    )
+    .into()
 }
 
 fn xy_location_polygon<G>(point: [f64; 2], polygon: &G) -> Location
@@ -1323,10 +1394,19 @@ fn topology_segments(topology: &Topology) -> Vec<([f64; 2], [f64; 2])> {
     segments
 }
 
-fn topology_location(topology: &Topology, point: [f64; 2]) -> Location {
+/// Where `point` lies relative to `topology`. An `input` point — a point or
+/// vertex of either geometry — is located as Boost locates a point
+/// (`point_in_geometry`); a computed one — a crossing, a sample between two
+/// — within the rounding its construction left.
+fn topology_location(topology: &Topology, point: [f64; 2], input: bool) -> Location {
     let mut polygon_boundary = false;
     for polygon in &topology.polygons {
-        match xy_location_polygon(point, polygon) {
+        let location = if input {
+            point_location_polygon(&TopologyPointModel::new(point[0], point[1]), polygon)
+        } else {
+            xy_location_polygon(point, polygon)
+        };
+        match location {
             Location::Interior => return Location::Interior,
             Location::Boundary => polygon_boundary = true,
             Location::Exterior => {}
@@ -1336,9 +1416,15 @@ fn topology_location(topology: &Topology, point: [f64; 2]) -> Location {
     let mut on_line = false;
     let mut endpoint_count = 0usize;
     for line in &topology.lines {
-        for segment in line.windows(2) {
-            if point_near_segment(point, segment[0], segment[1]) {
-                on_line = true;
+        if input {
+            let planar = |vertex: &[f64; 2]| (vertex[0], vertex[1]);
+            on_line |=
+                range_location(planar(&point), line.iter().map(planar)) == PointLocation::Boundary;
+        } else {
+            for segment in line.windows(2) {
+                if point_near_segment(point, segment[0], segment[1]) {
+                    on_line = true;
+                }
             }
         }
         let first = *line
@@ -1410,7 +1496,18 @@ fn segment_parameters(
     for &(start, end) in all_segments {
         match segment_relation(segment.0, segment.1, start, end) {
             SegmentRelation::Point(point) => {
-                parameters.push(segment_parameter(point, segment.0, segment.1));
+                // Where `segment` crosses the other's line, from the two
+                // orientations rather than the rounded crossing point: the
+                // legs of a spike cross `segment` at one point, which,
+                // computed once per leg, rounds apart and would leave a
+                // sliver between two parameters sampled as if on the line.
+                let before = precise_math::orient2d(start, end, segment.0);
+                let after = precise_math::orient2d(start, end, segment.1);
+                parameters.push(if opposite(before, after) {
+                    before / (before - after)
+                } else {
+                    segment_parameter(point, segment.0, segment.1)
+                });
             }
             SegmentRelation::Overlap => {
                 for point in [start, end] {
@@ -1448,22 +1545,23 @@ fn record_segment_cells(
             segment.1,
             f64::midpoint(interval[0], interval[1]),
         );
-        let first_location = topology_location(first, midpoint);
-        let second_location = topology_location(second, midpoint);
+        let first_location = topology_location(first, midpoint, false);
+        let second_location = topology_location(second, midpoint, false);
         debug_assert_ne!(first_location, Location::Exterior);
         set_dimension(matrix, first_location, second_location, Dimension::Curve);
     }
 }
 
+/// The points and vertices of `topology`, as input candidates.
 fn append_topology_candidates(
     topology: &Topology,
     segments: &[([f64; 2], [f64; 2])],
-    output: &mut Vec<[f64; 2]>,
+    output: &mut Vec<([f64; 2], bool)>,
 ) {
-    output.extend(topology.points.iter().copied());
+    output.extend(topology.points.iter().map(|&point| (point, true)));
     for &(start, end) in segments {
-        output.push(start);
-        output.push(end);
+        output.push((start, true));
+        output.push((end, true));
     }
 }
 
@@ -1536,8 +1634,8 @@ fn relate_topologies(first: &Topology, second: &Topology) -> Result<De9im, Overl
                 segment.1,
                 f64::midpoint(interval[0], interval[1]),
             );
-            let first_location = topology_location(first, midpoint);
-            let second_location = topology_location(second, midpoint);
+            let first_location = topology_location(first, midpoint, false);
+            let second_location = topology_location(second, midpoint, false);
             debug_assert_ne!(second_location, Location::Exterior);
             set_dimension(
                 &mut matrix,
@@ -1554,13 +1652,13 @@ fn relate_topologies(first: &Topology, second: &Topology) -> Result<De9im, Overl
     for &(first_start, first_end) in &first_segments {
         for &(second_start, second_end) in &second_segments {
             match segment_relation(first_start, first_end, second_start, second_end) {
-                SegmentRelation::Point(point) => candidates.push(point),
+                SegmentRelation::Point(point) => candidates.push((point, false)),
                 SegmentRelation::Overlap => {
                     for point in [first_start, first_end, second_start, second_end] {
                         if point_near_segment(point, first_start, first_end)
                             && point_near_segment(point, second_start, second_end)
                         {
-                            candidates.push(point);
+                            candidates.push((point, true));
                         }
                     }
                 }
@@ -1568,15 +1666,20 @@ fn relate_topologies(first: &Topology, second: &Topology) -> Result<De9im, Overl
             }
         }
     }
-    candidates.sort_by(|first, second| {
+    candidates.sort_by(|(first, _), (second, _)| {
         first[0]
             .total_cmp(&second[0])
             .then_with(|| first[1].total_cmp(&second[1]))
     });
-    candidates.dedup_by(|first, second| xy_equal(*first, *second));
-    for point in candidates {
-        let first_location = topology_location(first, point);
-        let second_location = topology_location(second, point);
+    // A crossing that lands on a vertex is that vertex.
+    candidates.dedup_by(|(point, input), (kept, kept_input)| {
+        let same = xy_equal(*point, *kept);
+        *kept_input |= same && *input;
+        same
+    });
+    for (point, input) in candidates {
+        let first_location = topology_location(first, point, input);
+        let second_location = topology_location(second, point, input);
         debug_assert!(
             first_location != Location::Exterior || second_location != Location::Exterior
         );
@@ -1602,10 +1705,10 @@ where
             output.push((pair[0], pair[1]));
         }
     }
-    if let (Some(first), Some(last)) = (points.first(), points.last())
-        && !xy_equal(*first, *last)
-    {
-        output.push((*last, *first));
+    if let (Some(first), Some(last)) = (points.first(), points.last()) {
+        if !xy_equal(*first, *last) {
+            output.push((*last, *first));
+        }
     }
 }
 
@@ -1658,6 +1761,97 @@ where
         && !matrix.m[feature::EXTERIOR][feature::BOUNDARY].is_set())
 }
 
+/// A geometry's topological dimension, by which Boost's `crosses` and
+/// `overlaps` choose their masks.
+///
+/// A kind's own (`core/topological_dimension.hpp`); for a collection, the
+/// largest among its members that have a point, none when no member has
+/// one (`algorithms/detail/gc_topological_dimension.hpp`).
+#[doc(hidden)]
+pub trait TopologicalDimension<G> {
+    /// The dimension of `geometry`.
+    fn dimension(geometry: &G) -> Option<u8>;
+    /// The dimension of `geometry` if it has a point, as a collection
+    /// counts its members.
+    fn member_dimension(geometry: &G) -> Option<u8>;
+}
+
+macro_rules! kind_dimension {
+    ($($tag:ty, $bound:ident, $dimension:literal, |$geometry:ident| $has_point:expr;)+) => {
+        $(
+            impl<G: $bound> TopologicalDimension<G> for $tag {
+                fn dimension(_: &G) -> Option<u8> {
+                    Some($dimension)
+                }
+                fn member_dimension($geometry: &G) -> Option<u8> {
+                    ($has_point).then_some($dimension)
+                }
+            }
+        )+
+    };
+}
+
+kind_dimension! {
+    PointTag, Point, 0, |_point| true;
+    MultiPointTag, MultiPoint, 0, |points| points.points().next().is_some();
+    SegmentTag, SegmentTrait, 1, |_segment| true;
+    LinestringTag, LinestringTrait, 1, |line| line.points().len() > 0;
+    MultiLinestringTag, MultiLinestring, 1,
+        |lines| lines.linestrings().any(|line| line.points().len() > 0);
+    BoxTag, BoxTrait, 2, |_bounds| true;
+    RingTag, RingTrait, 2, |ring| ring.points().len() > 0;
+    PolygonTag, PolygonTrait, 2, |polygon| polygon_has_point(polygon);
+    MultiPolygonTag, MultiPolygon, 2, |polygons| polygons.polygons().any(polygon_has_point);
+}
+
+fn polygon_has_point<G: PolygonTrait>(polygon: &G) -> bool {
+    polygon.exterior().points().len() > 0 || polygon.interiors().any(|ring| ring.points().len() > 0)
+}
+
+impl<G> TopologicalDimension<G> for GeometryCollectionTag
+where
+    G: GeometryCollection,
+    <G::Item as Geometry>::Kind: TopologicalDimension<G::Item>,
+{
+    fn dimension(collection: &G) -> Option<u8> {
+        collection
+            .items()
+            .filter_map(<G::Item as Geometry>::Kind::member_dimension)
+            .max()
+    }
+    fn member_dimension(collection: &G) -> Option<u8> {
+        Self::dimension(collection)
+    }
+}
+
+impl<Scalar, Cs> TopologicalDimension<DynGeometry<Scalar, Cs>> for DynamicGeometryTag
+where
+    Scalar: CoordinateScalar,
+    Cs: CoordinateSystem,
+{
+    fn dimension(geometry: &DynGeometry<Scalar, Cs>) -> Option<u8> {
+        match geometry {
+            DynGeometry::Point(_) | DynGeometry::MultiPoint(_) => Some(0),
+            DynGeometry::LineString(_) | DynGeometry::MultiLineString(_) => Some(1),
+            DynGeometry::Polygon(_) | DynGeometry::MultiPolygon(_) => Some(2),
+            DynGeometry::GeometryCollection(items) => {
+                items.iter().filter_map(Self::member_dimension).max()
+            }
+        }
+    }
+    fn member_dimension(geometry: &DynGeometry<Scalar, Cs>) -> Option<u8> {
+        match geometry {
+            DynGeometry::Point(point) => PointTag::member_dimension(point),
+            DynGeometry::MultiPoint(points) => MultiPointTag::member_dimension(points),
+            DynGeometry::LineString(line) => LinestringTag::member_dimension(line),
+            DynGeometry::MultiLineString(lines) => MultiLinestringTag::member_dimension(lines),
+            DynGeometry::Polygon(polygon) => PolygonTag::member_dimension(polygon),
+            DynGeometry::MultiPolygon(polygons) => MultiPolygonTag::member_dimension(polygons),
+            DynGeometry::GeometryCollection(_) => Self::dimension(geometry),
+        }
+    }
+}
+
 /// `touches`: the boundaries meet but the interiors do not.
 ///
 /// Mirrors `boost::geometry::touches` (`algorithms/touches.hpp`) for the
@@ -1683,11 +1877,14 @@ where
             || matrix.boundary_boundary().is_set()))
 }
 
-/// `overlaps`: the interiors intersect, and each geometry has interior
-/// points outside the other, at the same dimension.
+/// `overlaps`: two geometries of one dimension whose interiors meet, each
+/// with interior outside the other.
 ///
-/// Mirrors `boost::geometry::overlaps` (`algorithms/overlaps.hpp`) for
-/// areal × areal: `II = 2`, `IE = 2`, and `EI = 2`.
+/// Mirrors `boost::geometry::overlaps` (`algorithms/overlaps.hpp`): the
+/// mask `T*T***T**`, `1*T***T**` for two linear geometries, and `false` for
+/// geometries of different dimensions (`detail/relate/de9im.hpp:370-393`);
+/// a collection takes the dimension of its largest non-empty member
+/// (`detail/overlaps/implementation.hpp:158-190`).
 ///
 /// # Errors
 ///
@@ -1698,23 +1895,34 @@ pub fn overlaps<G1, G2>(g1: &G1, g2: &G2) -> Result<bool, OverlayError>
 where
     G1: Geometry,
     G2: Geometry,
-    G1::Kind: RelatePairStrategy<G2::Kind>,
+    G1::Kind: RelatePairStrategy<G2::Kind> + TopologicalDimension<G1>,
+    G2::Kind: TopologicalDimension<G2>,
     PairStrategy<G1, G2>: RelateStrategy<G1, G2> + Default,
 {
     let matrix = relate(g1, g2)?;
-    let dimension = matrix.interior_interior();
-    Ok(matches!(
-        dimension,
-        Dimension::Point | Dimension::Curve | Dimension::Area
-    ) && matrix.interior_exterior() == dimension
-        && matrix.exterior_interior() == dimension)
+    let (Some(first), Some(second)) = (G1::Kind::dimension(g1), G2::Kind::dimension(g2)) else {
+        return Ok(false);
+    };
+    let interiors_meet = if first == 1 {
+        matrix.interior_interior() == Dimension::Curve
+    } else {
+        matrix.interior_interior().is_set()
+    };
+    Ok(first == second
+        && interiors_meet
+        && matrix.interior_exterior().is_set()
+        && matrix.exterior_interior().is_set())
 }
 
-/// `crosses`: test the DE-9IM crossing masks for supported pairs.
+/// `crosses`: the interiors meet, and the interior of the geometry of lower
+/// dimension leaves the other; two lines cross where they meet at points.
 ///
-/// Mirrors `boost::geometry::crosses` (`algorithms/crosses.hpp`); the
-/// areal × areal arm returns `false` by definition, while line/line and
-/// line/areal pairs use their corresponding dimensional masks.
+/// Mirrors `boost::geometry::crosses` (`algorithms/crosses.hpp`): the mask
+/// `T*T******` when the first geometry has the lower dimension,
+/// `T*****T**` when the second has, `0********` for two linear geometries,
+/// and `false` for two puntal or two areal ones
+/// (`detail/relate/de9im.hpp:308-366`); a collection takes the dimension
+/// of its largest non-empty member (`algorithms/crosses.hpp:62-104`).
 ///
 /// # Errors
 ///
@@ -1725,16 +1933,20 @@ pub fn crosses<G1, G2>(g1: &G1, g2: &G2) -> Result<bool, OverlayError>
 where
     G1: Geometry,
     G2: Geometry,
-    G1::Kind: RelatePairStrategy<G2::Kind>,
+    G1::Kind: RelatePairStrategy<G2::Kind> + TopologicalDimension<G1>,
+    G2::Kind: TopologicalDimension<G2>,
     PairStrategy<G1, G2>: RelateStrategy<G1, G2> + Default,
 {
     let matrix = relate(g1, g2)?;
-    Ok((matrix.interior_interior() == Dimension::Point
-        && matrix.interior_exterior() == Dimension::Curve
-        && matrix.exterior_interior() == Dimension::Curve)
-        || (matrix.interior_interior() == Dimension::Curve
-            && (matrix.interior_exterior() == Dimension::Curve
-                || matrix.exterior_interior() == Dimension::Curve)))
+    let (Some(first), Some(second)) = (G1::Kind::dimension(g1), G2::Kind::dimension(g2)) else {
+        return Ok(false);
+    };
+    let interiors_meet = matrix.interior_interior().is_set();
+    Ok(match first.cmp(&second) {
+        core::cmp::Ordering::Less => interiors_meet && matrix.interior_exterior().is_set(),
+        core::cmp::Ordering::Greater => interiors_meet && matrix.exterior_interior().is_set(),
+        core::cmp::Ordering::Equal => first == 1 && matrix.interior_interior() == Dimension::Point,
+    })
 }
 
 #[cfg(test)]

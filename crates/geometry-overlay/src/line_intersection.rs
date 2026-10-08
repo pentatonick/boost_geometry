@@ -48,7 +48,7 @@ pub fn line_intersection<S, P>(
 where
     S: SegmentTrait<Point = P>,
     P: PointMut + Default,
-    P::Scalar: CoordinateScalar + Into<f64> + PartialEq,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64> + PartialEq,
 {
     match segment_intersection(first, second) {
         SegmentIntersection::Disjoint => Ok(None),

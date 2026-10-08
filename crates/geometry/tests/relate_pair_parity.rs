@@ -63,6 +63,45 @@ fn crossing_linestrings_have_point_interior_intersection() {
     assert_eq!(matrix.exterior_interior(), Dimension::Curve);
 }
 
+/// A crossing at a point no double holds still meets both interiors: the
+/// point is computed and lies on neither segment exactly. Boost
+/// (`aed7bc3`): `relation(LINESTRING(4 7, 6 5), LINESTRING(8 8, 3 1))` is
+/// `0F1FF0102`, and with a third vertex on each, `001FF0102`.
+#[test]
+fn an_oblique_crossing_meets_both_interiors() {
+    let first = linestring(&[(4.0, 7.0), (6.0, 5.0)]);
+    let second = linestring(&[(8.0, 8.0), (3.0, 1.0)]);
+    assert!(relate(&first, &second, "0F1FF0102").unwrap());
+
+    let first = linestring(&[(4.0, 7.0), (6.0, 5.0), (6.0, 0.0)]);
+    let second = linestring(&[(8.0, 8.0), (3.0, 1.0), (6.0, 3.0)]);
+    assert!(relate(&first, &second, "001FF0102").unwrap());
+}
+
+/// The two legs of a spike cross a segment at one point, computed once per
+/// leg; rounded apart, the two crossings leave no sliver between them to be
+/// read as a shared curve. Boost (`aed7bc3`): the segment against
+/// `LINESTRING(3 6, 7 6, 2 6)` is `0F1FF0102`, the triangle against
+/// `LINESTRING(4 6, 8 6, 2 6)` `1020F1102`.
+#[test]
+fn a_spike_crossing_shares_no_curve() {
+    let segment = linestring(&[
+        (6.789_134_439_408_74, 3.224_196_202_916_934),
+        (1.294_426_419_851_221, 7.901_329_014_039_06),
+    ]);
+    let spike = linestring(&[(3.0, 6.0), (7.0, 6.0), (2.0, 6.0)]);
+    assert!(relate(&segment, &spike, "0F1FF0102").unwrap());
+
+    let triangle: Polygon<P> = polygon![[
+        (6.621_139_718_414_343, 6.553_806_858_516_149),
+        (3.299_094_822_780_315, 3.498_423_332_027_352),
+        (4.174_529_896_042_242, 6.679_450_495_803_891),
+        (6.621_139_718_414_343, 6.553_806_858_516_149),
+    ]];
+    let spike = linestring(&[(4.0, 6.0), (8.0, 6.0), (2.0, 6.0)]);
+    assert!(relate(&triangle, &spike, "1020F1102").unwrap());
+}
+
 /// `test/algorithms/relate/relate_linear_areal.cpp:44-64` — a line crossing a
 /// polygon has a curve in its interior and point boundary intersections.
 #[test]
@@ -641,4 +680,88 @@ fn generic_topology_rejects_out_of_range_members_and_crosses_both_orders() {
     let bounds = ModelBox::from_corners(P::new(0.0, 0.0), P::new(4.0, 4.0));
     assert!(crosses(&segment, &bounds).unwrap());
     assert!(crosses(&bounds, &segment).unwrap());
+}
+
+fn linestring(points: &[(f64, f64)]) -> Linestring<P> {
+    Linestring::from_vec(points.iter().map(|&(x, y)| P::new(x, y)).collect())
+}
+
+/// A line passing through one of its own ends: by the mod-2 rule that point
+/// is boundary, so a line crossing only there meets the boundary alone.
+/// Boost reports an interior meeting there too (`001FF0102`, `aed7bc3`).
+#[test]
+fn a_line_through_its_own_end_is_met_at_its_boundary() {
+    let first = linestring(&[(7.0, 3.0), (3.0, 7.0), (2.0, 0.0)]);
+    let second = linestring(&[(3.0, 6.0), (5.0, 5.0), (8.0, 7.0), (7.0, 1.0), (5.0, 5.0)]);
+    assert!(relate(&first, &second, "F01FF0102").unwrap());
+}
+
+/// The matrix does not depend on the order of a multi-geometry's members.
+/// The boundary point `(4 8)` lies outside the triangle either way; Boost
+/// (`aed7bc3`) drops it from `EB` with the members in this order.
+#[test]
+fn member_order_leaves_the_matrix_unchanged() {
+    let triangle: Polygon<P> = polygon![[(6.0, 6.0), (7.0, 3.0), (3.0, 4.0), (6.0, 6.0)]];
+    let first = linestring(&[(3.0, 4.0), (4.0, 8.0)]);
+    let second = linestring(&[(6.0, 6.0), (0.0, 2.0), (4.0, 4.0)]);
+    for members in [vec![first.clone(), second.clone()], vec![second, first]] {
+        let lines = MultiLinestring::from_vec(members);
+        assert!(relate(&triangle, &lines, "102101102").unwrap());
+    }
+}
+
+/// Two multipolygon members touching at a point on the other operand's
+/// boundary leave that operand inside the union. Boost (`aed7bc3`) reports
+/// `2F2111212`, part of the rectangle outside.
+#[test]
+fn members_touching_on_the_boundary_leave_a_covered_polygon_inside() {
+    let rectangle: Polygon<P> =
+        polygon![[(3.0, 0.0), (3.0, 4.0), (5.0, 4.0), (5.0, 0.0), (3.0, 0.0)]];
+    let union: MultiPolygon<Polygon<P>> = MultiPolygon::from_vec(vec![
+        polygon![[(3.0, 0.0), (3.0, 5.0), (8.0, 5.0), (8.0, 0.0), (3.0, 0.0)]],
+        polygon![[(3.0, 3.0), (1.0, 2.0), (1.0, 3.0), (3.0, 3.0)]],
+    ]);
+    assert!(relate(&rectangle, &union, "2FF11F212").unwrap());
+}
+
+/// `crosses` and `overlaps` choose their mask by the geometries' dimensions,
+/// a collection by its largest non-empty member. Boost (`aed7bc3`):
+/// overlapping lines overlap and do not cross; a multipoint partly on a line
+/// or inside a polygon crosses it, either way round; a square inside another
+/// with a line poking out overlaps it (`2011F0212`).
+#[test]
+fn crossing_and_overlapping_follow_the_dimensions() {
+    let first = linestring(&[(0.0, 0.0), (4.0, 0.0)]);
+    let second = linestring(&[(2.0, 0.0), (6.0, 0.0)]);
+    assert!(!crosses(&first, &second).unwrap());
+    assert!(overlaps(&first, &second).unwrap());
+
+    let points = MultiPoint::from_vec(vec![P::new(1.0, 0.0), P::new(5.0, 5.0)]);
+    assert!(crosses(&points, &first).unwrap());
+    assert!(crosses(&first, &points).unwrap());
+    let clockwise: Polygon<P> =
+        polygon![[(0.0, 0.0), (0.0, 4.0), (4.0, 4.0), (4.0, 0.0), (0.0, 0.0)]];
+    let points = MultiPoint::from_vec(vec![P::new(1.0, 1.0), P::new(5.0, 5.0)]);
+    assert!(crosses(&points, &clockwise).unwrap());
+
+    let shifted: Polygon<P> = polygon![[
+        (2.0, -1.0),
+        (2.0, 3.0),
+        (7.0, 3.0),
+        (7.0, -1.0),
+        (2.0, -1.0)
+    ]];
+    let collection = DynGeometryCollection(vec![
+        DynGeometry::Polygon(polygon![[
+            (3.0, 0.0),
+            (3.0, 2.0),
+            (5.0, 2.0),
+            (5.0, 0.0),
+            (3.0, 0.0)
+        ]]),
+        DynGeometry::LineString(linestring(&[(4.0, 1.0), (9.0, 1.0)])),
+    ]);
+    assert!(relate(&collection, &shifted, "2011F0212").unwrap());
+    assert!(overlaps(&collection, &shifted).unwrap());
+    assert!(!crosses(&collection, &shifted).unwrap());
 }

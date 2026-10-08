@@ -226,15 +226,12 @@ where
 /// growing by the rest.
 ///
 /// For a **non-empty** range the box is seeded from the first real point
-/// (not from zero), so all-negative coordinates envelope correctly. For
-/// an **empty** range it returns `Box::default()` = `((0,0),(0,0))` — a
-/// degenerate box at the origin. Note this differs from Boost, which
-/// leaves an empty envelope *inverted* (`min = +∞`, `max = −∞`) so
-/// emptiness is detectable (`algorithms/detail/envelope/initialize.hpp`);
-/// callers that must distinguish "empty" from "a point at the origin"
-/// should check the source geometry for emptiness first. Representing an
-/// inverted box needs an infinity sentinel the v1 `Box` does not carry;
-/// deferred.
+/// (not from zero), so all-negative coordinates envelope correctly. An
+/// **empty** range has Boost's inverse box for its envelope — every minimum
+/// at the scalar's [`highest`](CoordinateScalar::highest) value and every
+/// maximum at its [`lowest`](CoordinateScalar::lowest)
+/// (`algorithms/detail/envelope/initialize.hpp:61-79`) — which tells it
+/// apart from a point at the origin and widens no box it expands.
 #[inline]
 pub fn envelope_of_points<'a, P, I>(it: I) -> ModelBox<P>
 where
@@ -242,15 +239,55 @@ where
     P::Scalar: CoordinateScalar,
     I: IntoIterator<Item = &'a P>,
 {
-    let mut out = ModelBox::<P>::default();
     let mut it = it.into_iter();
-    if let Some(first) = it.next() {
-        seed_from_point(&mut out, first);
-        for p in it {
-            grow_from_point(&mut out, p);
-        }
+    let Some(first) = it.next() else {
+        return inverse_box();
+    };
+    let mut out = ModelBox::<P>::default();
+    seed_from_point(&mut out, first);
+    for p in it {
+        grow_from_point(&mut out, p);
     }
     out
+}
+
+/// Boost's inverse box, `initialize<Box>::apply`
+/// (`algorithms/detail/envelope/initialize.hpp:61-79`): every minimum at the
+/// scalar's highest value and every maximum at its lowest.
+fn inverse_box<P>() -> ModelBox<P>
+where
+    P: PointMut + Default,
+{
+    let mut out = ModelBox::<P>::default();
+    fold_dims((), &P::default(), |(), _, d| match d {
+        0 => write_inverse::<P, 0>(&mut out),
+        1 => write_inverse::<P, 1>(&mut out),
+        2 => write_inverse::<P, 2>(&mut out),
+        3 => write_inverse::<P, 3>(&mut out),
+        _ => unreachable!("fold_dims: dimension out of MAX_DIM range"),
+    });
+    out
+}
+
+#[inline]
+fn write_inverse<P, const D: usize>(out: &mut ModelBox<P>)
+where
+    P: PointMut,
+{
+    out.set_indexed::<0, D>(P::Scalar::highest());
+    out.set_indexed::<1, D>(P::Scalar::lowest());
+}
+
+/// The points Boost's `envelope_polygon` bounds
+/// (`algorithms/detail/envelope/areal.hpp:39-63`): the exterior ring's, or
+/// the interior rings' where the exterior ring is empty.
+fn polygon_envelope_points<G: PolygonTrait>(g: &G) -> impl Iterator<Item = &G::Point> {
+    let exterior_is_empty = g.exterior().points().len() == 0;
+    g.exterior().points().chain(
+        g.interiors()
+            .filter(move |_| exterior_is_empty)
+            .flat_map(RingTrait::points),
+    )
 }
 
 // ---- Per-kind concept-bounded impls ---------------------------------
@@ -331,7 +368,8 @@ where
 // ---- Polygon --------------------------------------------------------
 //
 // Only the exterior ring contributes — interior rings live strictly
-// inside, so they can only ever narrow the box, never widen it.
+// inside, so they can only ever narrow the box, never widen it — unless
+// the exterior ring is empty, when Boost bounds the interior rings.
 
 impl<G> EnvelopeStrategy<G> for EnvelopePolygon
 where
@@ -343,7 +381,7 @@ where
 
     #[inline]
     fn envelope(&self, g: &G) -> Self::Output {
-        envelope_of_points::<G::Point, _>(g.exterior().points())
+        envelope_of_points::<G::Point, _>(polygon_envelope_points(g))
     }
 }
 
@@ -426,26 +464,16 @@ where
 
     #[inline]
     fn envelope(&self, g: &G) -> Self::Output {
-        let mut out = ModelBox::<G::Point>::default();
-        let mut seeded = false;
-        for ls in g.linestrings() {
-            for p in ls.points() {
-                if seeded {
-                    grow_from_point(&mut out, p);
-                } else {
-                    seed_from_point(&mut out, p);
-                    seeded = true;
-                }
-            }
-        }
-        out
+        envelope_of_points::<G::Point, _>(g.linestrings().flat_map(LinestringTrait::points))
     }
 }
 
 // ---- MultiPolygon ---------------------------------------------------
 //
 // The member concept is open (any `Polygon` whose point matches) — the
-// same BYO widening as `EnvelopeMultiLinestring`.
+// same BYO widening as `EnvelopeMultiLinestring`. Each member is bounded
+// as a polygon is, an empty one adding nothing
+// (`algorithms/detail/envelope/range.hpp:59-89`).
 
 impl<G> EnvelopeStrategy<G> for EnvelopeMultiPolygon
 where
@@ -457,19 +485,7 @@ where
 
     #[inline]
     fn envelope(&self, g: &G) -> Self::Output {
-        let mut out = ModelBox::<G::Point>::default();
-        let mut seeded = false;
-        for poly in g.polygons() {
-            for p in poly.exterior().points() {
-                if seeded {
-                    grow_from_point(&mut out, p);
-                } else {
-                    seed_from_point(&mut out, p);
-                    seeded = true;
-                }
-            }
-        }
-        out
+        envelope_of_points::<G::Point, _>(g.polygons().flat_map(polygon_envelope_points))
     }
 }
 

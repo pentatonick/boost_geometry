@@ -4,7 +4,14 @@
 //! `vertex_longitude.hpp`. A vertex is the point at which a geodesic reaches
 //! its most northerly or southerly latitude.
 
+#[cfg(feature = "std")]
 use geometry_cs::Spheroid;
+
+#[cfg(feature = "std")]
+use geometry_coords::CoordinateScalar;
+
+#[cfg(feature = "std")]
+use crate::normalise::normalized_longitude;
 
 /// Vertex latitude for a great circle on a sphere.
 #[cfg(feature = "std")]
@@ -27,6 +34,10 @@ pub fn geographic_vertex_latitude(latitude1: f64, azimuth1: f64, spheroid: Spher
 }
 
 /// Vertex longitude for the great circle through two ordered endpoints.
+///
+/// Mirrors `formula::vertex_longitude` on a sphere
+/// (`formulas/vertex_longitude.hpp`), normalized into `(−π, π]` as
+/// Boost's own test reads it.
 #[cfg(feature = "std")]
 #[must_use]
 pub fn spherical_vertex_longitude(
@@ -54,7 +65,11 @@ pub fn spherical_vertex_longitude(
 
 /// Vertex longitude for a spheroidal geodesic through ordered endpoints.
 ///
-/// `azimuth1` is the forward azimuth at `(longitude1, latitude1)`.
+/// `azimuth1` is the forward azimuth at `(longitude1, latitude1)`. Mirrors
+/// `formula::vertex_longitude` on a spheroid
+/// (`formulas/vertex_longitude.hpp`), normalized into `(−π, π]` as Boost's
+/// own test reads it. Where rounding carries a sine past one, Boost takes
+/// the square root of a negative number and returns NaN; this clamps it.
 #[cfg(feature = "std")]
 #[must_use]
 #[allow(
@@ -109,7 +124,11 @@ fn geographic_vertex_delta(
     spheroid: Spheroid,
 ) -> f64 {
     let half_pi = core::f64::consts::FRAC_PI_2;
-    if (latitude1.abs() - half_pi).abs() <= 1e-12 || (latitude2.abs() - half_pi).abs() <= 1e-12 {
+    if latitude1.tolerant_eq(half_pi)
+        || latitude2.tolerant_eq(half_pi)
+        || latitude1.tolerant_eq(-half_pi)
+        || latitude2.tolerant_eq(-half_pi)
+    {
         return 0.0;
     }
 
@@ -136,7 +155,8 @@ fn geographic_vertex_delta(
 
     let sin_alpha1 = azimuth1.sin();
     let cos_alpha1 = (1.0 - sin_alpha1 * sin_alpha1).max(0.0).sqrt();
-    let norm = (cos_alpha1 * cos_alpha1 + sin_alpha1 * sin_alpha1 * sin_beta1 * sin_beta1).sqrt();
+    let norm =
+        (cos_alpha1 * cos_alpha1 + (sin_alpha1 * sin_beta1) * (sin_alpha1 * sin_beta1)).sqrt();
     let sin_alpha0 = (sin_alpha1 * cos_beta1).atan2(norm).sin();
     let sin_alpha2 = (sin_alpha1 * cos_beta1 / cos_beta2).clamp(-1.0, 1.0);
     let cos_alpha0 = (1.0 - sin_alpha0 * sin_alpha0).max(0.0).sqrt();
@@ -178,6 +198,12 @@ fn geographic_vertex_delta(
     omega13 - sign * f * sin_alpha0 * i3
 }
 
+/// Boost's `vertex_longitude::apply` (`formulas/vertex_longitude.hpp:270-311`)
+/// normalized into `(−π, π]`, as Boost's own test reads it
+/// (`test/formulas/vertex_longitude.cpp:133-136`). Its endpoint and meridian
+/// tests are `math::equals`. On a meridian Boost returns `max(lat1, lat2)`,
+/// a latitude; the vertex of a meridian lies on it, so this returns its
+/// longitude.
 #[cfg(feature = "std")]
 fn vertex_longitude(
     longitude1: f64,
@@ -187,27 +213,22 @@ fn vertex_longitude(
     vertex_latitude: f64,
     delta: f64,
 ) -> f64 {
-    if (vertex_latitude - latitude1).abs() <= 1e-12 {
-        return normalize_longitude(longitude1);
-    }
-    if (vertex_latitude - latitude2).abs() <= 1e-12 {
-        return normalize_longitude(longitude2);
-    }
-    if (longitude1 - longitude2).abs() <= 1e-12 {
-        return normalize_longitude(longitude1);
-    }
-    let mut longitude = (longitude1 + delta).rem_euclid(core::f64::consts::TAU);
-    if vertex_latitude < 0.0 {
-        longitude -= core::f64::consts::PI;
-    }
-    if (longitude1 - longitude2).abs() > core::f64::consts::PI {
-        longitude -= core::f64::consts::PI;
-    }
-    normalize_longitude(longitude)
-}
-
-#[cfg(feature = "std")]
-fn normalize_longitude(longitude: f64) -> f64 {
     let pi = core::f64::consts::PI;
-    (longitude + pi).rem_euclid(core::f64::consts::TAU) - pi
+    let longitude = if vertex_latitude.tolerant_eq(latitude1) {
+        longitude1
+    } else if vertex_latitude.tolerant_eq(latitude2) {
+        longitude2
+    } else if longitude1.tolerant_eq(longitude2) {
+        longitude1
+    } else {
+        let mut longitude = (longitude1 + delta) % (2.0 * pi);
+        if vertex_latitude < 0.0 {
+            longitude -= pi;
+        }
+        if (longitude1 - longitude2).abs() > pi {
+            longitude -= pi;
+        }
+        longitude
+    };
+    normalized_longitude(longitude)
 }

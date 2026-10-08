@@ -53,12 +53,13 @@ use geometry_strategy::buffer::{
     BufferSettings, CartesianBuffer, DefaultBuffer, DefaultBufferStrategy, GeographicBuffer,
     SphericalBuffer,
 };
+use geometry_strategy::{DouglasPeucker, PointToSegment, Pythagoras, SimplifyStrategy};
 use geometry_tag::{
     BoxTag, LinestringTag, MultiLinestringTag, MultiPointTag, MultiPolygonTag, PointTag,
     PolygonTag, RingTag, SameAs, SegmentTag,
 };
 use geometry_trait::{
-    Box as BoxTrait, Geometry, Linestring as LinestringTrait,
+    Box as BoxTrait, Closure, Geometry, Linestring as LinestringTrait,
     MultiLinestring as MultiLinestringTrait, MultiPoint as MultiPointTrait,
     MultiPolygon as MultiPolygonTrait, Point, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
     Segment as SegmentTrait, box_max, box_min, segment_end, segment_start,
@@ -235,8 +236,9 @@ impl BufferStrategyForKind for MultiPolygonTag {
 ///
 /// # Errors
 ///
-/// Returns [`OverlayError::Unsupported`] for non-finite distances, asymmetric
-/// areal distances, or degenerate linear inputs.
+/// Returns [`OverlayError::Unsupported`] for non-finite distances or
+/// asymmetric areal distances. A linear or areal input that simplifies to a
+/// single point is buffered as that point, as Boost buffers it.
 #[inline]
 #[must_use = "buffering can fail and the generated geometry should be used"]
 pub fn buffer<G>(
@@ -283,7 +285,7 @@ where
 /// # Errors
 ///
 /// Returns [`OverlayError::Unsupported`] for non-finite/inapplicable distance
-/// policies or degenerate linear input.
+/// policies, among them an asymmetric distance negative on one side only.
 #[inline]
 #[must_use = "buffering can fail and the generated geometry should be used"]
 pub fn buffer_with<G>(
@@ -315,8 +317,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`OverlayError::Unsupported`] for invalid strategy values,
-/// non-finite/inapplicable distances, or degenerate linear input.
+/// Returns [`OverlayError::Unsupported`] for invalid strategy values or
+/// non-finite/inapplicable distances.
 #[inline]
 #[must_use = "buffering can fail and the generated geometry should be used"]
 #[allow(
@@ -358,7 +360,8 @@ fn zero_width_polygon_buffer<G>(
 where
     G: PolygonTrait,
     G::Point: PointMut + Default + Copy,
-    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
 {
     use crate::piece_collection::{ZeroWidthOutcome, zero_width_outcome, zero_width_rings};
 
@@ -376,7 +379,7 @@ where
 impl<G> BufferStrategy<G, CartesianBuffer> for PointBuffer
 where
     G: Point + PointMut + Default + Copy,
-    G::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    G::Scalar: CoordinateScalar<Measure = G::Scalar> + Into<f64> + FromF64,
     <G::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     fn apply(
@@ -391,17 +394,20 @@ where
         if !distance.is_finite() {
             return Err(OverlayError::Unsupported);
         }
-        if distance <= 0.0 {
+        // C++: `distance_symmetric::apply` hands every side the distance's
+        // magnitude; only an areal geometry reads its sign, as a deflation.
+        let distance = distance.abs();
+        if distance == 0.0 {
             return Ok(MultiPolygon(alloc::vec![]));
         }
-        let point = match settings.point {
-            BufferPointStrategy::Circle { points_per_circle } => {
-                PointStrategy::Circle { points_per_circle }
-            }
-            BufferPointStrategy::Square => PointStrategy::Square,
-        };
-        let ring = buffer_point(point_geometry, distance, point);
-        Ok(MultiPolygon(alloc::vec![Polygon::new(ring)]))
+        Ok(point_buffer(
+            (
+                point_geometry.get::<0>().into(),
+                point_geometry.get::<1>().into(),
+            ),
+            distance,
+            settings.point,
+        ))
     }
 }
 
@@ -411,7 +417,8 @@ impl<G> BufferStrategy<G, CartesianBuffer> for PolygonBuffer
 where
     G: PolygonTrait,
     G::Point: PointMut + Default + Copy,
-    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
     <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     fn apply(
@@ -433,18 +440,38 @@ where
             // falls back on, so it has to answer.
             return zero_width_polygon_buffer(polygon);
         }
-        let outer = offset_ring(polygon.exterior(), distance, settings.join, true);
-        let inners = polygon
+        // C++: `buffer_inserter_ring` offsets each ring as `simplify_input`
+        // leaves it, and an exterior left with fewer points than a ring needs
+        // is buffered as its first point, which simplifying keeps; deflated,
+        // that leaves nothing. A hole left that short encloses nothing.
+        let Some(exterior) = simplified_ring(polygon.exterior(), distance) else {
+            return Ok(match polygon.exterior().points().next() {
+                Some(point) if distance > 0.0 => point_buffer(
+                    (point.get::<0>().into(), point.get::<1>().into()),
+                    distance,
+                    settings.point,
+                ),
+                _ => MultiPolygon::new(),
+            });
+        };
+        let simplified = Polygon::with_inners(
+            exterior,
+            polygon
+                .interiors()
+                .filter_map(|ring| simplified_ring(ring, distance))
+                .collect(),
+        );
+        let outer = offset_ring(simplified.exterior(), distance, settings.join, true);
+        let inners = simplified
             .interiors()
             .map(|ring| offset_ring(ring, -distance, settings.join, false))
-            .collect::<Vec<_>>();
-        if offset_rings_need_dissolving(outer.as_ref(), &inners, distance) {
-            return dissolve_offset(polygon, distance, settings.join);
-        }
-        let Some(outer) = outer else {
-            return Ok(MultiPolygon(alloc::vec![]));
+            .collect::<Option<Vec<_>>>();
+        let (Some(outer), Some(inners)) = (outer, inners) else {
+            return dissolve_offset(&simplified, distance, settings.join);
         };
-        let inners = inners.into_iter().flatten().collect::<Vec<_>>();
+        if offset_rings_cross(&outer, &inners, distance) {
+            return dissolve_offset(&simplified, distance, settings.join);
+        }
         let outer_vertices = distinct_vertices(&outer);
         if inners.iter().any(|inner| {
             let inner_vertices = distinct_vertices(inner);
@@ -465,7 +492,8 @@ impl<G> BufferStrategy<G, CartesianBuffer> for LinestringBuffer
 where
     G: LinestringTrait,
     G::Point: PointMut + Default + Copy,
-    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
     <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     fn apply(
@@ -474,8 +502,16 @@ where
         settings: BufferSettings,
         _coordinate_strategy: &CartesianBuffer,
     ) -> Result<MultiPolygon<Polygon<G::Point>>, OverlayError> {
+        // C++: `distance_symmetric::apply` and `distance_asymmetric::apply`
+        // hand each side the distance's magnitude when the distance is
+        // negative — both sides of it, for the asymmetric one. One side
+        // negative and the other not pushes that side's offset across the
+        // line, which is not ported.
         let (left, right) = match settings.distance {
-            BufferDistanceStrategy::Symmetric(distance) => (distance, distance),
+            BufferDistanceStrategy::Symmetric(distance) => (distance.abs(), distance.abs()),
+            BufferDistanceStrategy::Asymmetric { left, right } if left < 0.0 && right < 0.0 => {
+                (left.abs(), right.abs())
+            }
             BufferDistanceStrategy::Asymmetric { left, right } => (left, right),
         };
         if !left.is_finite() || !right.is_finite() || left < 0.0 || right < 0.0 {
@@ -484,8 +520,7 @@ where
         if left == 0.0 && right == 0.0 {
             return Ok(MultiPolygon(alloc::vec![]));
         }
-        let polygon = buffer_linestring(line, left, right, settings.join, settings.end)?;
-        Ok(MultiPolygon(alloc::vec![polygon]))
+        buffer_linestring(line, left, right, settings)
     }
 }
 
@@ -493,7 +528,8 @@ impl<G> BufferStrategy<G, CartesianBuffer> for SegmentBuffer
 where
     G: SegmentTrait,
     G::Point: PointMut + Default + Copy,
-    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
     <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     fn apply(
@@ -512,7 +548,8 @@ impl<G> BufferStrategy<G, CartesianBuffer> for RingBuffer
 where
     G: RingTrait,
     G::Point: PointMut + Default + Copy,
-    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
     <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     fn apply(
@@ -524,14 +561,20 @@ where
         let BufferDistanceStrategy::Symmetric(distance) = settings.distance else {
             return Err(OverlayError::Unsupported);
         };
-        if !distance.is_finite() || distance == 0.0 {
+        if !distance.is_finite() {
             return Err(OverlayError::Unsupported);
         }
         // C++: `buffer_inserter<ring_tag>` is the polygon inserter over one
         // ring. Its offset can cross itself just as a polygon's can, so it
-        // takes the polygon arm — and with it the dissolve.
-        let polygon: Polygon<G::Point> =
-            Polygon::new(Ring::from_vec(ring.points().copied().collect()));
+        // takes the polygon arm — and with it the dissolve. The copy is a
+        // closed ring, so an open one is closed on the way.
+        let mut points: Vec<G::Point> = ring.points().copied().collect();
+        if ring.closure() == Closure::Open {
+            if let Some(&first) = points.first() {
+                points.push(first);
+            }
+        }
+        let polygon: Polygon<G::Point> = Polygon::new(Ring::from_vec(points));
         PolygonBuffer.apply(&polygon, settings, coordinate_strategy)
     }
 }
@@ -540,7 +583,8 @@ impl<G> BufferStrategy<G, CartesianBuffer> for BoxBuffer
 where
     G: BoxTrait,
     G::Point: PointMut + Default + Copy,
-    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
     <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     fn apply(
@@ -570,7 +614,8 @@ impl<G> BufferStrategy<G, CartesianBuffer> for MultiPointBuffer
 where
     G: MultiPointTrait<ItemPoint = <G as Geometry>::Point>,
     G::Point: PointMut + Default + Copy,
-    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
     <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     fn apply(
@@ -593,7 +638,8 @@ impl<G> BufferStrategy<G, CartesianBuffer> for MultiLinestringBuffer
 where
     G: MultiLinestringTrait,
     G::Point: PointMut + Default + Copy,
-    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
     <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     fn apply(
@@ -618,7 +664,8 @@ impl<G> BufferStrategy<G, CartesianBuffer> for MultiPolygonBuffer
 where
     G: MultiPolygonTrait,
     G::Point: PointMut + Default + Copy,
-    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
     <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     fn apply(
@@ -890,7 +937,7 @@ fn projected_point_apply<P>(
 ) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
 where
     P: Point + PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64> + FromF64,
     P::Cs: AngularCoordinateSystem,
 {
     let projection = projection_for_points(core::iter::once(point), strategy)?;
@@ -907,7 +954,8 @@ fn projected_linestring_apply<L>(
 where
     L: LinestringTrait,
     L::Point: PointMut + Default + Copy,
-    <L::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <L::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <L::Point as Point>::Scalar> + Into<f64> + FromF64,
     <L::Point as Point>::Cs: AngularCoordinateSystem,
 {
     let projection = projection_for_points(line.points(), strategy)?;
@@ -928,7 +976,8 @@ fn projected_ring_apply<R>(
 where
     R: RingTrait,
     R::Point: PointMut + Default + Copy,
-    <R::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <R::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <R::Point as Point>::Scalar> + Into<f64> + FromF64,
     <R::Point as Point>::Cs: AngularCoordinateSystem,
 {
     let projection = projection_for_points(ring.points(), strategy)?;
@@ -948,7 +997,8 @@ fn projected_polygon_apply<G>(
 where
     G: PolygonTrait,
     G::Point: PointMut + Default + Copy,
-    <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    <G::Point as Point>::Scalar:
+        CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
     <G::Point as Point>::Cs: AngularCoordinateSystem,
 {
     let mut coordinates = polygon
@@ -974,7 +1024,7 @@ macro_rules! impl_angular_buffer_strategy {
         impl<G> BufferStrategy<G, $strategy> for PointBuffer
         where
             G: Point + PointMut + Default + Copy,
-            G::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            G::Scalar: CoordinateScalar<Measure = G::Scalar> + Into<f64> + FromF64,
             G::Cs: AngularCoordinateSystem,
             <G::Cs as CoordinateSystem>::Family: SameAs<$family>,
         {
@@ -992,7 +1042,8 @@ macro_rules! impl_angular_buffer_strategy {
         where
             G: LinestringTrait,
             G::Point: PointMut + Default + Copy,
-            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Scalar:
+                CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
             <G::Point as Point>::Cs: AngularCoordinateSystem,
             <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
         {
@@ -1010,7 +1061,8 @@ macro_rules! impl_angular_buffer_strategy {
         where
             G: SegmentTrait,
             G::Point: PointMut + Default + Copy,
-            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Scalar:
+                CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
             <G::Point as Point>::Cs: AngularCoordinateSystem,
             <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
         {
@@ -1032,7 +1084,8 @@ macro_rules! impl_angular_buffer_strategy {
         where
             G: RingTrait,
             G::Point: PointMut + Default + Copy,
-            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Scalar:
+                CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
             <G::Point as Point>::Cs: AngularCoordinateSystem,
             <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
         {
@@ -1050,7 +1103,8 @@ macro_rules! impl_angular_buffer_strategy {
         where
             G: PolygonTrait,
             G::Point: PointMut + Default + Copy,
-            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Scalar:
+                CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
             <G::Point as Point>::Cs: AngularCoordinateSystem,
             <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
         {
@@ -1068,7 +1122,8 @@ macro_rules! impl_angular_buffer_strategy {
         where
             G: BoxTrait,
             G::Point: PointMut + Default + Copy,
-            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Scalar:
+                CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
             <G::Point as Point>::Cs: AngularCoordinateSystem,
             <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
         {
@@ -1094,7 +1149,8 @@ macro_rules! impl_angular_buffer_strategy {
         where
             G: MultiPointTrait<ItemPoint = <G as Geometry>::Point>,
             G::Point: PointMut + Default + Copy,
-            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Scalar:
+                CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
             <G::Point as Point>::Cs: AngularCoordinateSystem,
             <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
         {
@@ -1120,7 +1176,8 @@ macro_rules! impl_angular_buffer_strategy {
         where
             G: MultiLinestringTrait,
             G::Point: PointMut + Default + Copy,
-            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Scalar:
+                CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
             <G::Point as Point>::Cs: AngularCoordinateSystem,
             <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
         {
@@ -1157,7 +1214,8 @@ macro_rules! impl_angular_buffer_strategy {
         where
             G: MultiPolygonTrait,
             G::Point: PointMut + Default + Copy,
-            <G::Point as Point>::Scalar: CoordinateScalar + Into<f64> + FromF64,
+            <G::Point as Point>::Scalar:
+                CoordinateScalar<Measure = <G::Point as Point>::Scalar> + Into<f64> + FromF64,
             <G::Point as Point>::Cs: AngularCoordinateSystem,
             <<G::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<$family>,
         {
@@ -1220,7 +1278,7 @@ impl_angular_buffer_strategy!(GeographicBuffer, GeographicFamily);
 pub fn buffer_point<P>(center: &P, distance: f64, strategy: PointStrategy) -> Ring<P>
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64> + FromF64,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     let cx: f64 = center.get::<0>().into();
@@ -1281,7 +1339,7 @@ pub fn buffer_convex_polygon<G, P>(polygon: &G, distance: f64, join: JoinStrateg
 where
     G: PolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64> + FromF64,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     let strategy = match join {
@@ -1315,8 +1373,13 @@ where
         vertices.reverse();
     }
 
+    let dot = |one: (f64, f64), two: (f64, f64)| one.0 * two.0 + one.1 * two.1;
     let count = vertices.len();
     let mut boundary = Vec::new();
+    // Where the outline leaves the incoming side's offset and joins the
+    // outgoing side's, corner by corner.
+    let mut corners = Vec::with_capacity(count);
+    let mut held = true;
     for index in 0..count {
         let previous = vertices[(index + count - 1) % count];
         let vertex = vertices[index];
@@ -1338,14 +1401,21 @@ where
         let exterior_join = cross * distance > 0.0;
 
         if !exterior_join {
-            if let Some(point) = intersection {
-                boundary.push(point);
-            } else {
-                boundary.push(after);
-            }
+            let point = intersection.unwrap_or(after);
+            // C++: a concave corner adds no piece; the sides' pieces close it
+            // only while each reaches past the end edge of the other.
+            held &= dot((before.0 - vertex.0, before.1 - vertex.1), outgoing)
+                <= dot(outgoing, outgoing)
+                && dot(
+                    (after.0 - vertex.0, after.1 - vertex.1),
+                    (-incoming.0, -incoming.1),
+                ) <= dot(incoming, incoming);
+            corners.push((point, point));
+            boundary.push(point);
             continue;
         }
 
+        corners.push((before, after));
         push_join_points(
             join,
             vertex,
@@ -1353,8 +1423,27 @@ where
             after,
             intersection,
             distance,
+            distance > 0.0,
             &mut boundary,
         );
+    }
+    // Each side's offset runs from where the outline joins it to where it
+    // leaves it; a concave cut past a short side runs it backwards, over
+    // ground the pieces do not bound.
+    held &= (0..count).all(|index| {
+        let next = (index + 1) % count;
+        let side = (
+            vertices[next].0 - vertices[index].0,
+            vertices[next].1 - vertices[index].1,
+        );
+        let run = (
+            corners[next].0.0 - corners[index].1.0,
+            corners[next].0.1 - corners[index].1.1,
+        );
+        dot(run, side) >= 0.0
+    });
+    if !held {
+        return None;
     }
 
     boundary.dedup();
@@ -1391,6 +1480,15 @@ where
 /// C++: `join_round::apply` and `join_miter::apply`, whose output range the
 /// caller appends. Shared by the offsetted ring and the join piece the
 /// dissolve builds for the same corner, so the two describe one offset.
+/// `counterclockwise` is the way round the corner the offset turns: a ring
+/// walked counter-clockwise rounds an outward offset's convex corner
+/// counter-clockwise and an inward offset's reflex corner the other way,
+/// and forcing one direction would sweep the long way through the material
+/// at the other.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the corner, its two offset ends, the miter point, the distance and the turn are what `join_strategy.apply` receives"
+)]
 fn push_join_points(
     join: BufferJoinStrategy,
     vertex: (f64, f64),
@@ -1398,98 +1496,85 @@ fn push_join_points(
     after: (f64, f64),
     intersection: Option<(f64, f64)>,
     distance: f64,
+    counterclockwise: bool,
     boundary: &mut Vec<(f64, f64)>,
 ) {
+    // C++: a join that cannot be made — its two ends one point, or no
+    // miter point — adds nothing, and the outline runs on from `before`.
+    let same =
+        |one: (f64, f64), two: (f64, f64)| one.0.tolerant_eq(two.0) && one.1.tolerant_eq(two.1);
+    boundary.push(before);
+    if same(before, after) {
+        return;
+    }
     match join {
         BufferJoinStrategy::Round { points_per_circle } => {
-            // The ring is walked counter-clockwise, so an outward offset
-            // (`distance > 0`) rounds a convex corner counter-clockwise,
-            // while an inward offset rounds a reflex corner the other
-            // way; forcing one direction sweeps the long way through
-            // the material at the other.
-            boundary.push(before);
-            push_arc_between(
-                boundary,
-                vertex,
-                before,
-                after,
-                distance.abs(),
-                points_per_circle.max(4),
-                distance > 0.0,
-            );
-            boundary.push(after);
+            // C++: `join_round` sweeps clockwise from the end of the
+            // incoming offset, its walk keeping the offset on its left; a
+            // walk the other way round meets the same corner from the far
+            // end of the arc.
+            let (from, to) = if counterclockwise {
+                (after, before)
+            } else {
+                (before, after)
+            };
+            let mut arc = round_join_points(vertex, from, to, distance.abs(), points_per_circle);
+            if counterclockwise {
+                arc.reverse();
+            }
+            boundary.extend(arc);
         }
         BufferJoinStrategy::Miter { limit } => {
-            if let Some(point) = intersection {
-                let miter_length = hypot(point.0 - vertex.0, point.1 - vertex.1);
-                if point.0.is_finite()
-                    && point.1.is_finite()
-                    && miter_length <= limit.max(1.0) * distance.abs()
-                {
-                    boundary.push(point);
-                } else {
-                    boundary.push(before);
-                    boundary.push(after);
-                }
+            let Some(point) = intersection.filter(|point| {
+                point.0.is_finite() && point.1.is_finite() && !same(*point, vertex)
+            }) else {
+                return;
+            };
+            // C++: a miter longer than the limit is not cut to a bevel; its
+            // point is drawn back along the miter to the limit.
+            let (dx, dy) = (point.0 - vertex.0, point.1 - vertex.1);
+            let miter_length = sqrt(dx * dx + dy * dy);
+            let max_length = limit.max(1.0) * distance.abs();
+            if miter_length > max_length {
+                let proportion = max_length / miter_length;
+                boundary.push((vertex.0 + dx * proportion, vertex.1 + dy * proportion));
             } else {
-                boundary.push(before);
-                boundary.push(after);
+                boundary.push(point);
             }
         }
     }
+    boundary.push(after);
 }
 
-/// Whether the offsetted rings can stand as the answer, or the offset has to
-/// be rebuilt from its pieces.
+/// Whether the offsetted rings cross, so that the offset has to be rebuilt
+/// from its pieces.
 ///
 /// C++: `buffered_piece_collection` never trusts an offsetted ring — it finds
 /// the turns between every piece and traverses them whatever the input. This
-/// port keeps the offsetted ring wherever it is already the answer, which is
-/// whenever no ring crosses itself or another and every erosion kept its
-/// clearance, and rebuilds the offset from the pieces only where a ring is
-/// not simple: a notch narrower than twice the distance closes, a neck
-/// thinner than that pinches off, a hole's arm fills in.
+/// port keeps the offsetted rings wherever they are already the answer, which
+/// is whenever `offset_ring` kept each one — every concave corner held and
+/// every erosion kept its clearance — and no ring crosses itself or another.
+/// It rebuilds the offset from the pieces only where a ring is not simple: a
+/// notch narrower than twice the distance closes, a neck thinner than that
+/// pinches off, a hole's arm fills in.
 ///
-/// `outer` is the exterior's offsetted ring and `inners` the holes', each
-/// `None` where `offset_ring` declined. A growing polygon's hole or an
-/// eroding polygon's exterior that declined may have collapsed only in part,
-/// so both go to the pieces; an eroding polygon's hole declines only with
-/// fewer than three distinct vertices, and encloses nothing either way.
-fn offset_rings_need_dissolving<P>(
-    outer: Option<&Ring<P>>,
-    inners: &[Option<Ring<P>>],
-    distance: f64,
-) -> bool
+/// `outer` is the exterior's offsetted ring and `inners` the holes'.
+fn offset_rings_cross<P>(outer: &Ring<P>, inners: &[Ring<P>], distance: f64) -> bool
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
 {
-    let eroding = distance < 0.0;
-    let Some(outer) = outer else {
-        return eroding;
-    };
-    if ring_crosses_itself(outer) {
+    if ring_crosses_itself(outer) || inners.iter().any(ring_crosses_itself) {
         return true;
     }
-    let mut kept: Vec<&Ring<P>> = Vec::new();
-    for inner in inners {
-        match inner {
-            Some(inner) => kept.push(inner),
-            None if eroding => {}
-            None => return true,
-        }
-    }
-    if kept.iter().copied().any(ring_crosses_itself) {
-        return true;
-    }
-    if !eroding {
+    if distance > 0.0 {
         // Growth moves the exterior outward and every hole inward, away from
         // one another; only erosion can run them into each other.
         return false;
     }
-    kept.iter().enumerate().any(|(index, inner)| {
+    inners.iter().enumerate().any(|(index, inner)| {
         rings_cross(outer, inner)
-            || kept[index + 1..]
+            || inners[index + 1..]
                 .iter()
                 .any(|other| rings_cross(inner, other))
     })
@@ -1523,7 +1608,7 @@ where
 fn sides_meet<P>(one: &(P, P, [f64; 4]), two: &(P, P, [f64; 4])) -> bool
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
 {
     let (a, b) = (&one.2, &two.2);
     if a[0] > b[2] || b[0] > a[2] || a[1] > b[3] || b[1] > a[3] {
@@ -1542,7 +1627,7 @@ where
 fn ring_crosses_itself<P>(ring: &Ring<P>) -> bool
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
 {
     let sides = ring_sides(ring);
     let count = sides.len();
@@ -1556,7 +1641,7 @@ where
 fn rings_cross<P>(one: &Ring<P>, two: &Ring<P>) -> bool
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
 {
     let one = ring_sides(one);
     let two = ring_sides(two);
@@ -1580,6 +1665,10 @@ where
 /// their union exactly the eroded one — a notch that closes, a neck that
 /// pinches off into separate polygons, a hole that fills in part.
 ///
+/// `polygon` is the one Boost offsets, its rings simplified: Boost traverses
+/// only the pieces' offset edges, so where simplifying cut across a sliver of
+/// the input, that sliver is no part of an erosion.
+///
 /// The work grows with the square of the result's vertex count, which is why
 /// this is kept for the rings the offsetted ring gets wrong.
 fn dissolve_offset<G, P>(
@@ -1590,7 +1679,7 @@ fn dissolve_offset<G, P>(
 where
     G: PolygonTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64> + FromF64,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64> + FromF64,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     let mut pieces: Vec<Polygon<P>> = Vec::new();
@@ -1683,6 +1772,7 @@ fn push_ring_pieces<R, P>(
                 after,
                 intersection,
                 distance,
+                distance > 0.0,
                 &mut wedge,
             );
             wedge.push(after);
@@ -1716,7 +1806,7 @@ where
 fn merge_pieces<P>(pieces: Vec<Polygon<P>>) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
 where
     P: PointMut + Default + Copy,
-    P::Scalar: CoordinateScalar + Into<f64>,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64>,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     let mut merged: Vec<MultiPolygon<Polygon<P>>> = pieces
@@ -1737,147 +1827,422 @@ where
     Ok(merged.pop().unwrap_or_default())
 }
 
+/// A linestring buffered `left` and `right` of it.
+///
+/// C++: `buffer_inserter<linestring_tag>` — the input simplified first
+/// (`simplify_input`), each side then walked as `buffer_range::iterate`
+/// walks it and capped at the end it walks to, and a linestring that
+/// simplifies to one point buffered as that point. Each side is the offset
+/// to the left of the direction it is walked in: the linestring itself for
+/// the left side, the linestring reversed for the right. The outline those
+/// walks trace stands where it does not cross itself; where it does — a
+/// turn sharper than its segments are long, a line doubling back or
+/// crossing itself — the buffer is the union of the pieces Boost builds: a
+/// side piece per segment and side, a join at each convex corner and a cap
+/// at each end and each spike.
 fn buffer_linestring<L, P>(
     line: &L,
     left: f64,
     right: f64,
-    join: BufferJoinStrategy,
-    end: BufferEndStrategy,
-) -> Result<Polygon<P>, OverlayError>
+    settings: BufferSettings,
+) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
 where
     L: LinestringTrait<Point = P>,
     P: PointMut + Default + Copy,
-    P::Scalar: Into<f64> + FromF64,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64> + FromF64,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    let mut vertices: Vec<(f64, f64)> = Vec::new();
-    for point in line.points() {
-        let value = (point.get::<0>().into(), point.get::<1>().into());
-        if vertices.last().copied() != Some(value) {
-            vertices.push(value);
+    let points: Vec<(f64, f64)> = line
+        .points()
+        .map(|point| (point.get::<0>().into(), point.get::<1>().into()))
+        .collect();
+    let vertices = simplified_input(&points, left.min(right) / 1000.0);
+    let [.., penultimate, ultimate] = vertices.as_slice() else {
+        // C++: a linestring that simplifies to one point is buffered as that
+        // point, at the left distance; an empty one has no buffer.
+        return Ok(match vertices.first() {
+            Some(&point) if left > 0.0 => point_buffer(point, left, settings.point),
+            _ => MultiPolygon::new(),
+        });
+    };
+    let reversed: Vec<(f64, f64)> = vertices.iter().rev().copied().collect();
+    let left_side = offset_side(&vertices, left, right, settings.join, settings.end);
+    let right_side = offset_side(&reversed, right, left, settings.join, settings.end);
+    let (left_start, left_end) = (
+        left_side.outline[0],
+        left_side.outline[left_side.outline.len() - 1],
+    );
+    let (right_start, right_end) = (
+        right_side.outline[0],
+        right_side.outline[right_side.outline.len() - 1],
+    );
+    let end = end_cap(
+        *penultimate,
+        *ultimate,
+        left_end,
+        right_start,
+        left,
+        right,
+        settings.end,
+    );
+    let start = end_cap(
+        vertices[1],
+        vertices[0],
+        right_end,
+        left_start,
+        right,
+        left,
+        settings.end,
+    );
+
+    if !left_side.folds && !right_side.folds {
+        // C++: a cap's first point stands for the end of the side before it
+        // and is not added, and its last is overwritten by the start of the
+        // side after it (`update_last_point`, and the closing point
+        // `finish_ring` makes equal to the first), so that the two do not
+        // differ by a rounding error.
+        let mut boundary = left_side.outline;
+        boundary.extend(&end[1..end.len() - 1]);
+        boundary.extend(right_side.outline);
+        boundary.extend(&start[1..start.len() - 1]);
+        boundary.dedup();
+        let first = boundary[0];
+        boundary.push(first);
+        let outline: Ring<P> = Ring::from_vec(
+            boundary
+                .into_iter()
+                .map(|(x, y)| make_point(x, y))
+                .collect(),
+        );
+        if !ring_crosses_itself(&outline) {
+            return Ok(MultiPolygon(alloc::vec![Polygon::new(outline)]));
         }
-    }
-    if vertices.len() < 2 {
-        return Err(OverlayError::Unsupported);
     }
 
-    let left_path = offset_path(&vertices, left, true, join);
-    let right_path = offset_path(&vertices, right, false, join);
-    debug_assert!(!left_path.is_empty() && !right_path.is_empty());
-    let mut boundary = left_path;
-    match end {
-        BufferEndStrategy::Flat => {}
-        BufferEndStrategy::Round { points_per_circle } => {
-            let center = *vertices.last().expect("linestring has an endpoint");
-            let from = *boundary.last().expect("left path has an endpoint");
-            let to = *right_path.last().expect("right path has an endpoint");
-            push_end_arc(
-                &mut boundary,
-                center,
-                from,
-                to,
-                points_per_circle.max(4),
-                true,
-            );
+    let mut pieces: Vec<Polygon<P>> = Vec::new();
+    for piece in left_side.pieces.into_iter().chain(right_side.pieces) {
+        push_piece(&mut pieces, piece);
+    }
+    // C++: a flat cap is the straight line across the end, with nothing
+    // inside it; a round one is the half disc about the end.
+    if let BufferEndStrategy::Round { .. } = settings.end {
+        for (cap, at) in [(end, *ultimate), (start, vertices[0])] {
+            let mut piece = alloc::vec![at];
+            piece.extend(cap);
+            push_piece(&mut pieces, piece);
         }
     }
-    boundary.extend(right_path.iter().rev().copied());
-    if let BufferEndStrategy::Round { points_per_circle } = end {
-        let to = boundary[0];
-        push_end_arc(
-            &mut boundary,
-            vertices[0],
-            right_path[0],
-            to,
-            points_per_circle.max(4),
-            true,
-        );
+    merge_pieces(pieces)
+}
+
+/// A point buffered by `distance` with the point strategy.
+///
+/// C++: `detail::buffer::buffer_point`, which a linear or areal inserter
+/// falls back on for an input that simplifies to fewer points than it needs.
+fn point_buffer<P>(
+    (x, y): (f64, f64),
+    distance: f64,
+    strategy: BufferPointStrategy,
+) -> MultiPolygon<Polygon<P>>
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar<Measure = P::Scalar> + Into<f64> + FromF64,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    let strategy = match strategy {
+        BufferPointStrategy::Circle { points_per_circle } => {
+            PointStrategy::Circle { points_per_circle }
+        }
+        BufferPointStrategy::Square => PointStrategy::Square,
+    };
+    let ring = buffer_point(&make_point::<P>(x, y), distance, strategy);
+    MultiPolygon(alloc::vec![Polygon::new(ring)])
+}
+
+/// A ring as Boost offsets it: simplified at a thousandth of the distance
+/// and closed, or `None` when that leaves fewer points than a ring needs.
+///
+/// C++: `buffer_inserter_ring::apply` — `simplify_input` over the ring as
+/// declared, held to `minimum_ring_size`, then walked through
+/// `closed_clockwise_view`.
+fn simplified_ring<R, P>(ring: &R, distance: f64) -> Option<Ring<P>>
+where
+    R: RingTrait<Point = P>,
+    P: PointMut + Default + Copy,
+    P::Scalar: Into<f64> + FromF64,
+{
+    let points: Vec<(f64, f64)> = ring
+        .points()
+        .map(|point| (point.get::<0>().into(), point.get::<1>().into()))
+        .collect();
+    let mut simplified = simplified_input(&points, distance.abs() / 1000.0);
+    let open = ring.closure() == Closure::Open;
+    if simplified.len() < if open { 3 } else { 4 } {
+        return None;
     }
-    let first = boundary[0];
-    boundary.push(first);
-    Ok(Polygon::new(Ring::from_vec(
-        boundary
+    if open {
+        simplified.push(simplified[0]);
+    }
+    Some(Ring::from_vec(
+        simplified
             .into_iter()
             .map(|(x, y)| make_point(x, y))
             .collect(),
-    )))
+    ))
 }
 
-fn offset_path(
-    vertices: &[(f64, f64)],
-    distance: f64,
-    left: bool,
+/// The vertices of a linestring or ring as Boost buffers them.
+///
+/// C++: `simplify_input` — Douglas–Peucker at `tolerance`, a thousandth of
+/// the smaller buffer distance, which also drops repeated points, so that
+/// a feature too small to see in the buffer cannot blow up into one.
+fn simplified_input(points: &[(f64, f64)], tolerance: f64) -> Vec<(f64, f64)> {
+    let line: Linestring<Point2D<f64, Cartesian>> =
+        Linestring::from_vec(points.iter().map(|&(x, y)| Point2D::new(x, y)).collect());
+    DouglasPeucker::<PointToSegment<Pythagoras>>::default()
+        .simplify(&line, tolerance)
+        .points()
+        .map(|point| (point.get::<0>(), point.get::<1>()))
+        .collect()
+}
+
+/// One side of a linestring's buffer, offset to the left of the walk.
+struct OffsetSide {
+    /// The side's outline from the start of its first segment's offset to
+    /// the end of its last.
+    outline: Vec<(f64, f64)>,
+    /// The pieces Boost builds for the side: one per segment, convex
+    /// corner and spike.
+    pieces: Vec<Vec<(f64, f64)>>,
+    /// Whether the outline folds back over itself: at a spike, or at a
+    /// concave corner whose offsets do not cross.
+    folds: bool,
+}
+
+/// The offset to the left of `walk` by `own`, `other` being the distance
+/// on the far side.
+///
+/// C++: `buffer_range::iterate` with `side_straight`, and `add_join` at each
+/// corner, which reads the turn with Boost's side test, `side_by_triangle`:
+/// a corner the walk turns right at is convex and takes the join strategy,
+/// one it turns left at is concave and is cut where the two offsets cross,
+/// one it runs straight on through needs nothing, and one it doubles back
+/// at is a spike and takes the end strategy.
+fn offset_side(
+    walk: &[(f64, f64)],
+    own: f64,
+    other: f64,
     join: BufferJoinStrategy,
-) -> Vec<(f64, f64)> {
-    let side = if left { 1.0 } else { -1.0 };
-    let normals: Vec<(f64, f64)> = vertices
-        .windows(2)
-        .map(|edge| {
-            let dx = edge[1].0 - edge[0].0;
-            let dy = edge[1].1 - edge[0].1;
-            let length = hypot(dx, dy);
-            (-dy / length * side, dx / length * side)
-        })
-        .collect();
-    let mut path = Vec::with_capacity(vertices.len());
-    path.push((
-        vertices[0].0 + normals[0].0 * distance,
-        vertices[0].1 + normals[0].1 * distance,
-    ));
-    for index in 1..vertices.len() - 1 {
-        let vertex = vertices[index];
-        let previous = vertices[index - 1];
-        let next = vertices[index + 1];
-        let before = (
-            vertex.0 + normals[index - 1].0 * distance,
-            vertex.1 + normals[index - 1].1 * distance,
-        );
-        let after = (
-            vertex.0 + normals[index].0 * distance,
-            vertex.1 + normals[index].1 * distance,
-        );
-        let intersection = line_intersection(
-            before,
-            (vertex.0 - previous.0, vertex.1 - previous.1),
-            after,
-            (next.0 - vertex.0, next.1 - vertex.1),
-        );
-        match (join, intersection) {
-            (BufferJoinStrategy::Miter { limit }, Some(point))
-                if point.0.is_finite() && point.1.is_finite() =>
-            {
-                let miter_length = hypot(point.0 - vertex.0, point.1 - vertex.1);
-                if distance == 0.0 || miter_length <= limit.max(1.0) * distance.abs() {
-                    path.push(point);
-                } else {
-                    path.push(before);
-                    path.push(after);
+    end: BufferEndStrategy,
+) -> OffsetSide {
+    let mut outline: Vec<(f64, f64)> = Vec::with_capacity(walk.len() * 2);
+    let mut pieces = Vec::with_capacity(walk.len());
+    let mut folds = false;
+    let mut previous_offset = ((0.0, 0.0), (0.0, 0.0));
+    for (index, segment) in walk.windows(2).enumerate() {
+        let (start, end_point) = (segment[0], segment[1]);
+        let normal = left_normal(start, end_point);
+        let after = offset_point(start, normal, own);
+        let far = offset_point(end_point, normal, own);
+        pieces.push(alloc::vec![start, end_point, far, after]);
+        if index == 0 {
+            outline.push(after);
+        } else {
+            let previous = walk[index - 1];
+            let before = previous_offset.1;
+            let incoming = (start.0 - previous.0, start.1 - previous.1);
+            let outgoing = (end_point.0 - start.0, end_point.1 - start.1);
+            match f64::side_by_triangle(previous, start, end_point) {
+                core::cmp::Ordering::Less => {
+                    if let Some(miter) = miter_point(previous_offset, (after, far), start) {
+                        let mut corner = Vec::new();
+                        push_join_points(
+                            join,
+                            start,
+                            before,
+                            after,
+                            Some(miter),
+                            own,
+                            false,
+                            &mut corner,
+                        );
+                        outline.extend(corner.iter().skip(1));
+                        let mut piece = alloc::vec![start];
+                        piece.extend(corner);
+                        pieces.push(piece);
+                    }
+                }
+                core::cmp::Ordering::Greater => {
+                    // C++: the two side pieces overlap at a concave corner,
+                    // and the traversal cuts both offsets where they cross.
+                    // That hands the corner of each piece past the crossing
+                    // to the other segment's two pieces, which hold it only
+                    // where it lies within that segment's reach: a segment
+                    // shorter than the corner leaves it sticking out.
+                    let dot = |one: (f64, f64), two: (f64, f64)| one.0 * two.0 + one.1 * two.1;
+                    let back = (-incoming.0, -incoming.1);
+                    let held = dot((before.0 - start.0, before.1 - start.1), outgoing)
+                        <= dot(outgoing, outgoing)
+                        && dot((after.0 - start.0, after.1 - start.1), back) <= dot(back, back)
+                        && own * dot(left_normal(previous, start), normal) >= -other;
+                    let kept = outline[outline.len() - 2];
+                    if let Some(crossing) =
+                        segment_crossing((kept, before), (after, far)).filter(|_| held)
+                    {
+                        outline.pop();
+                        outline.push(crossing);
+                    } else {
+                        folds = true;
+                        outline.extend([start, after]);
+                    }
+                }
+                core::cmp::Ordering::Equal => {
+                    if incoming.0 * outgoing.0 + incoming.1 * outgoing.1 <= 0.0 {
+                        folds = true;
+                        let cap = end_cap(previous, start, before, after, own, other, end);
+                        outline.extend(cap.iter().skip(1));
+                        if let BufferEndStrategy::Round { .. } = end {
+                            let mut piece = alloc::vec![start];
+                            piece.extend(cap);
+                            pieces.push(piece);
+                        }
+                    }
                 }
             }
-            (BufferJoinStrategy::Round { points_per_circle }, _) => {
-                path.push(before);
-                push_arc_between(
-                    &mut path,
-                    vertex,
-                    before,
-                    after,
-                    distance.abs(),
-                    points_per_circle.max(4),
-                    left,
-                );
-                path.push(after);
-            }
-            _ => {
-                path.push(before);
-                path.push(after);
-            }
         }
+        outline.push(far);
+        previous_offset = (after, far);
     }
-    let last = vertices.len() - 1;
-    path.push((
-        vertices[last].0 + normals[last - 1].0 * distance,
-        vertices[last].1 + normals[last - 1].1 * distance,
-    ));
-    path
+    OffsetSide {
+        outline,
+        pieces,
+        folds,
+    }
+}
+
+/// The unit normal to the left of `start → end`.
+///
+/// C++: the perpendicular `side_straight::apply` builds, `(−dy, dx)` over
+/// the segment's length.
+fn left_normal(start: (f64, f64), end: (f64, f64)) -> (f64, f64) {
+    let (dx, dy) = (end.0 - start.0, end.1 - start.1);
+    let length = sqrt(dx * dx + dy * dy);
+    (-dy / length, dx / length)
+}
+
+/// `point` moved `distance` along `normal`.
+fn offset_point(point: (f64, f64), normal: (f64, f64), distance: f64) -> (f64, f64) {
+    (point.0 + normal.0 * distance, point.1 + normal.1 * distance)
+}
+
+/// Where the offsets meeting at a convex corner meet: the miter point.
+///
+/// C++: `line_line_intersection::apply` for an equidistant side strategy —
+/// the line through the incoming offset met with the line through the
+/// outgoing one or, where that is the worse conditioned of the two, with the
+/// line from the corner through the midpoint between the offsets' ends; no
+/// point where both are parallel.
+fn miter_point(
+    incoming: ((f64, f64), (f64, f64)),
+    outgoing: ((f64, f64), (f64, f64)),
+    vertex: (f64, f64),
+) -> Option<(f64, f64)> {
+    // C++: `make_infinite_line`, the line `a·x + b·y + c = 0`.
+    let line = |from: (f64, f64), to: (f64, f64)| {
+        let a = from.1 - to.1;
+        let b = to.0 - from.0;
+        (a, b, -a * from.0 - b * from.1)
+    };
+    let p = line(incoming.0, incoming.1);
+    let q = line(outgoing.0, outgoing.1);
+    let between = (
+        f64::midpoint(incoming.1.0, outgoing.0.0),
+        f64::midpoint(incoming.1.1, outgoing.0.1),
+    );
+    let r = line(vertex, between);
+    // C++: `denominator_pq` and `denominator_pr`.
+    let with_outgoing = p.0 * q.1 - p.1 * q.0;
+    let with_between = p.0 * r.1 - p.1 * r.0;
+    if with_outgoing.tolerant_eq(0.0) && with_between.tolerant_eq(0.0) {
+        return None;
+    }
+    let (other, denominator) = if with_outgoing.abs() > with_between.abs() {
+        (q, with_outgoing)
+    } else {
+        (r, with_between)
+    };
+    Some((
+        (p.1 * other.2 - p.2 * other.1) / denominator,
+        (p.2 * other.0 - p.0 * other.2) / denominator,
+    ))
+}
+
+/// Where the segment `one` crosses the segment `two`, if it does.
+fn segment_crossing(
+    one: ((f64, f64), (f64, f64)),
+    two: ((f64, f64), (f64, f64)),
+) -> Option<(f64, f64)> {
+    let first = (one.1.0 - one.0.0, one.1.1 - one.0.1);
+    let second = (two.1.0 - two.0.0, two.1.1 - two.0.1);
+    let denominator = first.0 * second.1 - first.1 * second.0;
+    if denominator == 0.0 {
+        return None;
+    }
+    let delta = (two.0.0 - one.0.0, two.0.1 - one.0.1);
+    let along_one = (delta.0 * second.1 - delta.1 * second.0) / denominator;
+    let along_two = (delta.0 * first.1 - delta.1 * first.0) / denominator;
+    ((0.0..=1.0).contains(&along_one) && (0.0..=1.0).contains(&along_two))
+        .then_some((one.0.0 + along_one * first.0, one.0.1 + along_one * first.1))
+}
+
+/// The cap at `ultimate`, the end of the segment from `penultimate`: from
+/// `own_perp` on the walking side, `own` from the line, round to
+/// `other_perp` on the far side, `other` from it.
+///
+/// C++: `end_round::apply` — half a circle of `points_per_circle` (at least
+/// four) points from the walking side clockwise, centred between the two
+/// sides, with the far side's point added when the count is odd — and
+/// `end_flat::apply`, the two sides' points.
+fn end_cap(
+    penultimate: (f64, f64),
+    ultimate: (f64, f64),
+    own_perp: (f64, f64),
+    other_perp: (f64, f64),
+    own: f64,
+    other: f64,
+    end: BufferEndStrategy,
+) -> Vec<(f64, f64)> {
+    let BufferEndStrategy::Round { points_per_circle } = end else {
+        return alloc::vec![own_perp, other_perp];
+    };
+    let count = points_per_circle.max(4);
+    let mut alpha = atan2(penultimate.1 - ultimate.1, penultimate.0 - ultimate.0)
+        - core::f64::consts::FRAC_PI_2;
+    let (center, radius) = if own.tolerant_eq(other) {
+        (ultimate, own)
+    } else {
+        let half = (own - other) / 2.0;
+        (
+            (
+                ultimate.0 + half * cos(alpha),
+                ultimate.1 + half * sin(alpha),
+            ),
+            f64::midpoint(own, other),
+        )
+    };
+    let diff = core::f64::consts::TAU / count as f64;
+    let mut cap = Vec::with_capacity(count / 2 + 2);
+    for _ in 0..=count / 2 {
+        cap.push((
+            center.0 + radius * cos(alpha),
+            center.1 + radius * sin(alpha),
+        ));
+        alpha -= diff;
+    }
+    if count % 2 == 1 {
+        cap.push(other_perp);
+    }
+    cap
 }
 
 fn line_intersection(
@@ -1902,60 +2267,38 @@ fn line_intersection(
     ))
 }
 
-fn push_arc_between(
-    output: &mut Vec<(f64, f64)>,
-    center: (f64, f64),
+/// The points strictly between `from` and `to` on the circle of `radius`
+/// about `vertex`, clockwise from `from`.
+///
+/// C++: `join_round::generate_points` — the sweep cut into as many equal
+/// steps as `points_per_circle` (at least four) puts in that much of a
+/// circle, rounded up.
+fn round_join_points(
+    vertex: (f64, f64),
     from: (f64, f64),
     to: (f64, f64),
     radius: f64,
     points_per_circle: usize,
-    counterclockwise: bool,
-) {
-    if radius == 0.0 {
-        return;
+) -> Vec<(f64, f64)> {
+    let two_pi = core::f64::consts::TAU;
+    let angle1 = atan2(from.1 - vertex.1, from.0 - vertex.0);
+    let mut angle2 = atan2(to.1 - vertex.1, to.0 - vertex.0);
+    while angle2 > angle1 {
+        angle2 -= two_pi;
     }
-    let start = atan2(from.1 - center.1, from.0 - center.0);
-    let mut end = atan2(to.1 - center.1, to.0 - center.0);
-    if counterclockwise {
-        while end < start {
-            end += core::f64::consts::TAU;
-        }
-    } else {
-        while end > start {
-            end -= core::f64::consts::TAU;
-        }
-    }
-    let sweep = end - start;
-    let steps =
-        ceil((sweep.abs() / core::f64::consts::TAU) * points_per_circle as f64).max(1.0) as usize;
-    for step in 1..steps {
-        let angle = start + sweep * step as f64 / steps as f64;
-        output.push((
-            center.0 + radius * cos(angle),
-            center.1 + radius * sin(angle),
+    let angle_diff = angle1 - angle2;
+    let count = (ceil(points_per_circle.max(4) as f64 * angle_diff / two_pi) as usize).max(1);
+    let diff = angle_diff / count as f64;
+    let mut angle = angle1 - diff;
+    let mut points = Vec::with_capacity(count - 1);
+    for _ in 1..count {
+        points.push((
+            vertex.0 + radius * cos(angle),
+            vertex.1 + radius * sin(angle),
         ));
+        angle -= diff;
     }
-}
-
-fn push_end_arc(
-    output: &mut Vec<(f64, f64)>,
-    center: (f64, f64),
-    from: (f64, f64),
-    to: (f64, f64),
-    points_per_circle: usize,
-    clockwise: bool,
-) {
-    let radius =
-        hypot(from.0 - center.0, from.1 - center.1).max(hypot(to.0 - center.0, to.1 - center.1));
-    push_arc_between(
-        output,
-        center,
-        from,
-        to,
-        radius,
-        points_per_circle,
-        !clockwise,
-    );
+    points
 }
 
 /// Materialise an output point from the `f64` kernel coordinates.
@@ -2078,8 +2421,7 @@ mod tests {
     //! Mirrors `test/algorithms/buffer/`.
 
     use super::{
-        BufferJoinStrategy, dissolve_offset, offset_rings_need_dissolving, push_piece,
-        push_ring_pieces,
+        BufferJoinStrategy, dissolve_offset, offset_rings_cross, push_piece, push_ring_pieces,
     };
     use super::{JoinStrategy, PointStrategy, buffer, buffer_convex_polygon, buffer_point};
     use alloc::vec::Vec;
@@ -2363,18 +2705,6 @@ mod tests {
         assert_eq!(pieces[0].exterior().0.len(), 4);
     }
 
-    /// Whether the offsetted rings can stand, at the two hole outcomes
-    /// that separate erosion from growth. A hole that `offset_ring`
-    /// declined has collapsed; eroding, the hole is being filled in and a
-    /// collapsed one encloses nothing, so it is no reason to rebuild.
-    /// Growing, the same hole may have collapsed only in part, so it is.
-    #[test]
-    fn a_collapsed_hole_forces_the_pieces_path_only_when_growing() {
-        let outer = unit_square();
-        assert!(!offset_rings_need_dissolving(Some(&outer), &[None], -0.1));
-        assert!(offset_rings_need_dissolving(Some(&outer), &[None], 0.1));
-    }
-
     /// A hole whose own offsetted ring crosses itself is not a usable
     /// answer whichever way the buffer runs, so it goes to the pieces —
     /// the hole-side counterpart of the exterior's self-crossing check.
@@ -2383,16 +2713,12 @@ mod tests {
         let outer = unit_square();
         // A bow tie: the two diagonals cross.
         let bow_tie = ring(&[(0.0, 0.0), (1.0, 1.0), (1.0, 0.0), (0.0, 1.0), (0.0, 0.0)]);
-        assert!(offset_rings_need_dissolving(
-            Some(&outer),
-            &[Some(bow_tie.clone())],
+        assert!(offset_rings_cross(
+            &outer,
+            core::slice::from_ref(&bow_tie),
             -0.1
         ));
-        assert!(offset_rings_need_dissolving(
-            Some(&outer),
-            &[Some(bow_tie)],
-            0.1
-        ));
+        assert!(offset_rings_cross(&outer, &[bow_tie], 0.1));
     }
 
     /// When every ring of the polygon is degenerate there are no pieces to
@@ -2404,6 +2730,6 @@ mod tests {
         let square: Polygon<P> =
             polygon![[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]];
         let dissolved = dissolve_offset(&square, 0.0, JOIN).expect("no pieces is not an error");
-        assert!(dissolved.0.is_empty());
+        assert_eq!(dissolved.0.len(), 0);
     }
 }

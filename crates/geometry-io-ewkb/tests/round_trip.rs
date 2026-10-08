@@ -648,16 +648,16 @@ fn adversarial_inputs_error_rather_than_panic() {
 #[test]
 fn integration_contract_holds() {
     const fn assert_send_sync_static<T: Send + Sync + 'static>() {}
-    const _: () = assert_send_sync_static::<EwkbError>();
-    const _: () = assert_send_sync_static::<Ewkb<Dyn>>();
-    const _: () = assert_send_sync_static::<Srid>();
+    assert_send_sync_static::<EwkbError>();
+    assert_send_sync_static::<Ewkb<Dyn>>();
+    assert_send_sync_static::<Srid>();
 
     // B1 — Debug + Display, and Error under std.
     let e = EwkbError::DimensionFlag {
         type_word: 0x8000_0001,
     };
-    assert!(!format!("{e}").is_empty());
-    assert!(!format!("{e:?}").is_empty());
+    assert_ne!(format!("{e}").len(), 0);
+    assert_ne!(format!("{e:?}").len(), 0);
     #[cfg(feature = "std")]
     let _: &dyn std::error::Error = &e;
 

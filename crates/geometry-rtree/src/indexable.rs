@@ -2,9 +2,10 @@
 //!
 //! Mirrors `boost/geometry/index/indexable.hpp`: an indexable value is
 //! anything from which the index can read an axis-aligned bounding box.
-//! Boost's `indexable` function object maps points, boxes, and segments
-//! to their bounds; the port makes that a trait with impls for the same
-//! kinds.
+//! Boost's `indexable` function object hands the index a value's point,
+//! box, or segment; the port makes that a trait with impls for points,
+//! boxes, and box-keyed pairs, and keeps the point/box distinction that
+//! Boost's `within` predicate turns on ([`Indexable::IS_POINT`]).
 //!
 //! [`Rtree`]: crate::Rtree
 
@@ -35,11 +36,22 @@ use crate::bounds::Bounds;
 /// assert_eq!(b.max, [3.0, 4.0]);
 /// ```
 pub trait Indexable {
+    /// Whether the value is a point rather than a box.
+    ///
+    /// Boost asks [`Predicate::Within`](crate::Predicate::Within) of a
+    /// point whether it lies strictly inside the query box
+    /// (`within(point, box)`), and of a box whether its two-dimensional
+    /// interior lies inside it (`within(box, box)`), so a point's
+    /// degenerate bounds alone would never match.
+    const IS_POINT: bool = false;
+
     /// The value's axis-aligned bounding box.
     fn bounds(&self) -> Bounds;
 }
 
 impl<Cs: CoordinateSystem> Indexable for Point2D<f64, Cs> {
+    const IS_POINT: bool = true;
+
     fn bounds(&self) -> Bounds {
         Bounds::point([self.get::<0>(), self.get::<1>()])
     }

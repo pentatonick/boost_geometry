@@ -48,6 +48,6 @@ mod tests {
         assert_eq!(pieces.0.len(), 2);
         assert_eq!(pieces.0[0].0.last(), Some(&P::new(2.0, 0.0)));
         assert_eq!(pieces.0[1].0.first(), Some(&P::new(2.0, 0.0)));
-        assert!(linestring_segmentize(&line, 0).0.is_empty());
+        assert_eq!(linestring_segmentize(&line, 0).0.len(), 0);
     }
 }

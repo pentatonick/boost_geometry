@@ -2,9 +2,12 @@
 //! `(A, B)`.
 //!
 //! Mirrors `boost::geometry::strategy::closest_points::*` from
-//! `boost/geometry/strategies/closest_points/`. The Cartesian
+//! `boost/geometry/strategies/closest_points/` and
+//! `boost/geometry/algorithms/detail/closest_points/`. The Cartesian
 //! implementations reuse the clamped-projection kernel that
-//! [`crate::PointToSegment`] is built on for the point↔segment case.
+//! [`crate::PointToSegment`] is built on for every point↔segment step,
+//! and the segment-intersection kernel behind `intersects` for segments
+//! that meet, so each answers the pair Boost answers.
 //!
 //! ## Coherence note
 //!
@@ -28,6 +31,9 @@ use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{Linestring, Point as ModelPoint, Segment};
 use geometry_tag::SameAs;
 use geometry_trait::{Linestring as LinestringTrait, Point, PointMut, fold_dims, ordinate};
+
+use crate::cartesian::distance_projected_point::closest_point_to_segment;
+use crate::segment_intersection::{meeting_point, segment_meeting};
 
 /// A strategy for the pair of nearest points on `(A, B)`.
 ///
@@ -95,7 +101,7 @@ where
 
     #[inline]
     fn closest_points(&self, p: &P, s: &Segment<P>) -> (Self::Out, Self::Out) {
-        (*p, foot_on_segment(p, s.start(), s.end()))
+        (*p, closest_point_to_segment(p, *s.start(), *s.end()))
     }
 }
 
@@ -121,11 +127,22 @@ where
 
 // ---- Linestring × Linestring -----------------------------------------
 //
-// Walk every sub-segment pair and keep the closest. Mirrors the
-// linear/linear arm at `strategies/cartesian/closest_points_l_l.hpp`.
+// Mirrors `detail::closest_points::linear_to_linear`
+// (`algorithms/detail/closest_points/linear_to_linear.hpp`): a one-point
+// operand is a point; otherwise each segment of the operand with fewer
+// segments — the second on a tie — finds its nearest segment of the
+// other, and the first nearest pair wins, the search ending at a pair
+// that meets.
 //
-// Panics on an empty or single-point linestring (mirrors Boost's
-// empty_input_exception; see the algorithm-layer rustdoc).
+// Boost finds each nearest segment through an R-tree packed from the
+// other operand, which keeps a leaf's segments in input order: up to its
+// eight-segment leaf capacity, two segments equally near one query are
+// told apart the same way here — the first wins. Past it, the packing can
+// reorder segments, and a tie between equally near segments can then be
+// resolved to a different, equally near pair than Boost's.
+//
+// Panics on an empty linestring (mirrors Boost's empty_input_exception;
+// see the algorithm-layer rustdoc).
 
 impl<P> ClosestPointsStrategy<Linestring<P>, Linestring<P>> for CartesianClosestPoints
 where
@@ -135,173 +152,146 @@ where
     type Out = P;
 
     fn closest_points(&self, a: &Linestring<P>, b: &Linestring<P>) -> (Self::Out, Self::Out) {
-        let pa: Vec<&P> = a.points().collect();
-        let pb: Vec<&P> = b.points().collect();
+        let pa: Vec<P> = a.points().copied().collect();
+        let pb: Vec<P> = b.points().copied().collect();
         assert!(
-            pa.len() >= 2 && pb.len() >= 2,
-            "empty or degenerate linestring in closest_points"
+            !pa.is_empty() && !pb.is_empty(),
+            "empty linestring in closest_points"
         );
-
-        let mut best: Option<((P, P), f64)> = None;
-        for wa in pa.windows(2) {
-            for wb in pb.windows(2) {
-                let (ca, cb) = segment_segment_closest(wa[0], wa[1], wb[0], wb[1]);
-                let d = squared_distance(&ca, &cb);
-                if best.is_none_or(|(_, bd)| d < bd) {
-                    best = Some(((ca, cb), d));
-                }
-            }
+        if let [point] = pa.as_slice() {
+            return point_range_closest(point, &pb);
         }
-        best.unwrap().0
+        if let [point] = pb.as_slice() {
+            let (on_b, on_a) = point_range_closest(point, &pa);
+            return (on_a, on_b);
+        }
+        if pa.len() < pb.len() {
+            let (on_b, on_a) = range_range_closest(&pb, &pa);
+            (on_a, on_b)
+        } else {
+            range_range_closest(&pa, &pb)
+        }
     }
 }
 
 // ---- Kernels ---------------------------------------------------------
 
-/// Closest point on segment `a`-`b` to `p`: the clamped foot of the
-/// perpendicular. Mirrors
-/// `closest_points::detail::compute_closest_point_to_segment` in
-/// `strategies/cartesian/closest_points_pt_seg.hpp`.
-fn foot_on_segment<P>(p: &P, a: &P, b: &P) -> P
+/// The point of `range` closest to `p`, paired after `p`.
+///
+/// C++: `closest_points::detail::point_to_range` with
+/// `closest_feature::point_to_point_range`: the first segment as near as
+/// any, unless a later segment `p` lies on ends the search there.
+fn point_range_closest<P>(p: &P, range: &[P]) -> (P, P)
 where
-    P: Point<Scalar = f64> + PointMut + Default,
+    P: Point<Scalar = f64> + PointMut + Default + Copy,
 {
-    let (numerator, denominator) = dots(p, a, b);
-    if denominator <= 0.0 {
-        return copy_point(a);
+    let segment = |i: usize| closest_point_to_segment(p, range[i], range[i + 1]);
+    let Some(last_segment) = range.len().checked_sub(2) else {
+        return (*p, range[0]);
+    };
+    let mut nearest = 0;
+    let mut nearest_distance = squared_distance(p, &segment(0));
+    for i in 1..=last_segment {
+        let distance = squared_distance(p, &segment(i));
+        if distance.tolerant_eq(0.0) {
+            nearest = i;
+            break;
+        }
+        if distance < nearest_distance {
+            nearest = i;
+            nearest_distance = distance;
+        }
     }
-    let t = (numerator / denominator).clamp(0.0, 1.0);
-    blend(a, b, t)
+    (*p, segment(nearest))
 }
 
-/// Closest pair between two segments `(a0,a1)` and `(b0,b1)`.
+/// The closest pair between the segments of `indexed` and of `queries`,
+/// the point on `indexed` first.
+///
+/// C++: `closest_feature::range_to_range_rtree` then
+/// `segment_to_segment`: each query segment in turn finds its nearest
+/// indexed segment, the first strictly nearer pair is kept, and a pair at
+/// distance zero (by `math::equals`) ends the search.
+fn range_range_closest<P>(indexed: &[P], queries: &[P]) -> (P, P)
+where
+    P: Point<Scalar = f64> + PointMut + Default + Copy,
+{
+    let mut best: Option<((P, P), f64)> = None;
+    for query in queries.windows(2) {
+        let mut nearest: Option<((P, P), f64)> = None;
+        for segment in indexed.windows(2) {
+            let pair = segment_segment_closest(&segment[0], &segment[1], &query[0], &query[1]);
+            let distance = squared_distance(&pair.0, &pair.1);
+            if nearest.is_none_or(|(_, nearest_distance)| distance < nearest_distance) {
+                nearest = Some((pair, distance));
+            }
+        }
+        let Some((pair, squared)) = nearest else {
+            continue;
+        };
+        let distance = squared.sqrt();
+        if best.is_none_or(|(_, best_distance)| distance < best_distance) {
+            best = Some((pair, distance));
+            if distance.tolerant_eq(0.0) {
+                break;
+            }
+        }
+    }
+    best.expect("both linestrings have a segment").0
+}
+
+/// Closest pair between two segments `(a0,a1)` and `(b0,b1)`, the point
+/// on `a` first.
+///
+/// C++: `detail::closest_points::segment_to_segment`
+/// (`algorithms/detail/closest_points/segment_to_segment.hpp`). Segments
+/// that meet — by the kernel behind `intersects` — are paired at the
+/// point Boost reports first. Otherwise each endpoint finds its closest
+/// point on the other segment, `b`'s endpoints before `a`'s, and the first
+/// of the nearest of those four pairs wins. The meeting test is planar, so
+/// it only applies to 2-D points; higher dimensions take the endpoint
+/// projections.
 fn segment_segment_closest<P>(a0: &P, a1: &P, b0: &P, b1: &P) -> (P, P)
 where
-    P: Point<Scalar = f64> + PointMut + Default,
+    P: Point<Scalar = f64> + PointMut + Default + Copy,
 {
-    // Crossing segments share a point — the closest pair is that point
-    // on both. Compute it directly from the line-line intersection. The
-    // crossing test is planar, so it only applies to 2-D points; higher
-    // dimensions fall through to the endpoint projections.
     if P::DIM == 2 {
-        if let Some(pt) = segment_intersection(a0, a1, b0, b1) {
-            return (copy_point(&pt), pt);
+        let xy = |q: &P| (q.get::<0>(), q.get::<1>());
+        let (p1, p2, q1, q2) = (xy(a0), xy(a1), xy(b0), xy(b1));
+        if let Some((x, y)) = meeting_point(p1, p2, q1, q2, segment_meeting(p1, p2, q1, q2)) {
+            let mut point = P::default();
+            point.set::<0>(x);
+            point.set::<1>(y);
+            return (point, point);
         }
     }
 
-    // Otherwise the minimum is one of the four endpoint projections.
-    let c1 = (copy_point(a0), foot_on_segment(a0, b0, b1));
-    let c2 = (copy_point(a1), foot_on_segment(a1, b0, b1));
-    let c3 = (foot_on_segment(b0, a0, a1), copy_point(b0));
-    let c4 = (foot_on_segment(b1, a0, a1), copy_point(b1));
-
-    let mut best = c1;
-    let mut best_d = squared_distance(&best.0, &best.1);
-    for cand in [c2, c3, c4] {
-        let d = squared_distance(&cand.0, &cand.1);
-        if d < best_d {
-            best_d = d;
-            best = cand;
+    let candidates = [
+        (closest_point_to_segment(b0, *a0, *a1), *b0),
+        (closest_point_to_segment(b1, *a0, *a1), *b1),
+        (*a0, closest_point_to_segment(a0, *b0, *b1)),
+        (*a1, closest_point_to_segment(a1, *b0, *b1)),
+    ];
+    // C++: `std::min_element` over the comparable distances.
+    let mut best = candidates[0];
+    let mut best_distance = squared_distance(&best.0, &best.1);
+    for candidate in &candidates[1..] {
+        let distance = squared_distance(&candidate.0, &candidate.1);
+        if distance < best_distance {
+            best = *candidate;
+            best_distance = distance;
         }
     }
     best
 }
 
-/// Proper-crossing intersection point of two 2D segments, or `None`
-/// when they do not cross (parallel, collinear, or disjoint).
-fn segment_intersection<P>(a0: &P, a1: &P, b0: &P, b1: &P) -> Option<P>
-where
-    P: Point<Scalar = f64> + PointMut + Default,
-{
-    let (x1, y1) = (a0.get::<0>(), a0.get::<1>());
-    let (x2, y2) = (a1.get::<0>(), a1.get::<1>());
-    let (x3, y3) = (b0.get::<0>(), b0.get::<1>());
-    let (x4, y4) = (b1.get::<0>(), b1.get::<1>());
-
-    let denom = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3);
-    if denom == 0.0 {
-        return None;
-    }
-    let t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / denom;
-    let u = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / denom;
-    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-        let mut out = P::default();
-        out.set::<0>(x1 + t * (x2 - x1));
-        out.set::<1>(y1 + t * (y2 - y1));
-        Some(out)
-    } else {
-        None
-    }
-}
-
-/// Compute `(dot(p − a, b − a), dot(b − a, b − a))` over every dimension.
-#[inline]
-fn dots<P: Point<Scalar = f64>>(p: &P, a: &P, b: &P) -> (f64, f64) {
-    fold_dims((0.0, 0.0), p, |(ap_ab, ab_ab), p, d| {
-        let ap = ordinate(p, d) - ordinate(a, d);
-        let ab = ordinate(b, d) - ordinate(a, d);
-        (ap_ab + ap * ab, ab_ab + ab * ab)
-    })
-}
-
-/// Squared distance between two points over every dimension.
+/// The comparable (squared) Pythagorean distance between `a` and `b`.
 #[inline]
 fn squared_distance<P: Point<Scalar = f64>>(a: &P, b: &P) -> f64 {
     fold_dims(0.0, a, |sum, a, d| {
         let delta = ordinate(a, d) - ordinate(b, d);
         sum + delta * delta
     })
-}
-
-/// Linear per-dimension blend `out[D] = a[D] + t·(b[D] − a[D])`.
-#[inline]
-fn blend<P>(a: &P, b: &P, t: f64) -> P
-where
-    P: Point<Scalar = f64> + PointMut + Default,
-{
-    let mut out = P::default();
-    geometry_trait::fold_dims((), a, |(), _p, d| {
-        let av = get_dim(a, d);
-        let bv = get_dim(b, d);
-        set_dim(&mut out, d, av + t * (bv - av));
-    });
-    out
-}
-
-/// Copy a point coordinate-by-coordinate (avoids a `Copy` bound where
-/// only `PointMut + Default` is available).
-#[inline]
-fn copy_point<P>(a: &P) -> P
-where
-    P: Point<Scalar = f64> + PointMut + Default,
-{
-    let mut out = P::default();
-    geometry_trait::fold_dims((), a, |(), _p, d| {
-        set_dim(&mut out, d, get_dim(a, d));
-    });
-    out
-}
-
-#[inline]
-fn get_dim<P: Point<Scalar = f64>>(p: &P, d: usize) -> f64 {
-    match d {
-        0 => p.get::<0>(),
-        1 => p.get::<1>(),
-        2 => p.get::<2>(),
-        3 => p.get::<3>(),
-        _ => unreachable!(),
-    }
-}
-
-#[inline]
-fn set_dim<P: PointMut<Scalar = f64>>(p: &mut P, d: usize, v: f64) {
-    match d {
-        0 => p.set::<0>(v),
-        1 => p.set::<1>(v),
-        2 => p.set::<2>(v),
-        3 => p.set::<3>(v),
-        _ => unreachable!(),
-    }
 }
 
 #[cfg(test)]

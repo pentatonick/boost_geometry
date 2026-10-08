@@ -90,16 +90,16 @@ where
     }
 }
 
-/// Coordinate-wise equality — `Point<T, D, Cs>` does not derive a
-/// usable `PartialEq` (the derive would demand `Cs: PartialEq`), so we
-/// compare per dimension via `get::<D>`.
+/// Whether the ring already ends where it starts: equal by `math::equals`
+/// in every dimension, as Boost's `close_or_open_ring` asks of
+/// `geometry::disjoint(front, back)` (`algorithms/correct_closure.hpp:52-72`).
 fn coords_equal<P: PointTrait>(a: &P, b: &P) -> bool {
     geometry_trait::fold_dims(true, a, |acc, _p, d| {
         acc && match d {
-            0 => a.get::<0>() == b.get::<0>(),
-            1 => a.get::<1>() == b.get::<1>(),
-            2 => a.get::<2>() == b.get::<2>(),
-            3 => a.get::<3>() == b.get::<3>(),
+            0 => a.get::<0>().tolerant_eq(b.get::<0>()),
+            1 => a.get::<1>().tolerant_eq(b.get::<1>()),
+            2 => a.get::<2>().tolerant_eq(b.get::<2>()),
+            3 => a.get::<3>().tolerant_eq(b.get::<3>()),
             _ => unreachable!("fold_dims caps at MAX_DIM"),
         }
     })
@@ -109,10 +109,10 @@ fn coords_equal<P: PointTrait>(a: &P, b: &P) -> bool {
 fn fix_orientation<P, const CW: bool, const CL: bool>(r: &mut Ring<P, CW, CL>, want_positive: bool)
 where
     P: PointTrait,
-    ShoelaceArea: AreaStrategy<Ring<P, CW, CL>, Out = P::Scalar>,
+    ShoelaceArea: AreaStrategy<Ring<P, CW, CL>, Out = <P::Scalar as CoordinateScalar>::Measure>,
 {
     let a = ShoelaceArea.area(&*r);
-    let zero = <P::Scalar as CoordinateScalar>::ZERO;
+    let zero = <P::Scalar as CoordinateScalar>::ZERO.to_measure();
     let is_positive = a > zero;
     let is_negative = a < zero;
     // Only reverse when the sign is decisively wrong; a zero-area
@@ -126,7 +126,7 @@ impl<P, const CW: bool, const CL: bool> Correct for Ring<P, CW, CL>
 where
     P: PointTrait + Copy,
     P::Cs: CoordinateSystem,
-    ShoelaceArea: AreaStrategy<Ring<P, CW, CL>, Out = P::Scalar>,
+    ShoelaceArea: AreaStrategy<Ring<P, CW, CL>, Out = <P::Scalar as CoordinateScalar>::Measure>,
 {
     fn correct(&mut self) {
         fix_closure(self);
@@ -156,7 +156,7 @@ impl<P, const CW: bool, const CL: bool> Correct for Polygon<P, CW, CL>
 where
     P: PointTrait + Copy,
     P::Cs: CoordinateSystem,
-    ShoelaceArea: AreaStrategy<Ring<P, CW, CL>, Out = P::Scalar>,
+    ShoelaceArea: AreaStrategy<Ring<P, CW, CL>, Out = <P::Scalar as CoordinateScalar>::Measure>,
 {
     fn correct(&mut self) {
         fix_closure(&mut self.outer);
@@ -314,6 +314,38 @@ mod tests {
         assert!(ring_area(&r) < 0.0, "precondition: CCW ring is negative");
         correct(&mut r);
         assert_eq!(ring_area(&r), 4.0);
+    }
+
+    /// A ring ends where it starts when Boost's `disjoint(front, back)`
+    /// says so, by `math::equals`: a last point one ulp off the first
+    /// closes a closed ring and is dropped from an open one, while two ulps
+    /// off is another point. Boost (`aed7bc3`) keeps 5, leaves 4, and
+    /// grows to 6.
+    #[test]
+    fn closure_is_judged_by_math_equals() {
+        let ring_ending_at = |x: f64| {
+            vec![
+                P::new(10.0, 10.0),
+                P::new(10.0, 11.0),
+                P::new(11.0, 11.0),
+                P::new(11.0, 10.0),
+                P::new(x, 10.0),
+            ]
+        };
+        let one_ulp = 10.000_000_000_000_002;
+        let two_ulps = 10.000_000_000_000_004;
+
+        let mut closed: Ring<P> = Ring::from_vec(ring_ending_at(one_ulp));
+        correct(&mut closed);
+        assert_eq!(closed.0.len(), 5);
+
+        let mut open: Ring<P, true, false> = Ring::from_vec(ring_ending_at(one_ulp));
+        correct(&mut open);
+        assert_eq!(open.0.len(), 4);
+
+        let mut apart: Ring<P> = Ring::from_vec(ring_ending_at(two_ulps));
+        correct(&mut apart);
+        assert_eq!(apart.0.len(), 6);
     }
 
     #[test]

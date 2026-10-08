@@ -11,6 +11,7 @@
     reason = "exact equality is used only to recognize identical stored vertices and explicit ring closure"
 )]
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
@@ -36,7 +37,6 @@ pub(crate) enum ArealOp {
     Intersection,
     Union,
     Difference,
-    SymDifference,
 }
 
 impl ArealOp {
@@ -45,7 +45,6 @@ impl ArealOp {
             Self::Intersection => first && second,
             Self::Union => first || second,
             Self::Difference => first && !second,
-            Self::SymDifference => first != second,
         }
     }
 
@@ -119,6 +118,7 @@ impl Shape {
     }
 }
 
+#[derive(Clone)]
 struct SourceSegment<P> {
     start: P,
     end: P,
@@ -126,9 +126,16 @@ struct SourceSegment<P> {
     /// pushed by the intersection sweep is, including one that lands on an
     /// endpoint.
     splits: Vec<(f64, P, bool)>,
+    /// `(parameter, point, within_member)` inside the segment where another
+    /// ring of its own operand meets it: a ring of the same polygon — a hole
+    /// touching the exterior, two holes touching — or another member of a
+    /// multi-polygon. Not turns; see `split_where_rings_touch`.
+    contacts: Vec<(f64, P, bool)>,
     /// Which monotone run of its ring this segment belongs to. C++:
     /// `sectionalize`, whose sections are what `get_turns` iterates over.
     section: usize,
+    /// Which polygon of its operand the segment's ring belongs to.
+    member: usize,
 }
 
 impl<P> SourceSegment<P>
@@ -136,31 +143,64 @@ where
     P: Point + Copy,
     P::Scalar: Into<f64>,
 {
-    fn new(start: P, end: P, section: usize) -> Self {
+    fn new(start: P, end: P, section: usize, member: usize) -> Self {
         Self {
             start,
             end,
             splits: alloc::vec![(0.0, start, false), (1.0, end, false)],
+            contacts: Vec::new(),
             section,
+            member,
         }
     }
 
-    fn push_split(&mut self, point: P, tolerance: f64) {
+    /// How much of the segment's parameter `distance` along it spans.
+    fn parameter_span(&self, distance: f64) -> f64 {
+        let start = Coordinate::from_point(&self.start);
+        let end = Coordinate::from_point(&self.end);
+        distance / hypot(end.x - start.x, end.y - start.y)
+    }
+
+    /// Record where another ring of this segment's own operand meets it.
+    /// Its endpoints, and any point a turn already split, need no contact.
+    ///
+    /// Points that close together are not merged here but where they become
+    /// nodes (`canonical_node`), by their distance apart, which is the same
+    /// on every segment: merged here, by how far apart they lie along one
+    /// segment, a split could be merged on one segment and kept apart on
+    /// another that crosses it, and leave the two meeting at different
+    /// nodes.
+    fn push_contact(&mut self, point: P, snap: f64, within_member: bool) {
+        let tolerance = self.parameter_span(snap);
+        let parameter = segment_parameter(&self.start, &self.end, &point);
+        if parameter <= tolerance || parameter >= 1.0 - tolerance {
+            return;
+        }
+        let taken = |at: f64| at == parameter;
+        if self.splits.iter().any(|(at, _, _)| taken(*at))
+            || self.contacts.iter().any(|(at, _, _)| taken(*at))
+        {
+            return;
+        }
+        self.contacts.push((parameter, point, within_member));
+    }
+
+    /// Record a turn on the segment. As with a contact, a point close to one
+    /// already recorded is merged with it only once both are nodes.
+    fn push_split(&mut self, point: P, snap: f64) {
+        let tolerance = self.parameter_span(snap);
         let parameter = segment_parameter(&self.start, &self.end, &point);
         if parameter < -tolerance || parameter > 1.0 + tolerance {
             return;
         }
-        if let Some(existing) = self
-            .splits
-            .iter_mut()
-            .find(|(at, _, _)| (at - parameter).abs() <= tolerance)
-        {
+        let parameter = parameter.clamp(0.0, 1.0);
+        if let Some(existing) = self.splits.iter_mut().find(|(at, _, _)| *at == parameter) {
             // A crossing that lands on a vertex already split here still makes
             // that vertex a turn.
             existing.2 = true;
             return;
         }
-        self.splits.push((parameter.clamp(0.0, 1.0), point, true));
+        self.splits.push((parameter, point, true));
     }
 }
 
@@ -200,6 +240,10 @@ struct Node<P> {
     /// indices have tied — the fraction must not outrank the second operand,
     /// or two turns sharing one edge come out in the wrong order.
     offset: [f64; 2],
+    /// Per operand, set where its own rings touch here and cut one of its
+    /// segments: `Some(true)` for two rings of one polygon, `Some(false)` for
+    /// two members of a multi-polygon. See `KeptTouches`.
+    touch: [Option<bool>; 2],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -212,14 +256,17 @@ struct Edge {
     /// Boost walks one operand at a time between turns and copies *that*
     /// operand's vertices, so a point sitting inside a segment of the operand
     /// being walked never reaches the output, whoever else has a vertex there.
-    /// Reproducing that needs to know who carries each edge — see
-    /// `drop_points_interior_to_a_walked_segment`.
+    /// Reproducing that needs to know who carries each edge.
     carried_by: [bool; 2],
     /// Which section of each operand runs along it, `usize::MAX` for an
     /// operand that does not. Sections never span a ring, so the lowest one on
     /// a cycle names the ring the cycle came out of — which is the whole of
     /// `ring_identifier` for a ring nothing crossed.
     section: [usize; 2],
+    /// Which source segment of each operand the edge was cut from,
+    /// `usize::MAX` for an operand that does not carry it. Two edges cut from
+    /// one segment meet at a point inside it, which is no vertex.
+    segment: [usize; 2],
 }
 
 impl Edge {
@@ -269,6 +316,9 @@ impl TurnOrder {
 /// the turn it started from.
 struct RingStart {
     traversed: bool,
+    /// Traversed from one of an operand's own touch points — Boost's self
+    /// turns, which it collects after every turn between the operands.
+    from_self_turn: bool,
     source: usize,
     ring: usize,
     turn: TurnOrder,
@@ -280,8 +330,9 @@ impl RingStart {
     fn compare(&self, other: &Self) -> Ordering {
         self.traversed.cmp(&other.traversed).then_with(|| {
             if self.traversed {
-                self.turn
-                    .compare(&other.turn)
+                self.from_self_turn
+                    .cmp(&other.from_self_turn)
+                    .then_with(|| self.turn.compare(&other.turn))
                     .then_with(|| self.second_operand.cmp(&other.second_operand))
                     .then_with(|| self.node.cmp(&other.node))
             } else {
@@ -347,8 +398,8 @@ where
 fn overlay_arrangement<P>(
     first_shape: &Shape,
     second_shape: &Shape,
-    mut first_segments: Vec<SourceSegment<P>>,
-    mut second_segments: Vec<SourceSegment<P>>,
+    first_segments: Vec<SourceSegment<P>>,
+    second_segments: Vec<SourceSegment<P>>,
     operation: ArealOp,
 ) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
 where
@@ -357,29 +408,52 @@ where
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     let scale = coordinate_scale(first_shape, second_shape);
-    let snap_tolerance = scale * 1e-10;
-    let parameter_tolerance = 1e-10;
-
-    for first_segment in &mut first_segments {
-        for second_segment in &mut second_segments {
-            let first_model = Segment::new(first_segment.start, first_segment.end);
-            let second_model = Segment::new(second_segment.start, second_segment.end);
-            match segment_intersection(&first_model, &second_model) {
-                SegmentIntersection::Disjoint => {}
-                SegmentIntersection::Single(point) => {
-                    first_segment.push_split(point, parameter_tolerance);
-                    second_segment.push_split(point, parameter_tolerance);
-                }
-                SegmentIntersection::Collinear { from, to } => {
-                    first_segment.push_split(from, parameter_tolerance);
-                    first_segment.push_split(to, parameter_tolerance);
-                    second_segment.push_split(from, parameter_tolerance);
-                    second_segment.push_split(to, parameter_tolerance);
-                }
-                SegmentIntersection::OutOfRange => return Err(OverlayError::Unsupported),
-            }
-        }
+    // Points a snap distance apart are one node. Where the operands come
+    // closer than that without meeting — near copies of one another, a
+    // vertex a hair off an edge — the samples that tell an edge's sides
+    // apart can misjudge one, and the boundary does not close. The
+    // arrangement is then made again at a coarser snap, which folds such
+    // slivers into the edges they hug rather than refusing the operation
+    // over them.
+    match arrangement_at(
+        first_shape,
+        second_shape,
+        first_segments.clone(),
+        second_segments.clone(),
+        operation,
+        scale,
+        scale * 1e-10,
+    ) {
+        Err(OverlayError::Unsupported) => arrangement_at(
+            first_shape,
+            second_shape,
+            first_segments,
+            second_segments,
+            operation,
+            scale,
+            scale * 1e-7,
+        ),
+        result => result,
     }
+}
+
+fn arrangement_at<P>(
+    first_shape: &Shape,
+    second_shape: &Shape,
+    mut first_segments: Vec<SourceSegment<P>>,
+    mut second_segments: Vec<SourceSegment<P>>,
+    operation: ArealOp,
+    scale: f64,
+    snap_tolerance: f64,
+) -> Result<MultiPolygon<Polygon<P>>, OverlayError>
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    split_where_operands_meet(&mut first_segments, &mut second_segments, snap_tolerance)?;
+    split_where_rings_touch(&mut first_segments, snap_tolerance)?;
+    split_where_rings_touch(&mut second_segments, snap_tolerance)?;
 
     let mut nodes = Vec::new();
     let mut candidates = Vec::new();
@@ -409,8 +483,10 @@ where
     }
 
     let sample_distance = (scale * 1e-8).max(snap_tolerance * 32.0);
+    let carriers = stretch_carriers(&candidates);
+    let sources = [&first_segments, &second_segments];
     let mut boundary: Vec<Edge> = Vec::new();
-    for candidate in candidates {
+    for &candidate in &candidates {
         let start = nodes[candidate.start].coordinate;
         let end = nodes[candidate.end].coordinate;
         let delta = (end.x - start.x, end.y - start.y);
@@ -420,19 +496,41 @@ where
             x: f64::midpoint(start.x, end.x),
             y: f64::midpoint(start.y, end.y),
         };
-        let offset = sample_distance.min(length * 1e-4);
-        let normal = (-delta.1 / length * offset, delta.0 / length * offset);
-        let left = Coordinate {
-            x: midpoint.x + normal.0,
-            y: midpoint.y + normal.1,
+        // An operand that does not run along the edge lies on one side of it
+        // only, and is asked at the edge itself. One that does is asked either
+        // side of the segment of its own the edge was cut from — the edge's
+        // ends may be another operand's vertices a hair off that segment —
+        // and closer than any other of its edges comes: a sample that strayed
+        // past one would read a sliver thinner than the sample distance — two
+        // edges a rounding error from coinciding, a vertex a hair off an edge
+        // — as filled on both sides, and drop edges whose nodes stay apart,
+        // leaving the boundary with loose ends. One that runs along it there
+        // and back is asked either side of the edge itself, past the spike
+        // its two runs bound: they were made one stretch by snapping their
+        // nodes together, so they lie no further apart than that.
+        let carried = carriers[&stretch_key(&candidate)];
+        let reach = sample_distance.min(length * 1e-4);
+        let clearance = clearance(&candidate, carried, &candidates, &nodes, midpoint, reach);
+        let offset = reach.min(clearance / 2.0);
+        let sides = |shape: &Shape, operand: usize| {
+            let (left, right) = match carried[operand] {
+                Carry::Clear => {
+                    let inside = shape.contains(midpoint);
+                    return (inside, inside);
+                }
+                Carry::Along(index) => beside(&sources[operand][index], midpoint, delta, offset),
+                Carry::Folded => across(
+                    midpoint,
+                    delta,
+                    (snap_tolerance * 2.0).max(offset).min(clearance / 2.0),
+                ),
+            };
+            (shape.contains(left), shape.contains(right))
         };
-        let right = Coordinate {
-            x: midpoint.x - normal.0,
-            y: midpoint.y - normal.1,
-        };
-        let left_result = operation.apply(first_shape.contains(left), second_shape.contains(left));
-        let right_result =
-            operation.apply(first_shape.contains(right), second_shape.contains(right));
+        let (first_left, first_right) = sides(first_shape, 0);
+        let (second_left, second_right) = sides(second_shape, 1);
+        let left_result = operation.apply(first_left, second_left);
+        let right_result = operation.apply(first_right, second_right);
         if left_result == right_result {
             continue;
         }
@@ -451,6 +549,7 @@ where
                 end: candidate.start,
                 carried_by: candidate.carried_by,
                 section: candidate.section,
+                segment: candidate.segment,
             }
         };
         // The same stretch reaches here once per operand that carries it, so
@@ -462,12 +561,16 @@ where
                 held.carried_by[1] |= edge.carried_by[1];
                 held.section[0] = held.section[0].min(edge.section[0]);
                 held.section[1] = held.section[1].min(edge.section[1]);
+                held.segment[0] = held.segment[0].min(edge.segment[0]);
+                held.segment[1] = held.segment[1].min(edge.segment[1]);
             }
             None => boundary.push(edge),
         }
     }
+    settle_short_edges(&mut boundary, &candidates, &nodes, sample_distance);
 
-    let rings = trace_rings(&nodes, &boundary, snap_tolerance)?;
+    let kept = KeptTouches::of(operation, nodes.iter().any(|node| node.is_turn));
+    let rings = trace_rings(&nodes, &boundary, kept, snap_tolerance)?;
     Ok(assemble_traced(rings))
 }
 
@@ -495,10 +598,16 @@ where
 {
     let mut segments = Vec::new();
     let mut sections = Sectionizer::new(0);
-    for polygon in multi_polygon.polygons() {
-        append_ring_segments(polygon.exterior(), &mut segments, &mut sections, backwards);
+    for (member, polygon) in multi_polygon.polygons().enumerate() {
+        append_ring_segments(
+            polygon.exterior(),
+            &mut segments,
+            &mut sections,
+            backwards,
+            member,
+        );
         for ring in polygon.interiors() {
-            append_ring_segments(ring, &mut segments, &mut sections, backwards);
+            append_ring_segments(ring, &mut segments, &mut sections, backwards, member);
         }
     }
     segments
@@ -512,9 +621,15 @@ where
 {
     let mut segments = Vec::new();
     let mut sections = Sectionizer::new(0);
-    append_ring_segments(polygon.exterior(), &mut segments, &mut sections, backwards);
+    append_ring_segments(
+        polygon.exterior(),
+        &mut segments,
+        &mut sections,
+        backwards,
+        0,
+    );
     for ring in polygon.interiors() {
-        append_ring_segments(ring, &mut segments, &mut sections, backwards);
+        append_ring_segments(ring, &mut segments, &mut sections, backwards, 0);
     }
     segments
 }
@@ -615,6 +730,7 @@ fn append_ring_segments<R, P>(
     output: &mut Vec<SourceSegment<P>>,
     sections: &mut Sectionizer,
     backwards: bool,
+    member: usize,
 ) where
     R: RingTrait<Point = P>,
     P: Point + Copy,
@@ -634,14 +750,144 @@ fn append_ring_segments<R, P>(
     for pair in points.windows(2) {
         if points_differ(&pair[0], &pair[1]) {
             let section = sections.section_for(&pair[0], &pair[1]);
-            output.push(SourceSegment::new(pair[0], pair[1], section));
+            output.push(SourceSegment::new(pair[0], pair[1], section, member));
         }
     }
     let last = *points.last().expect("nonempty");
     if points_differ(&last, &points[0]) {
         let section = sections.section_for(&last, &points[0]);
-        output.push(SourceSegment::new(last, points[0], section));
+        output.push(SourceSegment::new(last, points[0], section, member));
     }
+}
+
+/// Split both operands' segments wherever the two meet — the turns.
+///
+/// A vertex of one operand within `snap` of a segment of the other meets it
+/// too, whichever side of it the exact predicate puts the vertex: the nodes
+/// are merged that close, and an edge is classified by sampling beside it,
+/// so a segment left whole past a vertex that near would be judged across a
+/// sliver its samples cannot see, and leave the boundary with a loose end.
+fn split_where_operands_meet<P>(
+    first: &mut [SourceSegment<P>],
+    second: &mut [SourceSegment<P>],
+    snap: f64,
+) -> Result<(), OverlayError>
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    for first_segment in first {
+        for second_segment in &mut *second {
+            let first_model = Segment::new(first_segment.start, first_segment.end);
+            let second_model = Segment::new(second_segment.start, second_segment.end);
+            match segment_intersection(&first_model, &second_model) {
+                SegmentIntersection::Disjoint => {}
+                SegmentIntersection::Single(point) => {
+                    first_segment.push_split(point, snap);
+                    second_segment.push_split(point, snap);
+                }
+                SegmentIntersection::Collinear { from, to } => {
+                    first_segment.push_split(from, snap);
+                    first_segment.push_split(to, snap);
+                    second_segment.push_split(from, snap);
+                    second_segment.push_split(to, snap);
+                }
+                SegmentIntersection::OutOfRange => return Err(OverlayError::Unsupported),
+            }
+            for vertex in [second_segment.start, second_segment.end] {
+                if passes_within(first_segment, &vertex, snap) {
+                    first_segment.push_split(vertex, snap);
+                    second_segment.push_split(vertex, snap);
+                }
+            }
+            for vertex in [first_segment.start, first_segment.end] {
+                if passes_within(second_segment, &vertex, snap) {
+                    second_segment.push_split(vertex, snap);
+                    first_segment.push_split(vertex, snap);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `segment` runs within `snap` of `point` away from its ends.
+fn passes_within<P>(segment: &SourceSegment<P>, point: &P, snap: f64) -> bool
+where
+    P: Point + Copy,
+    P::Scalar: Into<f64>,
+{
+    let tolerance = segment.parameter_span(snap);
+    let start = Coordinate::from_point(&segment.start);
+    let end = Coordinate::from_point(&segment.end);
+    let point = Coordinate::from_point(point);
+    let along = (end.x - start.x, end.y - start.y);
+    let at = ((point.x - start.x) * along.0 + (point.y - start.y) * along.1)
+        / (along.0 * along.0 + along.1 * along.1);
+    at > tolerance && at < 1.0 - tolerance && distance_to_span(point, (start, end)) <= snap
+}
+
+/// Split an operand's segments where its own rings meet: a hole touching
+/// the exterior, two holes touching, or two members of a multi-polygon.
+///
+/// Those points are not turns — the operand meets itself there, not the
+/// other operand — but a segment left whole across one is classified by side
+/// samples taken at its middle, and when the touching ring's vertex sits
+/// there the samples land on that ring's boundary and the edge drops out of
+/// the result, leaving the tracer an outline it cannot close. Boost's
+/// traversal never classifies a stretch by sampling, so it needs no such
+/// cut.
+fn split_where_rings_touch<P>(
+    segments: &mut [SourceSegment<P>],
+    snap: f64,
+) -> Result<(), OverlayError>
+where
+    P: PointMut + Default + Copy,
+    P::Scalar: CoordinateScalar + Into<f64>,
+    <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
+{
+    let bounds = |segment: &SourceSegment<P>| {
+        let (start, end) = (
+            Coordinate::from_point(&segment.start),
+            Coordinate::from_point(&segment.end),
+        );
+        (
+            start.x.min(end.x),
+            start.y.min(end.y),
+            start.x.max(end.x),
+            start.y.max(end.y),
+        )
+    };
+    for later in 1..segments.len() {
+        let (head, tail) = segments.split_at_mut(later);
+        let later = &mut tail[0];
+        let (min_x, min_y, max_x, max_y) = bounds(later);
+        for earlier in head.iter_mut() {
+            let (low_x, low_y, high_x, high_y) = bounds(earlier);
+            if low_x > max_x || high_x < min_x || low_y > max_y || high_y < min_y {
+                continue;
+            }
+            let within_member = earlier.member == later.member;
+            let earlier_model = Segment::new(earlier.start, earlier.end);
+            let later_model = Segment::new(later.start, later.end);
+            match segment_intersection(&earlier_model, &later_model) {
+                SegmentIntersection::Disjoint => {}
+                SegmentIntersection::Single(point) => {
+                    earlier.push_contact(point, snap, within_member);
+                    later.push_contact(point, snap, within_member);
+                }
+                SegmentIntersection::Collinear { from, to } => {
+                    for point in [from, to] {
+                        earlier.push_contact(point, snap, within_member);
+                        later.push_contact(point, snap, within_member);
+                    }
+                }
+                SegmentIntersection::OutOfRange => return Err(OverlayError::Unsupported),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn append_atomic_edges<P>(
@@ -654,13 +900,14 @@ fn append_atomic_edges<P>(
     P: Point + Copy,
     P::Scalar: Into<f64>,
 {
+    // Each stretch between consecutive splits, with the parameters it spans.
+    let mut stretches = Vec::new();
     for (index, segment) in segments.iter_mut().enumerate() {
         let section = segment.section;
         segment
             .splits
             .sort_by(|left, right| left.0.total_cmp(&right.0));
         for pair in segment.splits.windows(2) {
-            debug_assert!((pair[1].0 - pair[0].0).abs() > 1e-12);
             let start = canonical_node(nodes, pair[0].1, pair[0].2, tolerance);
             let end = canonical_node(nodes, pair[1].1, pair[1].2, tolerance);
             // Only the far end of a split counts as an arrival, which is what
@@ -672,17 +919,51 @@ fn append_atomic_edges<P>(
                 nodes[end].section[operand] = section;
             }
             if start != end {
-                let mut carried_by = [false; 2];
-                carried_by[operand] = true;
-                let mut sections = [usize::MAX; 2];
-                sections[operand] = section;
-                output.push(Edge {
-                    start,
-                    end,
-                    carried_by,
-                    section: sections,
-                });
+                stretches.push((index, start, end, pair[0].0, pair[1].0));
             }
+        }
+    }
+
+    // Contacts are cut in only now, so every node they add comes after the
+    // vertices and turns: an untouched ring keeps reading its first vertex
+    // off node order (`push_ring`).
+    for (index, start, end, from, to) in stretches {
+        let segment = &segments[index];
+        let mut cuts: Vec<(f64, P, bool)> = segment
+            .contacts
+            .iter()
+            .copied()
+            .filter(|(at, _, _)| *at > from && *at < to)
+            .collect();
+        cuts.sort_by(|left, right| left.0.total_cmp(&right.0));
+        let mut ends: Vec<usize> = cuts
+            .into_iter()
+            .map(|(_, point, within_member)| {
+                let node = canonical_node(nodes, point, false, tolerance);
+                nodes[node].touch[operand].get_or_insert(within_member);
+                node
+            })
+            .collect();
+        ends.push(end);
+        let mut previous = start;
+        for next in ends {
+            if next == previous {
+                continue;
+            }
+            let mut carried_by = [false; 2];
+            carried_by[operand] = true;
+            let mut sections = [usize::MAX; 2];
+            sections[operand] = segment.section;
+            let mut source = [usize::MAX; 2];
+            source[operand] = index;
+            output.push(Edge {
+                start: previous,
+                end: next,
+                carried_by,
+                section: sections,
+                segment: source,
+            });
+            previous = next;
         }
     }
 }
@@ -710,11 +991,49 @@ where
         section: [usize::MAX; 2],
         pair_rank: usize::MAX,
         offset: [0.0; 2],
+        touch: [None; 2],
     });
     nodes.len() - 1
 }
 
 type TracedRing<P> = (Ring<P>, bool);
+
+/// Which of the points where an operand's own rings touch Boost keeps as
+/// turns, and so passes — appends — where a traced ring runs through them.
+///
+/// C++: `overlay` adds an operand's self turns only once the two operands
+/// have turns between them, and `enrich_discard_turns` then drops every turn
+/// whose operations both oppose the operation being built — `union` for an
+/// intersection or a difference, `intersection` for a union. Two rings of
+/// one polygon touch with both operations `intersection`, two members of a
+/// multi-polygon with both `union`, and an operand walked backwards — the
+/// second one of a difference — has the two swapped.
+#[derive(Clone, Copy)]
+struct KeptTouches {
+    /// `[operand][within_member]`.
+    kept: [[bool; 2]; 2],
+}
+
+impl KeptTouches {
+    fn of(operation: ArealOp, operands_meet: bool) -> Self {
+        let mut kept = [[false; 2]; 2];
+        for (operand, kinds) in kept.iter_mut().enumerate() {
+            let backwards = operand == 1 && operation.walks_second_operand_backwards();
+            for (within_member, keeps) in kinds.iter_mut().enumerate() {
+                let intersection = (within_member == 1) != backwards;
+                let opposed = intersection == matches!(operation, ArealOp::Union);
+                *keeps = operands_meet && !opposed;
+            }
+        }
+        Self { kept }
+    }
+
+    fn keeps(self, touch: [Option<bool>; 2]) -> bool {
+        touch.iter().zip(self.kept).any(|(touch, kept)| {
+            touch.is_some_and(|within_member| kept[usize::from(within_member)])
+        })
+    }
+}
 
 /// Walk the result boundary into closed rings, one face at a time.
 ///
@@ -732,6 +1051,7 @@ type TracedRing<P> = (Ring<P>, bool);
 fn trace_rings<P>(
     nodes: &[Node<P>],
     edges: &[Edge],
+    kept: KeptTouches,
     tolerance: f64,
 ) -> Result<Vec<TracedRing<P>>, OverlayError>
 where
@@ -775,7 +1095,7 @@ where
                 let loop_nodes = node_indices.split_off(start);
                 let loop_along = along.split_off(start);
                 node_indices.push(edge.end);
-                push_ring(&mut rings, nodes, &loop_nodes, &loop_along, tolerance);
+                push_ring(&mut rings, nodes, &loop_nodes, &loop_along, kept, tolerance);
             }
 
             if edge.end == first {
@@ -846,6 +1166,7 @@ fn push_ring<P>(
     nodes: &[Node<P>],
     node_indices: &[usize],
     along: &[Edge],
+    kept: KeptTouches,
     tolerance: f64,
 ) where
     P: Point + Copy,
@@ -876,6 +1197,18 @@ fn push_ring<P>(
             TurnOrder::of(&nodes[left]).compare(&TurnOrder::of(&nodes[right]))
         })
         .map(|(position, _)| position);
+    // A point where another ring of the walked operand touched one of its
+    // segments cuts that segment in the arrangement but is no vertex of it:
+    // the walk arrives and leaves along the same source segment.
+    let count = cycle.len();
+    let keeps = |position: usize| {
+        let (arriving, leaving) = (along[(position + count - 1) % count], along[position]);
+        nodes[cycle[position]].is_turn
+            || !(0..2).any(|operand| {
+                arriving.segment[operand] != usize::MAX
+                    && arriving.segment[operand] == leaving.segment[operand]
+            })
+    };
     // A ring with no turn was copied whole from one operand, and keeps that
     // operand's own starting vertex rather than whichever end of it the
     // traversal happened to seed from — a hole is walked against its stored
@@ -886,10 +1219,27 @@ fn push_ring<P>(
             .iter()
             .copied()
             .enumerate()
+            .filter(|&(position, _)| keeps(position))
             .min_by_key(|&(_, index)| index)
             .map(|(position, _)| position)
     };
-    let first_turn = first_turn_by_arrival.or_else(first_node).unwrap_or(0);
+    // A ring with no turn between the operands on it is still traversed when
+    // a kept self turn is (`KeptTouches`): Boost starts it there, and only
+    // after every ring started at a turn between the operands.
+    let first_self_turn = || {
+        first_turn_by_arrival.is_none().then(|| {
+            cycle
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|&(_, index)| kept.keeps(nodes[index].touch))
+                .min_by_key(|&(_, index)| index)
+                .map(|(position, _)| position)
+        })?
+    };
+    let first_traversed = first_turn_by_arrival.or_else(first_self_turn);
+    let traced = first_traversed.is_some();
+    let first_turn = first_traversed.or_else(first_node).unwrap_or(0);
 
     // C++: the traversal appends a *turn* point with `append_no_collinear` and
     // the ring vertices between turns with `copy_segments`, which does not
@@ -902,9 +1252,15 @@ fn push_ring<P>(
     // turn, appends it, and then the next turn — the far end of the shared
     // stretch — is collinear with it and takes its place.
     let mut points: Vec<P> = Vec::with_capacity(cycle.len() + 1);
-    for &index in cycle[first_turn..].iter().chain(&cycle[..first_turn]) {
-        let node = &nodes[index];
-        if !node.is_turn {
+    for position in (first_turn..count).chain(0..first_turn) {
+        let node = &nodes[cycle[position]];
+        // A self turn Boost keeps is passed like any other turn by a traced
+        // ring, even where it is no vertex of the walked segment.
+        let self_turn = traced && kept.keeps(node.touch);
+        if !keeps(position) && !self_turn {
+            continue;
+        }
+        if !node.is_turn && !self_turn {
             points.push(node.point);
             continue;
         }
@@ -920,7 +1276,7 @@ fn push_ring<P>(
     // `convert_ring`, which appends nothing and drops nothing, so its last
     // vertex stays even where it continues the line straight into the first.
     if let Some(&first) = points.first() {
-        if first_turn_by_arrival.is_some() {
+        if traced {
             append_no_collinear(&mut points, first);
         } else {
             points.push(first);
@@ -948,7 +1304,8 @@ fn push_ring<P>(
         .unwrap_or(usize::MAX);
     rings.push((
         RingStart {
-            traversed: first_turn_by_arrival.is_some(),
+            traversed: traced,
+            from_self_turn: first_turn_by_arrival.is_none(),
             source,
             ring,
             turn: TurnOrder::of(&nodes[cycle[first_turn]]),
@@ -1034,6 +1391,231 @@ where
     first.x != second.x || first.y != second.y
 }
 
+/// Settle the boundary where a stretch too short for its sides to be told
+/// apart was judged wrongly.
+///
+/// A boundary leaves every node as often as it reaches it. A stretch not
+/// much longer than the snap distance, that two operands were snapped onto
+/// where their segments cross, has no sides the samples can tell apart, and
+/// a misjudged one leaves its two nodes out of balance, one short of a
+/// departure and the other of an arrival. Adding the stretch the way that
+/// settles both, or taking it away where it was kept the other way round,
+/// closes the boundary again, and a stretch that short moves no area that
+/// shows. Only stretches shorter than `reach` are touched; anything longer
+/// is left for the tracer to refuse.
+fn settle_short_edges<P>(
+    boundary: &mut Vec<Edge>,
+    candidates: &[Edge],
+    nodes: &[Node<P>],
+    reach: f64,
+) {
+    let mut balance = alloc::vec![0_isize; nodes.len()];
+    for edge in boundary.iter() {
+        balance[edge.start] += 1;
+        balance[edge.end] -= 1;
+    }
+    if balance.iter().all(|&departures| departures == 0) {
+        return;
+    }
+    let length = |edge: &Edge| {
+        let (start, end) = (nodes[edge.start].coordinate, nodes[edge.end].coordinate);
+        hypot(end.x - start.x, end.y - start.y)
+    };
+    let mut short: Vec<&Edge> = candidates
+        .iter()
+        .filter(|candidate| length(candidate) <= reach)
+        .collect();
+    short.sort_by(|left, right| length(left).total_cmp(&length(right)));
+    for candidate in short {
+        for (from, to) in [
+            (candidate.start, candidate.end),
+            (candidate.end, candidate.start),
+        ] {
+            if balance[from] >= 0 || balance[to] <= 0 {
+                continue;
+            }
+            match boundary
+                .iter()
+                .position(|held| held.start == to && held.end == from)
+            {
+                Some(index) => {
+                    boundary.remove(index);
+                }
+                None => boundary.push(Edge {
+                    start: from,
+                    end: to,
+                    ..*candidate
+                }),
+            }
+            balance[from] += 1;
+            balance[to] -= 1;
+        }
+    }
+}
+
+/// Two points `offset` either side of `segment`'s line, abreast of `point`:
+/// the first to the left of `direction`, the second to its right.
+fn beside<P>(
+    segment: &SourceSegment<P>,
+    point: Coordinate,
+    direction: (f64, f64),
+    offset: f64,
+) -> (Coordinate, Coordinate)
+where
+    P: Point,
+    P::Scalar: Into<f64>,
+{
+    let start = Coordinate::from_point(&segment.start);
+    let end = Coordinate::from_point(&segment.end);
+    let along = (end.x - start.x, end.y - start.y);
+    let length = hypot(along.0, along.1);
+    let at = ((point.x - start.x) * along.0 + (point.y - start.y) * along.1) / (length * length);
+    let foot = Coordinate {
+        x: start.x + at * along.0,
+        y: start.y + at * along.1,
+    };
+    let turn = if along.0 * direction.0 + along.1 * direction.1 < 0.0 {
+        -offset
+    } else {
+        offset
+    };
+    let normal = (-along.1 / length * turn, along.0 / length * turn);
+    (
+        Coordinate {
+            x: foot.x + normal.0,
+            y: foot.y + normal.1,
+        },
+        Coordinate {
+            x: foot.x - normal.0,
+            y: foot.y - normal.1,
+        },
+    )
+}
+
+/// How each operand runs along each stretch of the arrangement: along the
+/// first source segment of its that does, or there and back where its runs
+/// one way and the other cancel.
+fn stretch_carriers(candidates: &[Edge]) -> BTreeMap<(usize, usize), [Carry; 2]> {
+    // The first source segment along each stretch, and how many more times
+    // the operand runs it one way round than the other.
+    let mut runs = BTreeMap::new();
+    for candidate in candidates {
+        let held = runs
+            .entry(stretch_key(candidate))
+            .or_insert([(None, 0_isize); 2]);
+        let way = if candidate.start < candidate.end {
+            1
+        } else {
+            -1
+        };
+        for ((source, net), (&carried, &segment)) in held
+            .iter_mut()
+            .zip(candidate.carried_by.iter().zip(&candidate.segment))
+        {
+            if carried {
+                source.get_or_insert(segment);
+                *net += way;
+            }
+        }
+    }
+    runs.into_iter()
+        .map(|(stretch, held)| {
+            (
+                stretch,
+                held.map(|(source, net)| match source {
+                    None => Carry::Clear,
+                    Some(_) if net == 0 => Carry::Folded,
+                    Some(index) => Carry::Along(index),
+                }),
+            )
+        })
+        .collect()
+}
+
+/// How close to `midpoint` the nearest other stretch comes that an operand
+/// running along `candidate` also runs along, looking no further than
+/// `reach`; infinite when none comes that close.
+fn clearance<P>(
+    candidate: &Edge,
+    carried: [Carry; 2],
+    candidates: &[Edge],
+    nodes: &[Node<P>],
+    midpoint: Coordinate,
+    reach: f64,
+) -> f64 {
+    candidates
+        .iter()
+        .filter(|other| {
+            stretch_key(other) != stretch_key(candidate)
+                && carried
+                    .iter()
+                    .zip(other.carried_by)
+                    .any(|(carry, by)| by && !matches!(carry, Carry::Clear))
+        })
+        .map(|other| (nodes[other.start].coordinate, nodes[other.end].coordinate))
+        .filter(|&(from, to)| {
+            from.x.min(to.x) <= midpoint.x + reach
+                && from.x.max(to.x) >= midpoint.x - reach
+                && from.y.min(to.y) <= midpoint.y + reach
+                && from.y.max(to.y) >= midpoint.y - reach
+        })
+        .map(|span| distance_to_span(midpoint, span))
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// Two points `offset` either side of `point`, square to `direction`: the
+/// first to its left, the second to its right.
+fn across(point: Coordinate, direction: (f64, f64), offset: f64) -> (Coordinate, Coordinate) {
+    let length = hypot(direction.0, direction.1);
+    let normal = (
+        -direction.1 / length * offset,
+        direction.0 / length * offset,
+    );
+    (
+        Coordinate {
+            x: point.x + normal.0,
+            y: point.y + normal.1,
+        },
+        Coordinate {
+            x: point.x - normal.0,
+            y: point.y - normal.1,
+        },
+    )
+}
+
+/// How one operand runs along a stretch of the arrangement.
+#[derive(Clone, Copy)]
+enum Carry {
+    /// Not at all: the operand lies on one side of the stretch only.
+    Clear,
+    /// Along the source segment with this index.
+    Along(usize),
+    /// There and back, as the two sides of a spike too thin to part: the
+    /// operand is the same on both sides of it.
+    Folded,
+}
+
+/// The two nodes a stretch runs between, in either direction.
+fn stretch_key(edge: &Edge) -> (usize, usize) {
+    (edge.start.min(edge.end), edge.start.max(edge.end))
+}
+
+/// How far `point` is from the segment `span`.
+fn distance_to_span(point: Coordinate, (start, end): (Coordinate, Coordinate)) -> f64 {
+    let delta = (end.x - start.x, end.y - start.y);
+    let length_squared = delta.0 * delta.0 + delta.1 * delta.1;
+    let along = if length_squared > 0.0 {
+        (((point.x - start.x) * delta.0 + (point.y - start.y) * delta.1) / length_squared)
+            .clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    hypot(
+        point.x - (start.x + along * delta.0),
+        point.y - (start.y + along * delta.1),
+    )
+}
+
 fn ring_contains(ring: &[Coordinate], point: Coordinate) -> bool {
     let mut inside = false;
     for index in 0..ring.len() {
@@ -1064,7 +1646,7 @@ mod tests {
     use geometry_cs::Cartesian;
     use geometry_model::Point2D;
 
-    use super::{Coordinate, Edge, Node, trace_rings};
+    use super::{Coordinate, Edge, KeptTouches, Node, trace_rings};
 
     type P = Point2D<f64, Cartesian>;
 
@@ -1079,6 +1661,7 @@ mod tests {
                 section: [0, 0],
                 pair_rank: 0,
                 offset: [0.0; 2],
+                touch: [None; 2],
             },
             Node {
                 point: P::new(1.0, 0.0),
@@ -1088,6 +1671,7 @@ mod tests {
                 section: [1, 1],
                 pair_rank: 1,
                 offset: [0.0; 2],
+                touch: [None; 2],
             },
             Node {
                 point: P::new(2.0, 0.0),
@@ -1097,6 +1681,7 @@ mod tests {
                 section: [2, 2],
                 pair_rank: 2,
                 offset: [0.0; 2],
+                touch: [None; 2],
             },
         ];
         let edges = [
@@ -1105,21 +1690,27 @@ mod tests {
                 end: 1,
                 carried_by: [true; 2],
                 section: [0; 2],
+                segment: [0; 2],
             },
             Edge {
                 start: 1,
                 end: 2,
                 carried_by: [true; 2],
                 section: [0; 2],
+                segment: [1; 2],
             },
             Edge {
                 start: 2,
                 end: 0,
                 carried_by: [true; 2],
                 section: [0; 2],
+                segment: [2; 2],
             },
         ];
 
-        assert!(trace_rings(&nodes, &edges, 1e-10).unwrap().is_empty());
+        let kept = KeptTouches {
+            kept: [[false; 2]; 2],
+        };
+        assert_eq!(trace_rings(&nodes, &edges, kept, 1e-10).unwrap().len(), 0);
     }
 }

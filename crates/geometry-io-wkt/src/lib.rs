@@ -14,8 +14,9 @@
 //! The text codec accepts exactly two ordinates and rejects Z/M/ZM qualifiers.
 //! Its lexical and structural rules follow `PostGIS` 3.4.3: unsigned `NaN` is
 //! accepted, infinity is rejected, lines need at least two points, and polygon
-//! rings need at least four points with matching endpoints. Topological validity
-//! is not checked. Decimal overflow is rejected even though `PostGIS` accepts it.
+//! rings need at least four points with matching endpoints, where Boost's
+//! `read_wkt` accepts lines and rings of any length and closes an open ring.
+//! Topological validity is not checked. Decimal overflow is rejected even though `PostGIS` accepts it.
 //! Finite coordinates, including signed zero, round-trip without precision loss.
 //!
 //! [`from_wkt_2d`] preserves empty points and empty multipoint members through

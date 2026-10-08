@@ -21,10 +21,17 @@
 //! `math::equals(dlon, 0)`-style short-circuits Boost applies for
 //! coincident points.
 
+#[cfg(feature = "std")]
 use geometry_cs::{CoordinateSystem, SphericalFamily};
+#[cfg(feature = "std")]
 use geometry_tag::SameAs;
+#[cfg(feature = "std")]
 use geometry_trait::Point;
 
+#[cfg(not(feature = "std"))]
+use geometry_coords::math::Float;
+
+#[cfg(feature = "std")]
 use crate::azimuth::AzimuthStrategy;
 
 #[cfg(feature = "std")]
@@ -55,13 +62,36 @@ where
     fn azimuth(&self, p1: &P1, p2: &P2) -> f64 {
         let (lon1, lat1) = lonlat_radians(p1);
         let (lon2, lat2) = lonlat_radians(p2);
-        let dlon = lon2 - lon1;
-        // Mirrors `formula::spherical_azimuth` at
-        // `formulas/spherical.hpp:156-158`.
-        let y = dlon.sin() * lat2.cos();
-        let x = lat1.cos() * lat2.sin() - lat1.sin() * lat2.cos() * dlon.cos();
-        y.atan2(x)
+        spherical_azimuth::<false>(lon1, lat1, lon2, lat2).0
     }
+}
+
+/// The forward azimuth of the great circle from `(lon1, lat1)` to
+/// `(lon2, lat2)` and, when `REVERSE` is set, its azimuth at the far end
+/// (else zero), all in radians.
+///
+/// Mirrors `formula::spherical_azimuth<CT, ReverseAzimuth>`
+/// (`formulas/spherical.hpp:126-169`).
+pub(super) fn spherical_azimuth<const REVERSE: bool>(
+    lon1: f64,
+    lat1: f64,
+    lon2: f64,
+    lat2: f64,
+) -> (f64, f64) {
+    let dlon = lon2 - lon1;
+    let cos_dlon = dlon.cos();
+    let sin_dlon = dlon.sin();
+    let cos_lat1 = lat1.cos();
+    let cos_lat2 = lat2.cos();
+    let sin_lat1 = lat1.sin();
+    let sin_lat2 = lat2.sin();
+    let azimuth = (sin_dlon * cos_lat2).atan2(cos_lat1 * sin_lat2 - sin_lat1 * cos_lat2 * cos_dlon);
+    let reverse = if REVERSE {
+        (sin_dlon * cos_lat1).atan2(sin_lat2 * cos_lat1 * cos_dlon - cos_lat2 * sin_lat1)
+    } else {
+        0.0
+    };
+    (azimuth, reverse)
 }
 
 #[cfg(all(test, feature = "std"))]

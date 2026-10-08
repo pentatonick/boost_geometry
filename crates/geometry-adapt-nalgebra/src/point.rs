@@ -36,8 +36,20 @@ use nalgebra::{Point2, Point3, Scalar};
 /// let b = NaPoint2::new(Point2::new(3.0_f64, 4.0));
 /// assert_eq!(distance(&a, &b), 5.0);
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct NaPoint2<T: Scalar>(pub Point2<T>);
+
+/// The origin, where `nalgebra` has one for `T`.
+impl<T: Scalar> Default for NaPoint2<T>
+where
+    Point2<T>: Default,
+{
+    #[inline]
+    fn default() -> Self {
+        Self(Point2::default())
+    }
+}
 
 impl<T: Scalar> NaPoint2<T> {
     /// Wrap a `nalgebra::Point2` so the geometry concepts apply to it.
@@ -94,8 +106,20 @@ impl<T: CoordinateScalar + Scalar> PointMut for NaPoint2<T> {
 /// let x_axis = NaPoint3::new(Point3::new(1.0_f64, 0.0, 0.0));
 /// assert_eq!(distance(&origin, &x_axis), 1.0);
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct NaPoint3<T: Scalar>(pub Point3<T>);
+
+/// The origin, where `nalgebra` has one for `T`.
+impl<T: Scalar> Default for NaPoint3<T>
+where
+    Point3<T>: Default,
+{
+    #[inline]
+    fn default() -> Self {
+        Self(Point3::default())
+    }
+}
 
 impl<T: Scalar> NaPoint3<T> {
     /// Wrap a `nalgebra::Point3` so the geometry concepts apply to it.

@@ -8,6 +8,8 @@
 //! `area<geometry_collection_tag>` (`area.hpp:273-285`) recursively sums
 //! the area of every member, so this wrapper does too.
 
+use alloc::collections::VecDeque;
+
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{DynGeometry, Point, Polygon};
@@ -24,35 +26,53 @@ use crate::area::{area, multi_polygon_area};
 /// (`area.hpp`, incl. the `geometry_collection_tag` specialisation at
 /// `:273-285`).
 #[must_use]
-pub fn area_dyn<S, Cs>(g: &DynGeometry<S, Cs>) -> S
+pub fn area_dyn<S, Cs>(g: &DynGeometry<S, Cs>) -> S::Measure
 where
     S: CoordinateScalar,
     Cs: CoordinateSystem,
     Cs::Family: SameAs<CartesianFamily> + DefaultArea<Cs::Family>,
     DefaultAreaStrategy<Polygon<Point<S, 2, Cs>>>:
-        AreaStrategy<Polygon<Point<S, 2, Cs>>, Out = S> + Default,
+        AreaStrategy<Polygon<Point<S, 2, Cs>>, Out = S::Measure> + Default,
     ShoelaceMultiPolygonArea:
-        AreaStrategy<geometry_model::MultiPolygon<Polygon<Point<S, 2, Cs>>>, Out = S>,
+        AreaStrategy<geometry_model::MultiPolygon<Polygon<Point<S, 2, Cs>>>, Out = S::Measure>,
 {
     use DynGeometry::{
         GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon,
         Point as PointArm, Polygon as PolygonArm,
     };
-    // A collection's area is the sum of its members' areas
-    // (`area.hpp:273-285` recurses via `visit_breadth_first`). The walk is
-    // an explicit work-list rather than recursion so an adversarially deep
-    // `GeometryCollection` chain cannot overflow the native stack (an
-    // uncatchable process abort).
-    let mut total = S::ZERO;
-    let mut stack = alloc::vec![g];
-    while let Some(node) = stack.pop() {
-        match node {
-            PolygonArm(pg) => total = total + area(pg),
-            MultiPolygon(mpg) => total = total + multi_polygon_area(mpg),
-            GeometryCollection(items) => stack.extend(items.iter()),
-            // Non-areal leaf kinds have no area — Boost returns 0.
-            PointArm(_) | LineString(_) | MultiPoint(_) | MultiLineString(_) => {}
+    let leaf = |node: &DynGeometry<S, Cs>| match node {
+        PolygonArm(pg) => area(pg),
+        MultiPolygon(mpg) => multi_polygon_area(mpg),
+        // Non-areal leaf kinds have no area — Boost returns 0.
+        PointArm(_)
+        | LineString(_)
+        | MultiPoint(_)
+        | MultiLineString(_)
+        | GeometryCollection(_) => <S::Measure as CoordinateScalar>::ZERO,
+    };
+    let GeometryCollection(members) = g else {
+        return leaf(g);
+    };
+    // A collection's area is the sum of its members' areas, added in the
+    // order of Boost's `visit_breadth_first` (`area.hpp:273-285`,
+    // `algorithms/detail/visit.hpp:193-241`): a collection's own members
+    // left to right, each nested collection queued and walked after them.
+    // A floating-point sum depends on that order. The queue, not
+    // recursion, also keeps an adversarially deep `GeometryCollection`
+    // chain off the native stack (an uncatchable process abort).
+    let mut total = <S::Measure as CoordinateScalar>::ZERO;
+    let mut queue = VecDeque::new();
+    let mut members = members.iter();
+    loop {
+        for member in members {
+            match member {
+                GeometryCollection(nested) => queue.push_back(nested),
+                _ => total = total + leaf(member),
+            }
+        }
+        match queue.pop_front() {
+            Some(nested) => members = nested.iter(),
+            None => return total,
         }
     }
-    total
 }

@@ -5,8 +5,14 @@
 //! `quarter_meridian.hpp`. Angles are radians and distances use the spheroid's
 //! radius unit.
 
+#[cfg(feature = "std")]
+use geometry_coords::CoordinateScalar;
 use geometry_cs::Spheroid;
 
+#[cfg(feature = "std")]
+use crate::normalise::{longitude_distance_signed, normalized_longitude};
+
+#[cfg(feature = "std")]
 use super::direct::DirectResult;
 
 /// Classification of a spheroidal segment relative to a meridian.
@@ -76,18 +82,58 @@ impl Meridian {
     #[cfg(feature = "std")]
     #[must_use]
     pub fn arc_length(&self, latitude: f64) -> f64 {
+        self.arc_length_to_order(latitude, 5)
+    }
+
+    /// Signed meridian arc from the equator to `latitude`, the series cut
+    /// at `order` (five and above give the full order-five expansion).
+    ///
+    /// Mirrors `meridian_inverse<CT, Order>::apply(lat, spheroid)`
+    /// (`formulas/meridian_inverse.hpp:116-178`) term by term, so each
+    /// order rounds as Boost's does.
+    #[cfg(feature = "std")]
+    pub(crate) fn arc_length_to_order(&self, latitude: f64, order: u32) -> f64 {
         let f = self.spheroid.flattening;
         let n = f / (2.0 - f);
-        let n2 = n * n;
-        let n3 = n2 * n;
-        let n4 = n2 * n2;
-        let n5 = n4 * n;
         let scale = self.spheroid.equatorial_radius / (1.0 + n);
-        let c0 = 1.0 + 0.25 * n2;
-        let c2 = -1.5 * n + 0.1875 * n3;
-        let c4 = 0.9375 * n2 - 0.234_375 * n4;
-        let c6 = -0.729_166_667 * n3 + 0.227_864_583 * n5;
+        let mut c0 = 1.0;
+        if order == 0 {
+            return scale * c0 * latitude;
+        }
+        let mut c2 = -1.5 * n;
+        if order == 1 {
+            return scale * (c0 * latitude + c2 * (2.0 * latitude).sin());
+        }
+        let n2 = n * n;
+        c0 += 0.25 * n2;
+        let mut c4 = 0.9375 * n2;
+        if order == 2 {
+            return scale
+                * (c0 * latitude + c2 * (2.0 * latitude).sin() + c4 * (4.0 * latitude).sin());
+        }
+        let n3 = n2 * n;
+        c2 += 0.1875 * n3;
+        let mut c6 = -0.729_166_667 * n3;
+        if order == 3 {
+            return scale
+                * (c0 * latitude
+                    + c2 * (2.0 * latitude).sin()
+                    + c4 * (4.0 * latitude).sin()
+                    + c6 * (6.0 * latitude).sin());
+        }
+        let n4 = n2 * n2;
+        c4 -= 0.234_375 * n4;
         let c8 = 0.615_234_375 * n4;
+        if order == 4 {
+            return scale
+                * (c0 * latitude
+                    + c2 * (2.0 * latitude).sin()
+                    + c4 * (4.0 * latitude).sin()
+                    + c6 * (6.0 * latitude).sin()
+                    + c8 * (8.0 * latitude).sin());
+        }
+        let n5 = n4 * n;
+        c6 += 0.227_864_583 * n5;
         let c10 = -0.541_406_25 * n5;
         scale
             * (c0 * latitude
@@ -122,6 +168,11 @@ impl Meridian {
     }
 
     /// Classify the endpoint pair as a meridian segment.
+    ///
+    /// Mirrors `meridian_inverse::meridian_not_crossing_pole` and
+    /// `meridian_crossing_pole` (`formulas/meridian_inverse.hpp:50-62`):
+    /// the longitude difference folded into `(−π, π]` must equal `0` or
+    /// `±π` within `math::equals`, unless the endpoints are opposite poles.
     #[cfg(feature = "std")]
     #[must_use]
     #[allow(
@@ -135,15 +186,18 @@ impl Meridian {
         longitude2: f64,
         latitude2: f64,
     ) -> MeridianSegmentKind {
-        let difference = normalize_longitude(longitude2 - longitude1);
-        if nearly_zero(difference)
-            || (nearly_equal(latitude2, core::f64::consts::FRAC_PI_2)
-                && nearly_equal(latitude1, -core::f64::consts::FRAC_PI_2))
-            || (nearly_equal(latitude1, core::f64::consts::FRAC_PI_2)
-                && nearly_equal(latitude2, -core::f64::consts::FRAC_PI_2))
+        let half_pi = core::f64::consts::FRAC_PI_2;
+        let difference = longitude_distance_signed(longitude1, longitude2);
+        let (south, north) = if latitude1 > latitude2 {
+            (latitude2, latitude1)
+        } else {
+            (latitude1, latitude2)
+        };
+        if difference.tolerant_eq(0.0)
+            || (north.tolerant_eq(half_pi) && south.tolerant_eq(-half_pi))
         {
             MeridianSegmentKind::NotCrossingPole
-        } else if nearly_equal(difference.abs(), core::f64::consts::PI) {
+        } else if difference.abs().tolerant_eq(core::f64::consts::PI) {
             MeridianSegmentKind::CrossingPole
         } else {
             MeridianSegmentKind::NonMeridian
@@ -151,33 +205,52 @@ impl Meridian {
     }
 
     /// Solve the inverse problem when the endpoints form a meridian.
+    ///
+    /// Uses the order-five arc of [`Meridian::arc_length`].
     #[cfg(feature = "std")]
     #[must_use]
     pub fn inverse(
         &self,
         longitude1: f64,
+        latitude1: f64,
+        longitude2: f64,
+        latitude2: f64,
+    ) -> MeridianInverseResult {
+        self.inverse_to_order(longitude1, latitude1, longitude2, latitude2, 5)
+    }
+
+    /// [`Meridian::inverse`] with the arc series cut at `order`.
+    ///
+    /// Mirrors `meridian_inverse<CT, Order>::apply`
+    /// (`formulas/meridian_inverse.hpp:72-112`). Boost's geographic distance
+    /// strategy runs it at the order its formula policy names
+    /// (`strategies/geographic/parameters.hpp:186-204`).
+    #[cfg(feature = "std")]
+    pub(crate) fn inverse_to_order(
+        &self,
+        longitude1: f64,
         mut latitude1: f64,
         longitude2: f64,
         mut latitude2: f64,
+        order: u32,
     ) -> MeridianInverseResult {
         let kind = self.classify_segment(longitude1, latitude1, longitude2, latitude2);
         if latitude1 > latitude2 {
             core::mem::swap(&mut latitude1, &mut latitude2);
         }
+        let arc = |latitude| self.arc_length_to_order(latitude, order);
         let distance = match kind {
             MeridianSegmentKind::NonMeridian => 0.0,
-            MeridianSegmentKind::NotCrossingPole => {
-                (self.arc_length(latitude2) - self.arc_length(latitude1)).abs()
-            }
+            MeridianSegmentKind::NotCrossingPole => (arc(latitude2) - arc(latitude1)).abs(),
             MeridianSegmentKind::CrossingPole => {
                 let latitude_sign = if latitude1 + latitude2 < 0.0 {
                     -1.0
                 } else {
                     1.0
                 };
-                (latitude_sign * 2.0 * self.arc_length(core::f64::consts::FRAC_PI_2)
-                    - self.arc_length(latitude1)
-                    - self.arc_length(latitude2))
+                (latitude_sign * 2.0 * arc(core::f64::consts::FRAC_PI_2)
+                    - arc(latitude1)
+                    - arc(latitude2))
                 .abs()
             }
         };
@@ -188,6 +261,12 @@ impl Meridian {
     }
 
     /// Solve the direct geodesic problem along a meridian.
+    ///
+    /// Mirrors `formulas/meridian_direct.hpp:54-118`, except that the
+    /// distance is used as given, where Boost truncates it to whole metres
+    /// (`int signed_distance`), and an arc carried past a pole comes back
+    /// down the opposite meridian, where Boost leaves the latitude beyond
+    /// a right angle on the starting meridian.
     #[cfg(feature = "std")]
     #[must_use]
     pub fn direct(
@@ -202,7 +281,7 @@ impl Meridian {
         let raw_latitude = self.latitude_at_arc(initial_arc + signed_distance);
         let (lon2, lat2, reflected) = normalize_coordinates(longitude1, raw_latitude);
         let final_north = north ^ reflected;
-        DirectResult::solved(
+        DirectResult::solved::<3>(
             longitude1,
             latitude1,
             if north { 0.0 } else { core::f64::consts::PI },
@@ -240,21 +319,5 @@ fn normalize_coordinates(longitude: f64, latitude: f64) -> (f64, f64, bool) {
     } else {
         false
     };
-    (normalize_longitude(lon), lat, reflected)
-}
-
-#[cfg(feature = "std")]
-fn normalize_longitude(longitude: f64) -> f64 {
-    let pi = core::f64::consts::PI;
-    (longitude + pi).rem_euclid(core::f64::consts::TAU) - pi
-}
-
-#[cfg(feature = "std")]
-fn nearly_zero(value: f64) -> bool {
-    value.abs() <= 1e-12
-}
-
-#[cfg(feature = "std")]
-fn nearly_equal(first: f64, second: f64) -> bool {
-    (first - second).abs() <= 1e-12
+    (normalized_longitude(lon), lat, reflected)
 }

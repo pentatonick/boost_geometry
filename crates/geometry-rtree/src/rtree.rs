@@ -1430,20 +1430,23 @@ mod tests {
         assert!(metrics.leaf_groups_pruned > 0);
 
         let tree = Rtree::<P>::new();
-        assert!(
+        assert_eq!(
             nearest_with_metrics(&tree, [0.0, 0.0], 0, false, 8, false, 8)
                 .0
-                .is_empty()
+                .len(),
+            0
         );
-        assert!(
+        assert_eq!(
             nearest_distance_ordered_groups_with_metrics(&tree, [0.0, 0.0], 0, 8)
                 .0
-                .is_empty()
+                .len(),
+            0
         );
-        assert!(
+        assert_eq!(
             nearest_depth_first_with_metrics(&tree, [0.0, 0.0], 0)
                 .0
-                .is_empty()
+                .len(),
+            0
         );
     }
 
@@ -1537,7 +1540,7 @@ mod tests {
         }
         assert_eq!(t.len(), 500);
         let hits = t.query(Predicate::Intersects(Bounds::new([0.0, 0.0], [3.0, 3.0])));
-        assert!(!hits.is_empty());
+        assert_ne!(hits.len(), 0);
     }
 
     fn uniform_points(n: usize) -> Vec<P> {

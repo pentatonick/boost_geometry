@@ -42,6 +42,12 @@ use geometry_trait::Geometry;
 /// [`geometry_strategy::CentroidStrategyForKind`] picker; for an
 /// explicit strategy (or a future spherical / geographic LA8 strategy)
 /// use [`centroid_with`].
+///
+/// # Panics
+///
+/// Panics on an empty linestring, ring, multi-point or multi-polygon, and
+/// on a polygon whose exterior ring is empty — Boost throws
+/// `centroid_exception` (`algorithms/centroid.hpp:134-157,320-328`).
 #[inline]
 #[must_use]
 pub fn centroid<G>(
@@ -62,6 +68,11 @@ where
 /// value (rather than by reference) matches the by-value call shape of
 /// [`crate::distance_with`]; concrete strategies are
 /// zero-sized configuration objects, so this monomorphises into nothing.
+///
+/// # Panics
+///
+/// The Cartesian strategies panic on the empty geometries [`centroid`]
+/// panics on.
 #[inline]
 #[must_use]
 #[allow(

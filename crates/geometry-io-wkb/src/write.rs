@@ -25,7 +25,7 @@ use geometry_model::{
     DynGeometry, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point, Polygon, Ring,
 };
 use geometry_trait::{
-    Geometry, Linestring as LinestringTrait, MultiLinestring as MultiLinestringTrait,
+    Closure, Geometry, Linestring as LinestringTrait, MultiLinestring as MultiLinestringTrait,
     MultiPoint as MultiPointTrait, MultiPolygon as MultiPolygonTrait, Point as PointTrait,
     Polygon as PolygonTrait, Ring as RingTrait,
 };
@@ -93,8 +93,10 @@ pub fn to_wkb<G: Geometry + WriteWkb>(g: &G, order: ByteOrder) -> Vec<u8> {
 /// This is the bring-your-own-type counterpart to [`to_wkb`]. It reads the
 /// polygon through the public geometry traits, including its interior rings,
 /// and writes a complete 2D Polygon record in the requested byte order.
-/// An empty exterior with no interiors is encoded as zero rings. Other
-/// ring structures are preserved without validation, as in [`to_wkb`].
+/// An empty exterior with no interiors is encoded as zero rings. An open
+/// ring ([`Closure::Open`]) is written closed, its first point repeated at
+/// the end. Other ring structures are preserved without validation, as in
+/// [`to_wkb`].
 #[must_use]
 pub fn to_wkb_polygon<Pg>(polygon: &Pg, order: ByteOrder) -> Vec<u8>
 where
@@ -208,11 +210,43 @@ where
     if polygon_has_no_rings(pg) {
         return Some(COUNT_LEN);
     }
-    let mut len = COUNT_LEN.checked_add(point_run_len(pg.exterior().points().len())?)?;
+    let mut len = COUNT_LEN.checked_add(point_run_len(ring_point_count(pg.exterior())?)?)?;
     for ring in pg.interiors() {
-        len = len.checked_add(point_run_len(ring.points().len())?)?;
+        len = len.checked_add(point_run_len(ring_point_count(ring)?)?)?;
     }
     Some(len)
+}
+
+/// The number of points [`write_ring_run`] writes for `ring`.
+fn ring_point_count<R>(ring: &R) -> Option<usize>
+where
+    R: RingTrait,
+    R::Point: PointTrait<Scalar = f64>,
+{
+    ring.points()
+        .len()
+        .checked_add(usize::from(closing_point(ring).is_some()))
+}
+
+/// The point an open ring ([`Closure::Open`]) is written closed with: its
+/// first, unless its last already is that one. A WKB polygon's rings are
+/// linear rings, which OGC Simple Features define as closed.
+///
+/// C++: Boost's WKT writer, `wkt_range`, force-closes a polygon's rings the
+/// same way.
+fn closing_point<R>(ring: &R) -> Option<&R::Point>
+where
+    R: RingTrait,
+    R::Point: PointTrait<Scalar = f64>,
+{
+    if ring.closure() == Closure::Closed {
+        return None;
+    }
+    let first = ring.points().next()?;
+    let last = ring.points().last()?;
+    let repeated = first.get::<0>().to_bits() == last.get::<0>().to_bits()
+        && first.get::<1>().to_bits() == last.get::<1>().to_bits();
+    (!repeated).then_some(first)
 }
 
 /// Append the one-byte endianness flag (OGC 06-103r4 §8.2.3).
@@ -255,18 +289,48 @@ fn write_point_body_be<P: PointTrait<Scalar = f64>>(p: &P, out: &mut Vec<u8>) {
 }
 
 /// Append a `uint32` count followed by that many point bodies. Shared by
-/// `LineString` and by each ring of a `Polygon`.
+/// `LineString` and a bare `Ring`; a polygon's rings go through
+/// [`write_ring_run`].
 fn write_point_run<'a, P, I>(points: I, order: ByteOrder, out: &mut Vec<u8>)
 where
     P: PointTrait<Scalar = f64> + 'a,
     I: ExactSizeIterator<Item = &'a P>,
 {
+    write_count(points.len(), order, out);
+    write_points(points, order, out);
+}
+
+/// Append a polygon ring's point run, closed as [`closing_point`] says.
+fn write_ring_run<R>(ring: &R, order: ByteOrder, out: &mut Vec<u8>)
+where
+    R: RingTrait,
+    R::Point: PointTrait<Scalar = f64>,
+{
+    let closing = closing_point(ring);
+    write_count(
+        ring.points().len() + usize::from(closing.is_some()),
+        order,
+        out,
+    );
+    write_points(ring.points().chain(closing), order, out);
+}
+
+/// Append a point count as its `uint32`.
+fn write_count(count: usize, order: ByteOrder, out: &mut Vec<u8>) {
     #[allow(
         clippy::cast_possible_truncation,
         reason = "WKB counts are 32-bit per OGC 06-103r4 §8.2; a WKB buffer never holds 2^32 points"
     )]
-    let n = points.len() as u32;
+    let n = count as u32;
     write_u32(n, order, out);
+}
+
+/// Append point bodies, without a count.
+fn write_points<'a, P, I>(points: I, order: ByteOrder, out: &mut Vec<u8>)
+where
+    P: PointTrait<Scalar = f64> + 'a,
+    I: Iterator<Item = &'a P>,
+{
     match order {
         ByteOrder::LittleEndian => {
             for p in points {
@@ -299,9 +363,9 @@ where
     )]
     let ring_count = (1 + pg.interiors().count()) as u32;
     write_u32(ring_count, order, out);
-    write_point_run(pg.exterior().points(), order, out);
+    write_ring_run(pg.exterior(), order, out);
     for ring in pg.interiors() {
-        write_point_run(ring.points(), order, out);
+        write_ring_run(ring, order, out);
     }
 }
 
@@ -564,7 +628,7 @@ mod tests {
         }
         let mut out = alloc::vec::Vec::new();
         deep.write_wkb(ByteOrder::LittleEndian, &mut out);
-        assert!(!out.is_empty());
+        assert_ne!(out.len(), 0);
         core::mem::forget(deep); // avoid the still-recursive value Drop
     }
 

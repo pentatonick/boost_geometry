@@ -25,7 +25,7 @@ use geometry_model::{
     DynGeometry, Linestring, MultiLinestring, MultiPoint, MultiPolygon, Point, Polygon, Ring,
 };
 use geometry_trait::{
-    Geometry, Linestring as LinestringTrait, MultiLinestring as MultiLinestringTrait,
+    Closure, Geometry, Linestring as LinestringTrait, MultiLinestring as MultiLinestringTrait,
     MultiPoint as MultiPointTrait, MultiPolygon as MultiPolygonTrait, Point as PointTrait,
     Polygon as PolygonTrait, Ring as RingTrait,
 };
@@ -47,6 +47,12 @@ const MAX_EXACT_INTEGER_BITS: u64 = 0x4340_0000_0000_0000;
 /// whitespace: `{"type":"Point","coordinates":[100,0]}`. Coordinates are
 /// emitted in `[longitude, latitude]` (i.e. `[x, y]`) order; integer-
 /// valued coordinates print without a trailing `.0`.
+///
+/// # Panics
+///
+/// In a debug build, on a non-finite coordinate, which has no JSON
+/// spelling; a release build writes it as Rust formats it (`NaN`, `inf`),
+/// which no JSON reader accepts.
 ///
 /// # Examples
 ///
@@ -70,7 +76,15 @@ pub fn to_geojson<G: Geometry + WriteGeoJson>(g: &G) -> String {
 ///
 /// This is the bring-your-own-type counterpart to [`to_geojson`]. It reads the
 /// polygon through the public geometry traits, including its interior rings,
-/// without first converting it to a `geometry_model` type.
+/// without first converting it to a `geometry_model` type. An open ring
+/// ([`Closure::Open`]) is written closed, its first position repeated at
+/// the end, as RFC 7946 §3.1.6 requires of a linear ring.
+///
+/// # Panics
+///
+/// In a debug build, on a non-finite coordinate, which has no JSON
+/// spelling; a release build writes it as Rust formats it (`NaN`, `inf`),
+/// which no JSON reader accepts.
 #[must_use]
 pub fn to_geojson_polygon<Pg>(polygon: &Pg) -> String
 where
@@ -139,7 +153,8 @@ where
 /// Format one `f64` the `GeoJSON` way: integer-valued numbers lose their
 /// trailing `.0`, everything else uses Rust's shortest round-tripping
 /// representation. Keeps `[100,0]` free of `.0` noise while still
-/// round-tripping fractional coordinates exactly.
+/// round-tripping fractional coordinates exactly; a negative zero is
+/// written `-0`, which JSON allows and the reader reads back signed.
 fn is_exact_integer(v: f64) -> bool {
     let magnitude = v.to_bits() & 0x7fff_ffff_ffff_ffff;
     if magnitude == 0 {
@@ -165,16 +180,19 @@ fn is_exact_integer(v: f64) -> bool {
 /// re-parse. The reader cannot produce one (an overflowing literal such
 /// as `1e400` is an invalid number), so reaching here non-finite means a
 /// caller built the geometry that way directly; the debug assertion
-/// surfaces that in tests rather than letting it reach a file. The guard
-/// sits here for the same reason as the sibling WKT writer's: the writers
-/// are generic over [`PointTrait`], so no invariant at the model's
-/// boundary can reach every input, and closing the hole outright would
-/// mean making [`to_geojson`] fallible.
+/// surfaces that in tests rather than letting it reach a file. The check
+/// sits in the writer because it is generic over [`PointTrait`], so no
+/// invariant at the model's boundary reaches every input; refusing the
+/// coordinate outright, as the WKT writer refuses an infinity with an
+/// error, would mean making [`to_geojson`] fallible.
 fn write_scalar<W: core::fmt::Write + ?Sized>(out: &mut W, v: f64) -> core::fmt::Result {
     debug_assert!(
         v.is_finite(),
         "GeoJSON cannot represent a non-finite coordinate: {v}"
     );
+    if v == 0.0 && v.is_sign_negative() {
+        return out.write_str("-0");
+    }
     if is_exact_integer(v) {
         #[allow(
             clippy::cast_possible_truncation,
@@ -219,19 +237,53 @@ where
 
 /// Emit a polygon's rings `[[outer],[hole],…]` (no `"type"` wrapper).
 /// Shared by `Polygon` and each member of `MultiPolygon`.
+///
+/// The empty polygon, with no exterior positions and no holes, has no
+/// rings: `[]`, as the reader reads it. `[[]]` would be a linear ring of
+/// no positions, which RFC 7946 §3.1.6 does not allow. An empty exterior
+/// stays when holes follow it, so no hole is lost.
 fn write_polygon_rings<Pg, W>(out: &mut W, pg: &Pg) -> core::fmt::Result
 where
     Pg: PolygonTrait,
     Pg::Point: PointTrait<Scalar = f64>,
     W: core::fmt::Write + ?Sized,
 {
+    if pg.exterior().points().len() == 0 && pg.interiors().len() == 0 {
+        return out.write_str("[]");
+    }
     out.write_char('[')?;
-    write_position_seq(out, pg.exterior().points())?;
+    write_position_seq(out, ring_positions(pg.exterior()))?;
     for ring in pg.interiors() {
         out.write_char(',')?;
-        write_position_seq(out, ring.points())?;
+        write_position_seq(out, ring_positions(ring))?;
     }
     out.write_char(']')
+}
+
+/// A ring's positions, closed: RFC 7946 §3.1.6 has a linear ring's first
+/// and last positions identical. An open ring ([`Closure::Open`]) repeats
+/// its first point at the end unless its last point already is that one.
+///
+/// C++: Boost's WKT writer, `wkt_range`, force-closes a polygon's rings the
+/// same way.
+#[allow(
+    clippy::float_cmp,
+    reason = "a ring repeats its first position only where the two are identical"
+)]
+fn ring_positions<R>(ring: &R) -> impl Iterator<Item = &R::Point>
+where
+    R: RingTrait,
+    R::Point: PointTrait<Scalar = f64>,
+{
+    let closing = match ring.closure() {
+        Closure::Open => ring.points().next().filter(|first| {
+            ring.points().last().is_some_and(|last| {
+                first.get::<0>() != last.get::<0>() || first.get::<1>() != last.get::<1>()
+            })
+        }),
+        Closure::Closed => None,
+    };
+    ring.points().chain(closing)
 }
 
 impl<Cs: CoordinateSystem> WriteGeoJson for Point<f64, 2, Cs> {
@@ -276,7 +328,10 @@ impl<P: PointTrait<Scalar = f64>> WriteGeoJson for Ring<P, true, true> {
 
     fn write_geojson(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
         // A bare ring serialises as a single-ring polygon — GeoJSON has
-        // no standalone ring type.
+        // no standalone ring type — and an empty one as the empty polygon.
+        if self.points().len() == 0 {
+            return out.write_str(r#"{"type":"Polygon","coordinates":[]}"#);
+        }
         out.write_str(r#"{"type":"Polygon","coordinates":["#)?;
         write_position_seq(out, self.points())?;
         out.write_str("]}")
@@ -524,7 +579,9 @@ mod tests {
         ];
 
         for value in values {
-            let expected = if value.is_finite()
+            let expected = if value == 0.0 && value.is_sign_negative() {
+                String::from("-0")
+            } else if value.is_finite()
                 && value.fract() == 0.0
                 && value.abs() < 9.007_199_254_740_992e15
             {

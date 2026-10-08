@@ -9,6 +9,10 @@
 
 use geometry_cs::Spheroid;
 
+#[cfg(feature = "std")]
+use crate::normalise::{longitude_distance_signed, normalized_longitude};
+
+#[cfg(feature = "std")]
 use super::{KarneyDirect, KarneyInverse};
 
 /// Longitude/latitude intersection of two infinite geodesics, in radians.
@@ -125,7 +129,7 @@ impl Gnomonic {
             center = next;
         }
         Some(GeodesicIntersection {
-            longitude: normalize_longitude(center[0]),
+            longitude: normalized_longitude(center[0]),
             latitude: center[1],
         })
     }
@@ -194,7 +198,7 @@ impl Default for Sjoberg {
 #[cfg(feature = "std")]
 fn midpoint(first: [f64; 2], second: [f64; 2]) -> [f64; 2] {
     [
-        first[0] + normalize_longitude(second[0] - first[0]) / 2.0,
+        first[0] + longitude_distance_signed(first[0], second[0]) / 2.0,
         f64::midpoint(first[1], second[1]),
     ]
 }
@@ -216,16 +220,11 @@ fn intersect_lines(
     }
 }
 
+#[cfg(feature = "std")]
 fn cross3(first: [f64; 3], second: [f64; 3]) -> [f64; 3] {
     [
         first[1] * second[2] - first[2] * second[1],
         first[2] * second[0] - first[0] * second[2],
         first[0] * second[1] - first[1] * second[0],
     ]
-}
-
-#[cfg(feature = "std")]
-fn normalize_longitude(longitude: f64) -> f64 {
-    let pi = core::f64::consts::PI;
-    (longitude + pi).rem_euclid(core::f64::consts::TAU) - pi
 }

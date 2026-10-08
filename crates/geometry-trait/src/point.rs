@@ -200,9 +200,9 @@ pub trait PointMut: Point {
 /// Const-generic recursion via `I + 1` requires the unstable
 /// `generic_const_exprs` feature. To stay on stable, the
 /// recursive descent is unrolled by `Recurse` for the dimensions
-/// the kernel needs (1‥=`MAX_DIM`). `Point` impls with
-/// `DIM > MAX_DIM` are a compile-time error at the call site —
-/// raise `MAX_DIM` and add the matching `impl_recurse!` row.
+/// the kernel needs (1‥=`MAX_DIM`). A `Point` impl with
+/// `DIM > MAX_DIM` panics at the call site (see Panics) — raise
+/// `MAX_DIM` and add the matching `impl_recurse!` row.
 ///
 /// # Examples
 ///
@@ -265,11 +265,11 @@ where
 /// The const-generic [`Point::get`] needs `D` at compile time, so a
 /// kernel walking every dimension from inside a [`fold_dims`] closure
 /// (which receives the index as a `usize`) dispatches through this
-/// match instead of repeating it. The arms track [`MAX_DIM`].
+/// match instead of repeating it. The arms track `MAX_DIM`.
 ///
 /// # Panics
 ///
-/// Panics if `dimension` is at or past [`MAX_DIM`]; a `dimension` below
+/// Panics if `dimension` is at or past `MAX_DIM`; a `dimension` below
 /// `MAX_DIM` but at or past `P::DIM` is the point type's own
 /// out-of-range behaviour.
 #[inline]
@@ -289,7 +289,7 @@ pub fn ordinate<P: Point>(point: &P, dimension: usize) -> P::Scalar {
 ///
 /// # Panics
 ///
-/// Panics if `dimension` is at or past [`MAX_DIM`].
+/// Panics if `dimension` is at or past `MAX_DIM`.
 #[inline]
 pub fn set_ordinate<P: PointMut>(point: &mut P, dimension: usize, value: P::Scalar) {
     match dimension {

@@ -458,8 +458,9 @@ Twenty-two crates form a dependency spine from foundational tag/coords
 crates up through traits, models, strategies, and algorithms to the
 `boost_geometry` facade — plus adapters (nalgebra, geo-types), IO
 (WKT, EWKT, WKB, EWKB, GeoJSON, SVG), an R-tree, overlay operations, and
-projections. `boost_geometry` re-exports everything; depend on it alone
-unless you need a slimmer build.
+projections. `boost_geometry` re-exports the kernel, the algorithms, the
+overlay operations, and the R-tree; the I/O, projection, and adapter crates
+are separate dependencies.
 
 See [`docs/01-architecture.md`](https://github.com/pentatonick/boost_geometry/blob/main/docs/01-architecture.md)
 for the full map, and the per-crate `no_std` status just below.

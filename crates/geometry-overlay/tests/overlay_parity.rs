@@ -245,8 +245,11 @@ fn sym_difference_of_offset_squares_is_two_valid_polygons() {
 
 /// A diamond inscribed in a square, touching all four sides at their
 /// midpoints. `square − diamond` is the four corner triangles, and each pair
-/// of neighbours meets at a midpoint. C++ Boost 1.83: four polygons of area
-/// 12.5 each.
+/// of neighbours meets at a midpoint. C++ Boost 1.83, on the two rings
+/// corrected to its clockwise order: four polygons of area 12.5 each. (Both
+/// are given counter-clockwise here; Boost reads its declared order and
+/// returns nothing for them as they stand, where this overlay classifies
+/// faces by containment and does not depend on the order.)
 #[test]
 fn difference_with_an_inscribed_diamond_is_four_triangles() {
     let sq = square(0.0, 0.0, 10.0);
@@ -1309,4 +1312,425 @@ fn every_boolean_result_over_the_fixtures_is_valid() {
         );
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+// ---- An operand whose hole touches its own exterior -----------------------
+//
+// OGC-valid: a hole may touch the exterior at one point. Such an operand used
+// to fail every operation with `Unsupported` — even against a polygon far
+// away — or come back as an invalid polygon, because the arrangement only
+// cut edges where the two operands meet. Boost passes the touch point in a
+// traced ring only where its self turn survives enrichment: kept by a
+// difference on its first operand, dropped by a union and on a difference's
+// second operand.
+//
+// Reference values from Boost (`aed7bc3`) on the same input.
+
+fn rings(mp: &MultiPolygon<Polygon<P>>) -> Vec<Vec<Vec<(f64, f64)>>> {
+    mp.polygons()
+        .map(|polygon| {
+            core::iter::once(polygon.exterior())
+                .chain(polygon.interiors())
+                .map(|ring| {
+                    ring.points()
+                        .map(|p| (p.get::<0>(), p.get::<1>()))
+                        .collect()
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// A clockwise ring from its stored points, closing point included.
+fn ring_of(points: &[(f64, f64)]) -> geometry_model::Ring<P> {
+    geometry_model::Ring::from_vec(points.iter().map(|&(x, y)| P::new(x, y)).collect())
+}
+
+/// The square `(0, 0)`–`(10, 10)` with a triangular hole touching its left
+/// side at `(0, 5)`.
+fn square_with_touching_hole() -> Polygon<P> {
+    Polygon {
+        outer: ring_of(&[
+            (0.0, 0.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 0.0),
+            (0.0, 0.0),
+        ]),
+        inners: vec![ring_of(&[(0.0, 5.0), (3.0, 4.0), (3.0, 6.0), (0.0, 5.0)])],
+    }
+}
+
+#[test]
+fn a_hole_touching_its_exterior_does_not_stop_the_overlay() {
+    let a = square_with_touching_hole();
+    let far: Polygon<P> = Polygon {
+        outer: ring_of(&[
+            (20.0, 20.0),
+            (20.0, 21.0),
+            (21.0, 21.0),
+            (21.0, 20.0),
+            (20.0, 20.0),
+        ]),
+        inners: vec![],
+    };
+    let a_rings = vec![
+        vec![
+            (0.0, 0.0),
+            (0.0, 10.0),
+            (10.0, 10.0),
+            (10.0, 0.0),
+            (0.0, 0.0),
+        ],
+        vec![(0.0, 5.0), (3.0, 4.0), (3.0, 6.0), (0.0, 5.0)],
+    ];
+    let far_rings = vec![vec![
+        (20.0, 20.0),
+        (20.0, 21.0),
+        (21.0, 21.0),
+        (21.0, 20.0),
+        (20.0, 20.0),
+    ]];
+
+    assert_eq!(intersection(&a, &far).unwrap().0.len(), 0);
+    assert_eq!(rings(&difference(&a, &far).unwrap()), vec![a_rings.clone()]);
+    assert_eq!(
+        rings(&difference(&far, &a).unwrap()),
+        vec![far_rings.clone()]
+    );
+    assert_eq!(
+        rings(&union_poly(&a, &far).unwrap()),
+        vec![a_rings.clone(), far_rings.clone()]
+    );
+    assert_eq!(
+        rings(&sym_difference(&a, &far).unwrap()),
+        vec![a_rings, far_rings]
+    );
+    let matrix = geometry_overlay::relate::relate(&a, &far).unwrap();
+    assert_eq!(matrix.matches("FF2FF1212"), Ok(true));
+}
+
+#[test]
+fn a_touch_point_reaches_a_traced_ring_as_boost_keeps_its_self_turn() {
+    let a = square_with_touching_hole();
+    let b: Polygon<P> = Polygon {
+        outer: ring_of(&[
+            (5.0, -1.0),
+            (5.0, 2.0),
+            (12.0, 2.0),
+            (12.0, -1.0),
+            (5.0, -1.0),
+        ]),
+        inners: vec![],
+    };
+    let hole = vec![(0.0, 5.0), (3.0, 4.0), (3.0, 6.0), (0.0, 5.0)];
+    let b_minus_a = vec![
+        (5.0, 0.0),
+        (10.0, 0.0),
+        (10.0, 2.0),
+        (12.0, 2.0),
+        (12.0, -1.0),
+        (5.0, -1.0),
+        (5.0, 0.0),
+    ];
+
+    assert_eq!(
+        rings(&intersection(&a, &b).unwrap()),
+        vec![vec![vec![
+            (10.0, 2.0),
+            (10.0, 0.0),
+            (5.0, 0.0),
+            (5.0, 2.0),
+            (10.0, 2.0)
+        ]]]
+    );
+    // A union drops the self turn: the exterior runs straight past (0, 5).
+    assert_eq!(
+        rings(&union_poly(&a, &b).unwrap()),
+        vec![vec![
+            vec![
+                (10.0, 2.0),
+                (12.0, 2.0),
+                (12.0, -1.0),
+                (5.0, -1.0),
+                (5.0, 0.0),
+                (0.0, 0.0),
+                (0.0, 10.0),
+                (10.0, 10.0),
+                (10.0, 2.0),
+            ],
+            hole.clone(),
+        ]]
+    );
+    // A difference keeps it on its first operand.
+    assert_eq!(
+        rings(&difference(&a, &b).unwrap()),
+        vec![vec![
+            vec![
+                (10.0, 2.0),
+                (5.0, 2.0),
+                (5.0, 0.0),
+                (0.0, 0.0),
+                (0.0, 5.0),
+                (0.0, 10.0),
+                (10.0, 10.0),
+                (10.0, 2.0),
+            ],
+            hole.clone(),
+        ]]
+    );
+    assert_eq!(
+        rings(&difference(&b, &a).unwrap()),
+        vec![vec![b_minus_a.clone()]]
+    );
+    // Boost's symmetric difference is the union of the two differences, which
+    // starts its rings at their first turn and keeps (0, 5) from `a - b`.
+    assert_eq!(
+        rings(&sym_difference(&a, &b).unwrap()),
+        vec![
+            vec![
+                vec![
+                    (5.0, 0.0),
+                    (0.0, 0.0),
+                    (0.0, 5.0),
+                    (0.0, 10.0),
+                    (10.0, 10.0),
+                    (10.0, 2.0),
+                    (5.0, 2.0),
+                    (5.0, 0.0),
+                ],
+                hole,
+            ],
+            vec![b_minus_a],
+        ]
+    );
+}
+
+/// A difference walks its second operand backwards, which turns that
+/// operand's own touches into turns the difference discards.
+#[test]
+fn a_difference_drops_its_second_operands_touch_point() {
+    let a: Polygon<P> = Polygon {
+        outer: ring_of(&[
+            (6.0, 11.0),
+            (12.0, 11.0),
+            (12.0, 5.0),
+            (6.0, 5.0),
+            (6.0, 11.0),
+        ]),
+        inners: vec![ring_of(&[(6.0, 7.0), (10.0, 6.0), (10.0, 8.0), (6.0, 7.0)])],
+    };
+    let b: Polygon<P> = Polygon {
+        outer: ring_of(&[
+            (1.0, 10.0),
+            (7.0, 10.0),
+            (7.0, 3.0),
+            (1.0, 3.0),
+            (1.0, 10.0),
+        ]),
+        inners: vec![],
+    };
+    assert_eq!(
+        rings(&difference(&b, &a).unwrap()),
+        vec![
+            vec![vec![
+                (6.0, 10.0),
+                (6.0, 5.0),
+                (7.0, 5.0),
+                (7.0, 3.0),
+                (1.0, 3.0),
+                (1.0, 10.0),
+                (6.0, 10.0),
+            ]],
+            vec![vec![(7.0, 7.25), (7.0, 6.75), (6.0, 7.0), (7.0, 7.25)]],
+        ]
+    );
+}
+
+// ---- Operands closer than the snap distance -------------------------------
+//
+// Each area is the exact union, intersection or difference of the same
+// operands, computed over rational coordinates.
+
+fn assert_area(result: &MultiPolygon<Polygon<P>>, expected: f64, tolerance: f64) {
+    assert!(
+        (area(result) - expected).abs() <= tolerance,
+        "area {}, expected {expected}",
+        area(result)
+    );
+    assert_eq!(is_valid(result), Ok(()));
+}
+
+/// A corner of the second operand lies on the first's side to within
+/// `4e-17`; it is a node of that side, and the union is exactly
+/// `21.539_991_243_181_32`.
+#[test]
+fn a_corner_on_the_other_operands_side_splits_it() {
+    let first: Polygon<P> = polygon![[
+        (-2.834_867_136_566_298_3, -0.240_026_311_507_251_95),
+        (5.350_046_161_024_702, 6.759_973_688_492_748),
+        (6.0, 6.0),
+        (6.649_953_838_975_298, 5.240_026_311_507_252),
+        (-1.534_959_458_615_702, -1.759_973_688_492_748_2),
+        (-2.834_867_136_566_298_3, -0.240_026_311_507_251_95)
+    ]];
+    let second: Polygon<P> = polygon![[
+        (6.0, 6.0),
+        (-2.184_913_297_591, -1.0),
+        (-1.534_959_458_615_702, -1.759_973_688_492_748_2),
+        (6.649_953_838_975_298, 5.240_026_311_507_252),
+        (6.0, 6.0)
+    ]];
+    assert_area(
+        &union_poly(&first, &second).unwrap(),
+        21.539_991_243_181_32,
+        1e-12,
+    );
+}
+
+/// Two corners `1.1e-7` apart, one of them `8e-10` off the other operand's
+/// side: the union is exactly `5.641_005_586_168_003`.
+#[test]
+fn corners_a_hair_apart_meet_as_one_node() {
+    let first: Polygon<P> = polygon![[
+        (3.871_827_111_269, -6.56),
+        (5.0, -6.552_027),
+        (4.982_332_493_137_211_5, -4.052_089_428_939_224),
+        (3.854_159_604_406_211_4, -4.060_062_428_939_224),
+        (3.871_827_111_269, -6.56)
+    ]];
+    let second: Polygon<P> = polygon![[
+        (5.0, -6.552_027),
+        (3.871_827, -6.56),
+        (3.889_494_505_120_371_8, -9.059_937_571_073_089),
+        (5.017_667_505_120_372, -9.051_964_571_073_09),
+        (5.0, -6.552_027)
+    ]];
+    assert_area(
+        &union_poly(&first, &second).unwrap(),
+        5.641_005_586_168_003,
+        1e-12,
+    );
+}
+
+/// A corner `1e-16` off the other operand's side, close to that side's end:
+/// the union is exactly `6.961_258_485_236_265`.
+#[test]
+fn a_corner_near_the_end_of_the_other_operands_side_splits_it() {
+    let first: Polygon<P> = polygon![[
+        (3.289_430_186_072_662, 8.450_358_499_090_111),
+        (-9.0, 5.99),
+        (-9.019_630_581_561_66, 6.088_054_272_051_508),
+        (3.367_908_418_438_340_3, 8.568_054_272_051_508),
+        (3.469_288_180_649_861_4, 8.588_350_620_687_39),
+        (3.486_193_244_172_151_5, 8.486_350_538_426_045),
+        (5.718_654_244_172_152, -4.983_649_461_573_957),
+        (5.62, -5.0),
+        (5.521_345_755_827_848_5, -5.016_350_538_426_043),
+        (3.289_430_186_072_662, 8.450_358_499_090_111)
+    ]];
+    let second: Polygon<P> = polygon![[
+        (8.698_996_602_308_519, -8.908_134_141_947_654),
+        (4.905_496_834_748_098, 2.055_808_113_869_982),
+        (5.094_503_165_251_902, 2.121_203_886_130_018),
+        (9.094_503_165_251_902, -9.439_563_666_380_982),
+        (9.0, -9.472_261_552_511),
+        (8.905_496_834_748_098, -9.504_959_438_641_018),
+        (8.804_835_460_789_615, -9.214_028_752_178_416),
+        (5.62, -5.0),
+        (3.387_539, 8.47),
+        (3.486_193_244_172_151_5, 8.486_350_538_426_045),
+        (5.714_627_504_235_232, -4.959_353_320_700_586),
+        (8.698_996_602_308_519, -8.908_134_141_947_654)
+    ]];
+    assert_area(
+        &union_poly(&first, &second).unwrap(),
+        6.961_258_485_236_265,
+        1e-12,
+    );
+}
+
+/// Near copies, every corner moved by about `1.3e-11`, meet in slivers whose
+/// sides no sample tells apart; the coarser snap folds them away. Exactly,
+/// the intersection is `0.038_567_711_844_505_81`, the union
+/// `0.038_567_711_855_494_756`, and the differences slivers of
+/// `7.582_710_056_581_652e-12` and `3.406_235_830_787_749_5e-12`.
+#[test]
+fn near_copies_of_a_triangle_overlay_at_the_coarser_snap() {
+    let first: Polygon<P> = polygon![[
+        (0.456_218_146_513_262_65, 0.732_058_269_216_545_6),
+        (-0.934_732_979_560_381_7, 0.662_937_870_479_171_6),
+        (-0.837_845_952_606_957_6, 0.723_207_632_707_494_4),
+        (0.456_218_146_513_262_65, 0.732_058_269_216_545_6)
+    ]];
+    let second: Polygon<P> = polygon![[
+        (0.456_218_146_519_395_4, 0.732_058_269_223_536_7),
+        (-0.934_732_979_556_378_4, 0.662_937_870_474_206_8),
+        (-0.837_845_952_597_424_6, 0.723_207_632_697_539_7),
+        (0.456_218_146_519_395_4, 0.732_058_269_223_536_7)
+    ]];
+    assert_area(
+        &intersection(&first, &second).unwrap(),
+        0.038_567_711_844_505_81,
+        1e-9,
+    );
+    assert_area(
+        &union_poly(&first, &second).unwrap(),
+        0.038_567_711_855_494_756,
+        1e-9,
+    );
+    assert_area(
+        &difference(&first, &second).unwrap(),
+        7.582_710_056_581_652e-12,
+        1e-9,
+    );
+    assert_area(
+        &difference(&second, &first).unwrap(),
+        3.406_235_830_787_749_5e-12,
+        1e-9,
+    );
+}
+
+/// The same for near copies of a non-convex pentagon. Exactly, the
+/// intersection is `0.539_421_122_374_855_4`, the union
+/// `0.539_421_122_394_412_5`, and the differences slivers of
+/// `6.765_446_330_153_769e-12` and `1.279_165_614_888_985e-11`.
+#[test]
+fn near_copies_of_a_pentagon_overlay_at_the_coarser_snap() {
+    let first: Polygon<P> = polygon![[
+        (1.438_648_239_019_548, 0.278_700_427_972_134_23),
+        (1.297_884_040_206_567_2, -0.182_558_336_075_767),
+        (0.211_277_622_182_558_4, 0.124_249_129_601_213_48),
+        (0.351_637_726_863_143_3, 0.574_242_620_638_961_5),
+        (0.022_656_587_314_283_994, 0.667_200_160_810_969_4),
+        (1.438_648_239_019_548, 0.278_700_427_972_134_23)
+    ]];
+    let second: Polygon<P> = polygon![[
+        (1.438_648_239_027_125_4, 0.278_700_427_980_983_54),
+        (1.297_884_040_212_346_6, -0.182_558_336_068_275_54),
+        (0.211_277_622_175_015_7, 0.124_249_129_592_335_13),
+        (0.351_637_726_860_659_8, 0.574_242_620_637_164_6),
+        (0.022_656_587_306_078_772, 0.667_200_160_801_088_2),
+        (1.438_648_239_027_125_4, 0.278_700_427_980_983_54)
+    ]];
+    assert_area(
+        &intersection(&first, &second).unwrap(),
+        0.539_421_122_374_855_4,
+        1e-9,
+    );
+    assert_area(
+        &union_poly(&first, &second).unwrap(),
+        0.539_421_122_394_412_5,
+        1e-9,
+    );
+    assert_area(
+        &difference(&first, &second).unwrap(),
+        6.765_446_330_153_769e-12,
+        1e-9,
+    );
+    assert_area(
+        &difference(&second, &first).unwrap(),
+        1.279_165_614_888_985e-11,
+        1e-9,
+    );
 }

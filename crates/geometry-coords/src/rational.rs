@@ -25,6 +25,14 @@ pub trait RationalInteger: Copy + Eq + Ord + fmt::Debug {
     #[doc(hidden)]
     const ONE: Self;
 
+    /// Largest storable value, for the bounds of an inverse box.
+    #[doc(hidden)]
+    const MAX: Self;
+
+    /// Smallest storable value, for the bounds of an inverse box.
+    #[doc(hidden)]
+    const MIN: Self;
+
     /// Convert into the wider intermediate used for checked arithmetic.
     #[doc(hidden)]
     fn to_i128(self) -> i128;
@@ -40,6 +48,8 @@ macro_rules! impl_rational_integer {
             impl RationalInteger for $integer {
                 const ZERO: Self = 0;
                 const ONE: Self = 1;
+                const MAX: Self = <$integer>::MAX;
+                const MIN: Self = <$integer>::MIN;
 
                 #[inline]
                 fn to_i128(self) -> i128 {
@@ -448,6 +458,20 @@ impl<I: RationalInteger> CoordinateScalar for Rational<I> {
         denominator: I::ONE,
     };
 
+    /// Exact: Boost promotes only an integral type to a floating one, and
+    /// a rational measure — an area, a centroid — stays a rational.
+    type Measure = Self;
+
+    #[inline]
+    fn to_measure(self) -> Self {
+        self
+    }
+
+    #[inline]
+    fn from_measure(measure: Self) -> Self {
+        measure
+    }
+
     #[inline]
     fn sqrt(self) -> Self {
         unreachable!("exact rational square root is not closed over rational coordinates")
@@ -467,5 +491,18 @@ impl<I: RationalInteger> CoordinateScalar for Rational<I> {
     #[inline]
     fn tolerant_eq(self, other: Self) -> bool {
         self == other
+    }
+
+    /// The integer's highest value over one, as `util/rational.hpp:141-151`
+    /// specializes `util::bounds` for `boost::rational`.
+    #[inline]
+    fn highest() -> Self {
+        Self::from_integer(I::MAX)
+    }
+
+    /// The integer's lowest value over one (`util/rational.hpp:141-151`).
+    #[inline]
+    fn lowest() -> Self {
+        Self::from_integer(I::MIN)
     }
 }

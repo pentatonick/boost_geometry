@@ -3,6 +3,8 @@
 // boost/geometry/index/test/rtree/rtree_insert_remove.cpp
 // boost/geometry/index/detail/predicates.hpp
 
+use boost_geometry::cs::Cartesian;
+use boost_geometry::model::Point2D;
 use boost_geometry::rtree::{
     Bounds, Indexable, Linear, Predicate, Quadratic, QueryPredicate, RStarSplit, Rtree,
     SplitParameters, not, satisfies,
@@ -75,14 +77,14 @@ fn boost_box_predicates_and_combinators_use_public_facade() {
     assert_eq!(sorted_ids(tree.query(Predicate::Overlaps(query))), [1]);
 
     let boundary_point = Bounds::point([0.0, 5.0]);
-    assert!(tree.query(Predicate::Contains(boundary_point)).is_empty());
+    assert_eq!(tree.query(Predicate::Contains(boundary_point)).len(), 0);
     assert_eq!(
         sorted_ids(tree.query(Predicate::Covers(boundary_point))),
         [2, 4, 5]
     );
 
     let even_intersections =
-        Predicate::Intersects(query).and(satisfies(|entry: &Entry| entry.id.is_multiple_of(2)));
+        Predicate::Intersects(query).and(satisfies(|entry: &Entry| entry.id % 2 == 0));
     assert_eq!(query_ids(&tree, even_intersections), [0, 2, 4]);
     assert_eq!(query_ids(&tree, not(Predicate::Intersects(query))), [3]);
 }
@@ -129,7 +131,7 @@ fn every_predicate_prunes_a_deep_tree_without_diverging_from_an_independent_scan
         .map(|id| {
             let x = f64::from((id * 37) % 101) - 20.0;
             let y = f64::from((id * 53) % 89) - 15.0;
-            if id.is_multiple_of(11) {
+            if id % 11 == 0 {
                 Entry::point(id, [x, y])
             } else {
                 Entry::new(
@@ -339,8 +341,8 @@ fn within_and_contains_reject_boxes_degenerate_in_one_axis_only() {
 
     let horizontal_query = Bounds::new([3.0, 5.0], [7.0, 5.0]);
     let vertical_query = Bounds::new([5.0, 3.0], [5.0, 7.0]);
-    assert!(tree.query(Predicate::Contains(horizontal_query)).is_empty());
-    assert!(tree.query(Predicate::Contains(vertical_query)).is_empty());
+    assert_eq!(tree.query(Predicate::Contains(horizontal_query)).len(), 0);
+    assert_eq!(tree.query(Predicate::Contains(vertical_query)).len(), 0);
     assert_eq!(
         sorted_ids(tree.query(Predicate::Covers(horizontal_query))),
         [0, 2]
@@ -349,6 +351,29 @@ fn within_and_contains_reject_boxes_degenerate_in_one_axis_only() {
         sorted_ids(tree.query(Predicate::Covers(vertical_query))),
         [1, 2]
     );
+}
+
+/// Boost indexes a point as itself and asks `within(point, box)` of it,
+/// which holds only strictly inside the box: of the integer grid on
+/// `(0 0, 4 4)` only the centre is within `(1 1, 3 3)`, and no point is
+/// within a flat or degenerate window. Boost (`aed7bc3`): within `(2 2)`,
+/// covered by 9, not within 24, flat 0, degenerate 0.
+#[test]
+fn a_point_is_within_a_window_only_strictly_inside_it() {
+    let tree: Rtree<Point2D<f64, Cartesian>> = (0..=4)
+        .flat_map(|x| (0..=4).map(move |y| Point2D::new(f64::from(x), f64::from(y))))
+        .collect();
+    let window = Bounds::new([1.0, 1.0], [3.0, 3.0]);
+    assert_eq!(
+        tree.query(Predicate::Within(window)),
+        [&Point2D::new(2.0, 2.0)]
+    );
+    assert_eq!(tree.query(Predicate::CoveredBy(window)).len(), 9);
+    assert_eq!(tree.query_with(not(Predicate::Within(window))).len(), 24);
+    let flat = Bounds::new([1.0, 2.0], [3.0, 2.0]);
+    assert_eq!(tree.query(Predicate::Within(flat)).len(), 0);
+    let degenerate = Bounds::point([2.0, 2.0]);
+    assert_eq!(tree.query(Predicate::Within(degenerate)).len(), 0);
 }
 
 /// `Values` is an `ExactSizeIterator`: its hint is exact before and after

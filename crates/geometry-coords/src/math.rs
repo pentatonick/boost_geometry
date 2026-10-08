@@ -77,6 +77,16 @@ pub fn atan2<T: Float>(y: T, x: T) -> T {
     y.atan2(x)
 }
 
+/// Arcsine of a floating-point coordinate, in radians.
+pub fn asin<T: Float>(value: T) -> T {
+    value.asin()
+}
+
+/// Arccosine of a floating-point coordinate, in radians.
+pub fn acos<T: Float>(value: T) -> T {
+    value.acos()
+}
+
 /// Length of the hypotenuse formed by `x` and `y`.
 pub fn hypot<T: Float>(x: T, y: T) -> T {
     x.hypot(y)
@@ -150,6 +160,12 @@ pub trait Float: private::Sealed + Copy {
     /// `value.atan2(other)` dispatched onto `std` or `libm`.
     #[must_use]
     fn atan2(self, other: Self) -> Self;
+    /// `value.asin()` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn asin(self) -> Self;
+    /// `value.acos()` dispatched onto `std` or `libm`.
+    #[must_use]
+    fn acos(self) -> Self;
     /// `value.hypot(other)` dispatched onto `std` or `libm`.
     #[must_use]
     fn hypot(self, other: Self) -> Self;
@@ -235,6 +251,28 @@ impl Float for f32 {
     #[inline]
     fn atan2(self, other: Self) -> Self {
         libm::atan2f(self, other)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn asin(self) -> Self {
+        f32::asin(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn asin(self) -> Self {
+        libm::asinf(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn acos(self) -> Self {
+        f32::acos(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn acos(self) -> Self {
+        libm::acosf(self)
     }
 
     #[cfg(feature = "std")]
@@ -374,6 +412,28 @@ impl Float for f64 {
     #[inline]
     fn atan2(self, other: Self) -> Self {
         libm::atan2(self, other)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn asin(self) -> Self {
+        f64::asin(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn asin(self) -> Self {
+        libm::asin(self)
+    }
+
+    #[cfg(feature = "std")]
+    #[inline]
+    fn acos(self) -> Self {
+        f64::acos(self)
+    }
+    #[cfg(all(not(feature = "std"), feature = "libm"))]
+    #[inline]
+    fn acos(self) -> Self {
+        libm::acos(self)
     }
 
     #[cfg(feature = "std")]

@@ -5,12 +5,20 @@
 //! implementation is brute-force `O(n²)`; a sweepline-based variant
 //! lands once `phase_03`'s overlay infrastructure is in place.
 //!
-//! A linestring is *simple* iff no two non-adjacent segments intersect,
-//! adjacent segments touch only at their shared vertex (no zero-length
-//! edge, no collinear doubling-back), and it has no repeated
-//! non-consecutive vertex. A closed linestring / ring is allowed to
-//! share exactly its first and last vertex — that is the ring closure,
-//! not a self-intersection.
+//! A linestring is *simple* iff it is not empty, no two non-adjacent
+//! segments intersect, adjacent segments touch only at their shared vertex
+//! (no zero-length edge, no collinear doubling-back), and it has no
+//! repeated non-consecutive vertex. A closed linestring / ring is allowed
+//! to share exactly its first and last vertex — that is the ring closure,
+//! not a self-intersection — judged as Boost judges it: its first and last
+//! segment must meet only at the start of the first.
+//!
+//! Boost's self-turn walk records no turn for two collinear segments
+//! running opposite ways that each leave through the other's start
+//! (`collinear_opposite` in `algorithms/detail/overlay/get_turn_info.hpp`),
+//! and so misses that overlap when no spike or neighbouring segment gives
+//! it away — which happens only where Boost's tolerance reads segments that
+//! are not quite collinear as collinear. This port reports the overlap.
 //!
 //! An areal geometry (polygon) is *simple* iff every ring is non-empty
 //! and free of consecutive duplicate vertices — nothing more. This
@@ -20,10 +28,11 @@
 //! validity concerns — see `geometry_overlay::validity::is_valid_polygon`.
 
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 
 use geometry_coords::CoordinateScalar;
 use geometry_model::{Linestring, Polygon, Ring, Segment};
-use geometry_strategy::{CartesianIntersects, IntersectsStrategy};
+use geometry_strategy::{CartesianIntersects, IntersectsStrategy, SegmentMeeting, segment_meeting};
 use geometry_trait::{Linestring as LinestringTrait, Point, Polygon as PolygonTrait};
 
 /// `true` iff `g` satisfies the OGC "is simple" predicate.
@@ -116,6 +125,11 @@ where
     P::Scalar: CoordinateScalar,
     CartesianIntersects: IntersectsStrategy<Segment<P>, Segment<P>>,
 {
+    // Boost: `! boost::empty(linestring) && …`
+    // (`algorithms/detail/is_simple/linear.hpp:227-238`).
+    if pts.is_empty() {
+        return false;
+    }
     if pts.len() < 2 {
         return true;
     }
@@ -123,6 +137,11 @@ where
     // Is this a closed loop (first vertex coincides with the last)? Then
     // the first and last segments legitimately share that vertex.
     let closed = points_equal(&pts[0], &pts[pts.len() - 1]);
+    // `has_spikes` also looks at the closing vertex of a closed linestring
+    // (`apply_at_closure`), between the last segment and the first.
+    if closed && pts.len() > 2 && is_spike(&pts[pts.len() - 2], &pts[0], &pts[1]) {
+        return false;
+    }
 
     let segs: Vec<Segment<P>> = pts.windows(2).map(|w| Segment::new(w[0], w[1])).collect();
 
@@ -136,15 +155,18 @@ where
             let adjacent = j == i + 1;
             if adjacent {
                 // Adjacent segments share their join vertex — permitted.
-                // Reject only a collinear doubling-back (the incoming
-                // and outgoing directions point opposite ways).
-                if doubles_back(&pts[i], &pts[i + 1], &pts[j + 1]) {
+                // Reject only a spike, the outgoing edge doubling back
+                // over the incoming one.
+                if is_spike(&pts[i], &pts[i + 1], &pts[j + 1]) {
                     return false;
                 }
             } else if closed && i == 0 && j == segs.len() - 1 {
-                // First and last segment of a closed loop meet only at
-                // the shared closing vertex — that is the ring closure,
-                // not a self-intersection.
+                // First and last segment of a closed loop meet at the
+                // shared closing vertex — that is the ring closure, not a
+                // self-intersection — but they may meet elsewhere too.
+                if !meets_only_at_closure(&pts[0], &pts[1], &pts[j], &pts[j + 1]) {
+                    return false;
+                }
             } else if CartesianIntersects.intersects(&segs[i], &segs[j]) {
                 return false;
             }
@@ -153,31 +175,76 @@ where
     true
 }
 
-/// Coordinate-wise 2D equality of two points.
-#[inline]
-fn points_equal<P: Point>(a: &P, b: &P) -> bool {
-    a.get::<0>() == b.get::<0>() && a.get::<1>() == b.get::<1>()
-}
-
-/// `true` iff the edge `p0`-`p1` and the adjacent edge `p1`-`p2` are
-/// collinear and fold back over one another (the turn reverses
-/// direction along the same line).
-#[inline]
-fn doubles_back<P: Point>(p0: &P, p1: &P, p2: &P) -> bool
+/// Whether the first segment `p1 → p2` and the last `q1 → q2` of a closed
+/// linestring meet only where the linestring closes.
+///
+/// Boost accepts their meeting only as one `method_none` turn at the start
+/// of the first segment (`is_acceptable_turn`,
+/// `algorithms/detail/is_simple/linear.hpp:85-108`): an `'a'` or `'f'`
+/// meeting (`algorithms/detail/overlay/get_turn_info.hpp:1462,1590-1600`)
+/// whose fraction along the first segment is zero by `math::equals`.
+fn meets_only_at_closure<P: Point>(p1: &P, p2: &P, q1: &P, q2: &P) -> bool
 where
     P::Scalar: CoordinateScalar,
 {
-    let ax = p1.get::<0>() - p0.get::<0>();
-    let ay = p1.get::<1>() - p0.get::<1>();
-    let bx = p2.get::<0>() - p1.get::<0>();
-    let by = p2.get::<1>() - p1.get::<1>();
-    let cross = ax * by - ay * bx;
-    if cross != P::Scalar::ZERO {
-        return false;
+    let p1 = (p1.get::<0>(), p1.get::<1>());
+    let p2 = (p2.get::<0>(), p2.get::<1>());
+    let q1 = (q1.get::<0>(), q1.get::<1>());
+    let q2 = (q2.get::<0>(), q2.get::<1>());
+    match segment_meeting(p1, p2, q1, q2) {
+        SegmentMeeting::Disjoint => true,
+        // A collinear touch in one direction, the last segment running on
+        // into the first, is an `'a'` meeting at `p1`
+        // (`policies/relate/direction.hpp:279-297`). Any other collinear
+        // meeting overlaps the first segment.
+        SegmentMeeting::Collinear { positions, .. } => positions == [3, 4, 0, 1],
+        SegmentMeeting::AtP1 => {
+            // `p1` and `q2` are on each other's line, so the meeting is `'f'`
+            // if `q1` is on the first segment's line, `'t'` (a touch, not
+            // `method_none`) if `p2` is on the last's, and `'a'` otherwise
+            // (`policies/relate/direction.hpp`, `segments_crosses`).
+            let touch = P::Scalar::side_by_triangle(p1, p2, q1) != Ordering::Equal
+                && P::Scalar::side_by_triangle(q1, q2, p2) == Ordering::Equal;
+            // The fraction is Cramer's rule's, along the first segment
+            // (`strategies/cartesian/intersection.hpp:264-275,433-437`).
+            let along = |a: P::Scalar, b: P::Scalar| (b - a).to_measure();
+            let numerator =
+                along(q1.0, q2.0) * along(q1.1, p1.1) - along(q1.1, q2.1) * along(q1.0, p1.0);
+            !touch
+                && numerator.tolerant_eq(
+                    <<P::Scalar as CoordinateScalar>::Measure as CoordinateScalar>::ZERO,
+                )
+        }
+        _ => false,
     }
-    // Collinear: fold-back iff the incoming and outgoing directions have
-    // a negative dot product.
-    ax * bx + ay * by < P::Scalar::ZERO
+}
+
+/// Coordinate-wise 2D equality of two points, by `math::equals` as
+/// Boost's `has_duplicates` compares them.
+#[inline]
+fn points_equal<P: Point>(a: &P, b: &P) -> bool {
+    a.get::<0>().tolerant_eq(b.get::<0>()) && a.get::<1>().tolerant_eq(b.get::<1>())
+}
+
+/// `true` iff `current` is a spike between `previous` and `next`: the
+/// three collinear and `next` not beyond `previous`, seen from `current`.
+///
+/// Boost's `has_spikes` asks `is_spike_or_equal(next, current, previous)`
+/// (`algorithms/detail/is_valid/has_spikes.hpp:128`), which is
+/// `point_is_spike_or_equal(previous, next, current)`
+/// (`algorithms/detail/point_is_spike_or_equal.hpp:46-65,97-104`): the side
+/// of `previous` from `next` to `current`, then its `direction_code`. The
+/// order matters to the floating-point side test.
+#[inline]
+fn is_spike<P: Point>(previous: &P, current: &P, next: &P) -> bool
+where
+    P::Scalar: CoordinateScalar,
+{
+    let previous = (previous.get::<0>(), previous.get::<1>());
+    let current = (current.get::<0>(), current.get::<1>());
+    let next = (next.get::<0>(), next.get::<1>());
+    P::Scalar::side_by_triangle(next, current, previous) == core::cmp::Ordering::Equal
+        && P::Scalar::direction_code(next, current, previous) != core::cmp::Ordering::Greater
 }
 
 #[cfg(test)]
@@ -227,6 +294,63 @@ mod tests {
     fn closed_simple_quadrilateral() {
         let ls: Linestring<Pt> = linestring![(0., 0.), (1., 0.), (1., 1.), (0., 0.)];
         assert!(is_simple(&ls));
+    }
+
+    /// Boost: `! boost::empty(linestring) && …`
+    /// (`algorithms/detail/is_simple/linear.hpp:227-238`).
+    #[test]
+    fn empty_linestring_is_not_simple() {
+        let ls: Linestring<Pt> = Linestring::new();
+        assert!(!is_simple(&ls));
+    }
+
+    /// A closed linestring may start in the middle of a straight edge:
+    /// its last segment runs on into its first, the one turn Boost accepts.
+    /// Boost (`aed7bc3`): simple.
+    #[test]
+    fn closed_linestring_may_start_mid_edge() {
+        let ls: Linestring<Pt> =
+            linestring![(0., 0.), (2., 0.), (2., 2.), (-2., 2.), (-2., 0.), (0., 0.)];
+        assert!(is_simple(&ls));
+    }
+
+    /// A sliver: the last vertex lies, up to rounding, on the first
+    /// segment, so the last segment runs back over the first. Boost reads
+    /// them as collinear and overlapping. Boost (`aed7bc3`): not simple.
+    #[test]
+    fn closing_segment_running_back_over_the_first_is_not_simple() {
+        let ls: Linestring<Pt> = linestring![
+            (935.072_535_154_818_4, -831.668_093_369_019_5),
+            (96.604_363_826_790_83, -268.950_777_185_098_73),
+            (348.144_815_225_199_2, -437.765_972_040_275_1),
+            (935.072_535_154_818_4, -831.668_093_369_019_5),
+        ];
+        assert!(!is_simple(&ls));
+    }
+
+    /// A last point within rounding of the first closes the linestring, and
+    /// the closing turn must lie at the start of the first segment by
+    /// `math::equals` on its Cramer's-rule fraction. Off along the last
+    /// segment it does; off diagonally it does not. Boost (`aed7bc3`):
+    /// simple, then not simple.
+    #[test]
+    fn rounding_off_closure_is_judged_by_the_closing_turn() {
+        let along: Linestring<Pt> = linestring![
+            (10., 10.),
+            (10., 11.),
+            (11., 11.),
+            (11., 10.),
+            (10.000_000_000_000_002, 10.)
+        ];
+        assert!(is_simple(&along));
+        let diagonal: Linestring<Pt> = linestring![
+            (10., 10.),
+            (10., 11.),
+            (11., 11.),
+            (11., 10.),
+            (10.000_000_000_000_002, 10.000_000_000_000_002)
+        ];
+        assert!(!is_simple(&diagonal));
     }
 
     #[test]

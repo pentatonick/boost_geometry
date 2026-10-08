@@ -14,7 +14,8 @@ use geometry_trait::{Box as BoxTrait, Geometry, IndexedAccess, PointMut, corner,
 /// `algorithms/detail/expand/interface.hpp:115-132`. The geometry kind is
 /// resolved through the same public envelope strategy used by
 /// [`crate::envelope()`], then each minimum/maximum coordinate widens the
-/// caller-supplied box in place.
+/// caller-supplied box in place. An empty geometry's envelope is Boost's
+/// inverse box, which widens nothing.
 ///
 /// The current envelope strategy family is Cartesian; spherical and
 /// geographic antimeridian-aware expansion will become available when those

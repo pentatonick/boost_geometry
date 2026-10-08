@@ -46,3 +46,27 @@ fn vector3_unit_axes() {
     assert_eq!(distance(&origin, &y_axis), 1.0);
     assert_eq!(distance(&origin, &z_axis), 1.0);
 }
+
+/// The wrappers are plain values like the points they wrap — copied,
+/// compared, defaulted to the origin — so they enter the algorithms that
+/// build points, such as `closest_points`.
+#[test]
+fn wrappers_are_values_algorithms_can_build() {
+    use geometry_algorithm::closest_points;
+    use geometry_model::Segment;
+
+    let a = NaPoint2::new(Point2::new(1.0_f64, 2.0));
+    let copy = a;
+    assert_eq!(copy, a);
+    assert_eq!(NaPoint2::<f64>::default(), NaPoint2::new(Point2::origin()));
+    assert_eq!(
+        NaVector3::<f64>::default(),
+        NaVector3::new(Vector3::zeros())
+    );
+    let segment = Segment::new(
+        NaPoint2::new(Point2::new(4.0_f64, 0.0)),
+        NaPoint2::new(Point2::new(4.0_f64, 6.0)),
+    );
+    let (from, to) = closest_points(&a, &segment);
+    assert_eq!((from, to.0), (a, Point2::new(4.0, 2.0)));
+}
