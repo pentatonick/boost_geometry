@@ -28,7 +28,10 @@ comparison.
 
 ## Public surface
 
-* **`CoordinateScalar`** — the trait bounding what can be a coordinate.
+* **`CoordinateScalar`** — the trait bounding what can be a coordinate:
+  the `Measure` a distance or area is computed in (`f64` for an integer),
+  Boost's two Cartesian side tests (`side_by_triangle`, `side_robust`), and
+  `math::equals` (`tolerant_eq`).
 * **`Promote`** — given two scalar types, picks the wider for cross-geometry
   arithmetic (mirrors `select_most_precise.hpp`).
 * **`PromoteIntegral`** — widens an integral calculation type to roughly twice

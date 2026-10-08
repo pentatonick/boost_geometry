@@ -9,12 +9,12 @@ use boost_geometry::overlay::{
     JoinStrategy, OverlayError, PointStrategy, buffer, buffer_convex_polygon, buffer_with,
     buffer_with_strategy, is_valid,
 };
-use boost_geometry::prelude::{area, covered_by, distance_with};
+use boost_geometry::prelude::{area, area_with, covered_by, distance_with};
 use boost_geometry::strategy::buffer::{
     BufferDistanceStrategy, BufferEndStrategy, BufferJoinStrategy, BufferPointStrategy,
     BufferSettings, BufferSideStrategy, GeographicBuffer, SphericalBuffer,
 };
-use boost_geometry::strategy::{Haversine, Vincenty};
+use boost_geometry::strategy::{GeographicPolygonArea, Haversine, Vincenty};
 use boost_geometry::trait_::{MultiPolygon as _, Point as _, Polygon as _, Ring as _};
 
 type P = Point2D<f64, Cartesian>;
@@ -165,8 +165,49 @@ fn round_linestring_ends_form_a_capsule() {
     assert!((buffered_area(&result) - expected).abs() < 0.01);
 }
 
+/// Boost (`aed7bc3`) buffers this segment by 0.5 with 36-point round ends to
+/// `22.527_078_167_967_673`: each end is the half of a 36-gon that `end_round`
+/// starts square to the segment.
+#[test]
+fn round_ends_place_their_points_as_boost_does() {
+    let line = Linestring::from_vec(vec![P::new(8.8, -4.1), P::new(-9.655_996, 7.4)]);
+    let settings = BufferSettings {
+        end: BufferEndStrategy::Round {
+            points_per_circle: 36,
+        },
+        ..miter_settings(0.5)
+    };
+    let result = buffer_with(&line, settings).unwrap();
+    assert!((buffered_area(&result) - 22.527_078_167_967_673).abs() < 1e-9);
+}
+
+/// Boost (`aed7bc3`) buffers this bend by 2.5 with flat ends to
+/// `90.032_096_103_794_36`. Its first segment is shorter than the distance,
+/// so on the concave side of the bend that segment's piece reaches past the
+/// end edge of the next one, and cutting across where the two offsets cross
+/// would leave part of it out.
+#[test]
+fn a_concave_bend_after_a_short_segment_keeps_its_piece() {
+    let line = Linestring::from_vec(vec![
+        P::new(5.4, -8.6),
+        P::new(3.920_18, -8.7),
+        P::new(-5.115_997, 5.0),
+    ]);
+    let settings = BufferSettings {
+        join: BufferJoinStrategy::Miter { limit: 3.0 },
+        ..miter_settings(2.5)
+    };
+    let result = buffer_with(&line, settings).unwrap();
+    assert!((buffered_area(&result) - 90.032_096_103_794_36).abs() < 1e-9);
+    assert_eq!(is_valid(&result), Ok(()));
+}
+
 /// `test/strategies/buffer_join.cpp:58-93` — the configured limit shortens a
-/// sharp miter instead of emitting an arbitrarily long one.
+/// sharp miter instead of emitting an arbitrarily long one: the miter point
+/// is drawn back along the miter to the limit, not cut off to a bevel.
+/// Boost (`aed7bc3`) buffers this V to `32.189_576_864_903_55` at a limit of 2,
+/// its miter point two below the vertex, and to `40.199_502_484_483_57` at a
+/// limit of 20.
 #[test]
 fn linestring_miter_limit_caps_sharp_joins() {
     let line = Linestring::from_vec(vec![
@@ -182,21 +223,14 @@ fn linestring_miter_limit_caps_sharp_joins() {
 
     let limited = buffer_with(&line, limited).unwrap();
     let unlimited = buffer_with(&line, unlimited).unwrap();
-    let limited_points = limited
-        .polygons()
-        .next()
-        .unwrap()
-        .exterior()
-        .points()
-        .count();
-    let unlimited_points = unlimited
-        .polygons()
-        .next()
-        .unwrap()
-        .exterior()
-        .points()
-        .count();
-    assert!(limited_points > unlimited_points);
+    assert!((buffered_area(&limited) - 32.189_576_864_903_55).abs() < 1e-9);
+    assert!((buffered_area(&unlimited) - 40.199_502_484_483_57).abs() < 1e-9);
+    assert!(
+        limited
+            .polygons()
+            .flat_map(|polygon| polygon.exterior().points())
+            .any(|point| point.x().abs() < 1e-12 && (point.y() + 2.0).abs() < 1e-12)
+    );
 }
 
 /// `test/algorithms/buffer/buffer_multi_point.cpp:37-66`,
@@ -284,7 +318,11 @@ fn polygon_buffer_handles_offset_topology_collapse() {
 }
 
 /// `test/algorithms/buffer/buffer_with_strategies.cpp:88-106` — inapplicable
-/// distance strategies and degenerate inputs are rejected consistently.
+/// distance strategies are rejected consistently. A linear geometry's
+/// negative distance is its magnitude, and one that simplifies to a single
+/// point is buffered as that point: Boost (`aed7bc3`) returns the 2 by 2
+/// rectangle for the segment at -1, and the 2 by 2 square for one point or
+/// two equal ones.
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -316,7 +354,7 @@ fn public_buffer_error_and_empty_contract_is_consistent_across_kinds() {
         buffer_with(&point, not_finite),
         Err(OverlayError::Unsupported)
     );
-    assert!(buffer_with(&point, zero).unwrap().0.is_empty());
+    assert_eq!(buffer_with(&point, zero).unwrap().0.len(), 0);
 
     let polygon: Polygon<P> =
         polygon![[(0.0, 0.0), (0.0, 2.0), (2.0, 2.0), (2.0, 0.0), (0.0, 0.0)]];
@@ -354,24 +392,27 @@ fn public_buffer_error_and_empty_contract_is_consistent_across_kinds() {
         Err(OverlayError::Unsupported)
     );
 
-    assert!(
+    assert_eq!(
         buffer_convex_polygon(&polygon, 0.0, JoinStrategy::Miter)
             .exterior()
             .0
-            .is_empty()
+            .len(),
+        0
     );
-    assert!(
+    assert_eq!(
         buffer_convex_polygon(&polygon, f64::NAN, JoinStrategy::Miter)
             .exterior()
             .0
-            .is_empty()
+            .len(),
+        0
     );
     let short: Polygon<P> = Polygon::new(Ring::<P>::from_vec(vec![point]));
-    assert!(
+    assert_eq!(
         buffer_convex_polygon(&short, 1.0, JoinStrategy::Miter)
             .exterior()
             .0
-            .is_empty()
+            .len(),
+        0
     );
     let collinear: Polygon<P> = Polygon::new(Ring::<P>::from_vec(vec![
         P::new(0.0, 0.0),
@@ -379,11 +420,12 @@ fn public_buffer_error_and_empty_contract_is_consistent_across_kinds() {
         P::new(2.0, 0.0),
         P::new(0.0, 0.0),
     ]));
-    assert!(
-        !buffer_convex_polygon(&collinear, 1.0, JoinStrategy::Miter)
+    assert_ne!(
+        buffer_convex_polygon(&collinear, 1.0, JoinStrategy::Miter)
             .exterior()
             .0
-            .is_empty()
+            .len(),
+        0
     );
 
     let ring = polygon.exterior().clone();
@@ -395,30 +437,29 @@ fn public_buffer_error_and_empty_contract_is_consistent_across_kinds() {
         buffer_with(&ring, not_finite),
         Err(OverlayError::Unsupported)
     );
-    assert_eq!(buffer_with(&ring, zero), Err(OverlayError::Unsupported));
+    // C++: a ring takes the polygon inserter, zero width included; Boost
+    // (`aed7bc3`) returns this square unchanged.
+    assert_eq!(
+        buffer_with(&ring, zero),
+        Ok(MultiPolygon(vec![Polygon::new(ring.clone())]))
+    );
 
     let line = Linestring::from_vec(vec![P::new(0.0, 0.0), P::new(2.0, 0.0)]);
     let negative = BufferSettings {
         distance: BufferDistanceStrategy::Symmetric(-1.0),
         ..miter_settings(1.0)
     };
-    assert_eq!(buffer_with(&line, negative), Err(OverlayError::Unsupported));
+    assert!((buffered_area(&buffer_with(&line, negative).unwrap()) - 4.0).abs() < 1e-12);
     assert_eq!(
         buffer_with(&line, not_finite),
         Err(OverlayError::Unsupported)
     );
-    assert!(buffer_with(&line, zero).unwrap().0.is_empty());
-    assert_eq!(
-        buffer_with(&Linestring::from_vec(vec![point]), miter_settings(1.0)),
-        Err(OverlayError::Unsupported)
-    );
-    assert_eq!(
-        buffer_with(
-            &Linestring::from_vec(vec![point, point]),
-            miter_settings(1.0)
-        ),
-        Err(OverlayError::Unsupported)
-    );
+    assert_eq!(buffer_with(&line, zero).unwrap().0.len(), 0);
+    for points in [vec![point], vec![point, point]] {
+        let square = buffer_with(&Linestring::from_vec(points), miter_settings(1.0)).unwrap();
+        assert_eq!(square.0.len(), 1);
+        assert!((buffered_area(&square) - 4.0).abs() < 1e-12);
+    }
 }
 
 /// `test/algorithms/buffer/buffer_point.cpp:25-29` — the convenience entry
@@ -464,6 +505,8 @@ fn linear_round_join_covers_bends_collinearity_and_zero_width_side() {
 
 /// `test/algorithms/buffer/buffer_polygon.cpp:823-846` — redundant and
 /// collinear vertices exercise the offset kernel's degenerate-edge handling.
+/// An exterior that collapses onto a line is buffered as its first point:
+/// Boost (`aed7bc3`) returns the 2 by 2 square about `(0 0)`.
 #[test]
 fn areal_offset_handles_collinear_duplicate_and_collapsed_boundaries() {
     let collinear: Polygon<P> = polygon![[
@@ -496,7 +539,7 @@ fn areal_offset_handles_collinear_duplicate_and_collapsed_boundaries() {
     ]));
     let collapsed_result = buffer_with(&collapsed, miter_settings(1.0)).unwrap();
     assert_eq!(collapsed_result.0.len(), 1);
-    assert!((buffered_area(&collapsed_result) - 1.0).abs() < 1e-12);
+    assert!((buffered_area(&collapsed_result) - 4.0).abs() < 1e-12);
 
     let near_parallel: Polygon<P> = Polygon::new(Ring::from_vec(vec![
         P::new(0.0, 0.0),
@@ -506,20 +549,22 @@ fn areal_offset_handles_collinear_duplicate_and_collapsed_boundaries() {
         P::new(0.0, 2.0),
         P::new(0.0, 0.0),
     ]));
-    assert!(
-        !buffer_with(&near_parallel, miter_settings(1.0))
+    assert_ne!(
+        buffer_with(&near_parallel, miter_settings(1.0))
             .unwrap()
             .0
-            .is_empty()
+            .len(),
+        0
     );
 
     let exact_collapse: Polygon<P> =
         polygon![[(0.0, 0.0), (0.0, 2.0), (2.0, 2.0), (2.0, 0.0), (0.0, 0.0)]];
-    assert!(
+    assert_eq!(
         buffer_with(&exact_collapse, miter_settings(-1.0))
             .unwrap()
             .0
-            .is_empty()
+            .len(),
+        0
     );
 }
 
@@ -592,7 +637,8 @@ fn geographic_point_buffer_accepts_an_explicit_spheroid() {
         let distance = distance_with(&center, point, distance_strategy);
         assert!((distance - 100.0).abs() < 0.5);
     }
-    let observed_area = area(polygon).abs();
+    // Measured on the spheroid it was built on, as Boost's fixture does.
+    let observed_area = area_with(polygon, GeographicPolygonArea { spheroid }).abs();
     assert!((observed_area - 31_414.33).abs() < 31_414.33 * 0.005);
 }
 
@@ -833,17 +879,18 @@ fn angular_buffer_rejects_invalid_projection_inputs() {
         Err(OverlayError::Unsupported)
     ));
 
+    // C++: an input that simplifies to fewer points than its kind needs is
+    // buffered as its first point (`buffer_point`).
     let short_line = Linestring::from_vec(vec![point]);
     let short_ring: Ring<SphericalPoint> = Ring::from_vec(vec![point]);
     let short_polygon = Polygon::new(short_ring.clone());
-    assert!(matches!(
+    for result in [
         buffer_with_strategy(&short_line, round, spherical),
-        Err(OverlayError::Unsupported)
-    ));
-    let short_ring_result = buffer_with_strategy(&short_ring, round, spherical);
-    let short_polygon_result = buffer_with_strategy(&short_polygon, round, spherical);
-    assert!(short_ring_result.unwrap().0.is_empty());
-    assert!(short_polygon_result.unwrap().0.is_empty());
+        buffer_with_strategy(&short_ring, round, spherical),
+        buffer_with_strategy(&short_polygon, round, spherical),
+    ] {
+        assert_eq!(result.unwrap().0.len(), 1);
+    }
 
     let valid_ring: Ring<SphericalPoint> = Ring::from_vec(vec![
         SphericalPoint::new(-0.1, -0.1),
@@ -942,7 +989,7 @@ fn round_settings(distance: f64) -> BufferSettings {
 }
 
 /// Boost 1.83 `join_round`: eroding the L by 0.5 leaves one valid polygon
-/// of area 9.05366 — the arc at the reflex corner sweeps the short way,
+/// of area 9.05365 — the arc at the reflex corner sweeps the short way,
 /// on the eroded side, not through the material.
 #[test]
 fn round_erosion_of_an_l_shape_rounds_the_reflex_corner_inward() {
@@ -958,7 +1005,7 @@ fn round_erosion_of_an_l_shape_rounds_the_reflex_corner_inward() {
     let result = buffer_with(&l, round_settings(-0.5)).unwrap();
     assert_eq!(result.polygons().count(), 1, "{result:?}");
     assert!(
-        (buffered_area(&result) - 9.053_66).abs() < 0.01,
+        (buffered_area(&result) - 9.053_65).abs() < 0.01,
         "area {}",
         buffered_area(&result)
     );
@@ -1082,7 +1129,7 @@ fn dumbbell() -> Polygon<P> {
 }
 
 /// Boost 1.83 `join_round`: growing the U by 1.5 closes its 2-wide notch
-/// into one valid polygon of area 78.8281. The join arcs at the notch's two
+/// into one valid polygon of area 78.8284. The join arcs at the notch's two
 /// top corners meet at `(3, 7.118)`, which is where the outline dips.
 #[test]
 fn round_growth_of_a_u_closes_the_notch() {
@@ -1090,7 +1137,7 @@ fn round_growth_of_a_u_closes_the_notch() {
     assert_eq!(result.polygons().count(), 1, "{result:?}");
     assert_eq!(result.polygons().next().unwrap().interiors().count(), 0);
     assert!(
-        (buffered_area(&result) - 78.8281).abs() < 0.01,
+        (buffered_area(&result) - 78.8284).abs() < 0.01,
         "area {}",
         buffered_area(&result)
     );
@@ -1153,4 +1200,172 @@ fn miter_erosion_of_a_dumbbell_leaves_two_squares() {
         assert!((area(lobe) - 64.0).abs() < 1e-9, "lobe area {}", area(lobe));
     }
     assert_eq!(is_valid(&result), Ok(()));
+}
+
+// ---- Offsets cut past a short side ---------------------------------------
+//
+// At a concave corner the offsetted ring cuts across from one side's offset
+// to the next. Where a side is shorter than that cut reaches, the cut runs
+// the side's offset backwards, or a side piece's end edge reaches past its
+// neighbour, and the ring stops being the outline even where it does not
+// cross itself. The port then takes Boost's pieces, as Boost always does.
+
+fn settings_with(distance: f64, join: BufferJoinStrategy) -> BufferSettings {
+    BufferSettings {
+        join,
+        ..round_settings(distance)
+    }
+}
+
+fn assert_buffer(result: &MultiPolygon<Polygon<P>>, expected: f64, holes: usize) {
+    assert_eq!(result.polygons().count(), 1, "{result:?}");
+    assert_eq!(
+        result
+            .polygons()
+            .map(|pg| pg.interiors().count())
+            .sum::<usize>(),
+        holes
+    );
+    assert!(
+        (buffered_area(result) - expected).abs() < 1e-9,
+        "area {}, expected {expected}",
+        buffered_area(result)
+    );
+    assert_eq!(is_valid(result), Ok(()));
+}
+
+/// Boost (`aed7bc3`) grows this by 0.5 with eight-point round joins to
+/// `10.580_367_381_025_582`. Two of its sides are shorter than the distance;
+/// the offsetted ring left two per cent of that out.
+#[test]
+fn growth_past_short_sides_is_the_union_of_the_pieces() {
+    let shape: Polygon<P> = polygon![[
+        (-6.4, 2.5),
+        (-6.566_818_999_161_166, 2.371_782_772_246_169),
+        (-6.5, 8.2),
+        (-6.560_855_686_493_813, 8.151_072_297_973_963),
+        (-5.8, 9.5),
+        (-6.4, 2.5)
+    ]];
+    let settings = settings_with(
+        0.5,
+        BufferJoinStrategy::Round {
+            points_per_circle: 8,
+        },
+    );
+    assert_buffer(
+        &buffer_with(&shape, settings).unwrap(),
+        10.580_367_381_025_582,
+        0,
+    );
+}
+
+/// Boost (`aed7bc3`) grows this by 4 with a miter limit of 3 to one valid
+/// polygon of area `256.184_121_475_311_14`. The side ending at `(-9 -7)` is
+/// shorter than the cut at that concave corner reaches back, and the
+/// offsetted ring ran back along the side's offset there: the same area,
+/// with a spike in it.
+#[test]
+fn growth_past_a_short_side_leaves_no_spike() {
+    let shape: Polygon<P> = polygon![[
+        (-6.737_086_948_835_929_5, -14.816_662_952_386_594),
+        (-10.0, -9.0),
+        (-11.984_049_610_381_488, -5.609_385_502_139_951),
+        (-10.852_458_143_080_957, -4.878_138_148_479_655),
+        (-9.0, -7.0),
+        (-4.0, -4.0),
+        (-6.737_086_948_835_929_5, -14.816_662_952_386_594)
+    ]];
+    let settings = settings_with(4.0, BufferJoinStrategy::Miter { limit: 3.0 });
+    assert_buffer(
+        &buffer_with(&shape, settings).unwrap(),
+        256.184_121_475_311_14,
+        0,
+    );
+}
+
+/// Boost (`aed7bc3`) erodes this by 0.5 with a miter limit of 2 to
+/// `29.797_469_475_250_836`, its hole grown past the short side the hole has.
+#[test]
+fn erosion_grows_a_hole_past_its_short_side() {
+    let shape: Polygon<P> = polygon![
+        [
+            (15.2, 4.3),
+            (0.041_836_548_975_474_84, 1.609_244_691_789_168_5),
+            (3.1, 6.4),
+            (7.013_137_685_154_756, 11.696_745_729_896_794),
+            (8.3, 6.4),
+            (15.2, 4.3)
+        ],
+        [
+            (6.631_286_076_217_49, 5.594_946_028_540_917),
+            (5.345_850_176_741_91, 5.609_624_744_510_454),
+            (6.900_871_300_868_399, 5.200_781_123_379_323),
+            (6.923_088_694_856_561, 5.059_718_959_559_267),
+            (7.082_449_234_064_768, 5.522_827_214_008_680_5),
+            (6.631_286_076_217_49, 5.594_946_028_540_917)
+        ]
+    ];
+    let settings = settings_with(-0.5, BufferJoinStrategy::Miter { limit: 2.0 });
+    assert_buffer(
+        &buffer_with(&shape, settings).unwrap(),
+        29.797_469_475_250_836,
+        1,
+    );
+}
+
+/// Boost (`aed7bc3`) grows this by 0.1 with a miter limit of 10 to one valid
+/// polygon of area `92.462_201_326_511_63` that keeps its hole; the
+/// offsetted ring came out invalid.
+#[test]
+fn growth_with_a_hole_past_a_short_side_is_valid() {
+    let shape: Polygon<P> = polygon![
+        [
+            (16.8, 4.1),
+            (16.821_684_256_298_3, 4.039_191_302_666_736),
+            (6.1, -0.3),
+            (6.510_783_277_232_39, 5.507_193_496_949_913),
+            (2.428_859_239_636_780_7, 8.953_831_407_172_91),
+            (6.864_165_432_083_775, 8.560_242_906_754_157),
+            (6.863_587_454_500_993, 8.560_422_695_511_972),
+            (7.440_266_662_929_202_5, 9.982_070_077_373_171),
+            (12.182_022_051_071_634, 10.645_174_189_373_417),
+            (15.817_000_531_412_84, 9.644_567_588_167_39),
+            (16.8, 4.1)
+        ],
+        [
+            (8.751_102_010_171_202, 5.534_845_101_794_879),
+            (8.654_743_892_882_472, 3.921_324_784_548_790_6),
+            (9.348_302_203_594_628, 4.913_883_015_138_034),
+            (8.751_102_010_171_202, 5.534_845_101_794_879)
+        ]
+    ];
+    let settings = settings_with(0.1, BufferJoinStrategy::Miter { limit: 10.0 });
+    assert_buffer(
+        &buffer_with(&shape, settings).unwrap(),
+        92.462_201_326_511_63,
+        1,
+    );
+}
+
+/// Boost (`aed7bc3`) erodes this sliver by 2 to nothing. Simplifying at a
+/// thousandth of the distance drops its second vertex, and what erodes is
+/// the polygon as simplified: the sliver cut off between the two is no part
+/// of the result.
+#[test]
+fn erosion_is_of_the_polygon_as_simplified() {
+    let sliver: Polygon<P> = polygon![[
+        (-4.178_386_634_617_558, 4.471_206_730_971_897),
+        (-4.179_382_397_289_544, 4.471_136_390_557_469_5),
+        (-0.967_280_172_426_481_7, 5.803_455_091_551_505_5),
+        (10.032_117_302_295_983, 6.669_941_162_806_324_5),
+        (-4.178_386_634_617_558, 4.471_206_730_971_897)
+    ]];
+    let settings = settings_with(
+        -2.0,
+        BufferJoinStrategy::Round {
+            points_per_circle: 90,
+        },
+    );
+    assert_eq!(buffer_with(&sliver, settings).unwrap().0.len(), 0);
 }

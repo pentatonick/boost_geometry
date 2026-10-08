@@ -6,7 +6,7 @@ Mirrors `boost/geometry/core/{tags,tag,tag_cast}.hpp`.
 
 ## Purpose
 
-Eleven zero-sized tag types identify each OGC geometry kind, plus a set of
+Twelve zero-sized tag types identify each OGC geometry kind, plus a set of
 marker traits reproducing the C++ struct-inheritance hierarchy at the
 Rust trait-bound level. See [the tag-dispatch pattern](../02-tag-dispatch-pattern.md)
 for the full diagram and how this crate is used downstream.
@@ -15,7 +15,7 @@ for the full diagram and how this crate is used downstream.
 
 | File | Contents |
 |---|---|
-| `src/tag.rs` | The 11 tag structs |
+| `src/tag.rs` | The 12 tag structs |
 | `src/hierarchy.rs` | The 8 marker traits + their impls |
 | `src/same_as.rs` | `SameAs` — compile-time `std::is_same` equivalent |
 | `src/lib.rs` | Re-exports only (manifest) |

@@ -1,6 +1,6 @@
 # `geometry-strategy`
 
-**Layer 4 — strategies.** Depends on `geometry-model`, `geometry-adapt`, `geometry-cs`, `geometry-coords` (transitively tag/trait). `#![no_std]` + `alloc`.
+**Layer 4 — strategies.** Depends on `geometry-model`, `geometry-cs`, `geometry-coords` (transitively tag/trait). `#![no_std]` + `alloc`.
 
 Mirrors `boost/geometry/strategies/{cartesian,spherical,geographic}/*.hpp`.
 
@@ -35,6 +35,7 @@ kind and coordinate-system family — combine).
 | `length` | `LengthStrategy`, `DefaultLength` | `CartesianLength`/`CartesianPerimeter`; `SphericalLength`/`SphericalPerimeter`; `GeographicLength`/`GeographicPerimeter` |
 | `envelope` | `EnvelopeStrategy`, `EnvelopeStrategyForKind` | `Envelope{Point,Segment,Linestring,Ring,Polygon,Box,MultiPoint,MultiLinestring,MultiPolygon}` — see [tag-dispatch pattern](../02-tag-dispatch-pattern.md) |
 | `within` | `WithinStrategy`, `WithinStrategyForKind` | `WithinRing`, `WithinPoly`, `WithinBox` |
+| `winding` | — | `Winding`, `PointLocation`, `range_location`/`ring_location`/`polygon_location` — Boost's `cartesian_winding` point-location kernel, shared by `within`, `intersects`, and the point rows of `relate` |
 | `intersects` | `IntersectsStrategy`, `IntersectsPairStrategy` | `CartesianIntersects` |
 | `buffer` | coordinate-family default plus five-role data bundle consumed by overlay | `CartesianBuffer`, `SphericalBuffer`, `GeographicBuffer`, `DefaultBuffer`; `BufferDistanceStrategy`, `BufferSideStrategy`, `BufferJoinStrategy`, `BufferEndStrategy`, `BufferPointStrategy`, `BufferSettings` |
 | `disjoint` | `DisjointStrategy` | `CartesianDisjoint` |

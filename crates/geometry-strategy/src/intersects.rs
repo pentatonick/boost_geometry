@@ -48,6 +48,8 @@ use geometry_trait::{
     Ring as RingTrait, Segment as SegmentTrait, segment_end, segment_start,
 };
 
+use crate::segment_intersection::{SegmentMeeting, segment_meeting};
+use crate::winding::{PointLocation, Winding};
 use crate::within::{WithinPoly, WithinStrategy};
 
 pub use crate::reversal::Reversed;
@@ -456,7 +458,9 @@ impl IntersectsPairStrategy<LinestringTag> for PolygonTag {
 
 // ---- Kernels ---------------------------------------------------------
 
-/// Coordinate-wise point equality across the first `dim` dimensions.
+/// Coordinate-wise point equality across the first `dim` dimensions, by
+/// `math::equals` as Boost's `cartesian_point_point` compares them
+/// ([`CoordinateScalar::tolerant_eq`]).
 #[inline]
 fn points_equal<A, B>(a: &A, b: &B, dim: usize) -> bool
 where
@@ -468,10 +472,10 @@ where
         // const-generic indexed access — match on every dimension supported
         // by geometry_trait's stable-Rust dimension walkers.
         let eq = match i {
-            0 => a.get::<0>() == b.get::<0>(),
-            1 => a.get::<1>() == b.get::<1>(),
-            2 => a.get::<2>() == b.get::<2>(),
-            3 => a.get::<3>() == b.get::<3>(),
+            0 => a.get::<0>().tolerant_eq(b.get::<0>()),
+            1 => a.get::<1>().tolerant_eq(b.get::<1>()),
+            2 => a.get::<2>().tolerant_eq(b.get::<2>()),
+            3 => a.get::<3>().tolerant_eq(b.get::<3>()),
             _ => panic!("points_equal: dimension exceeds MAX_DIM (4)"),
         };
         if !eq {
@@ -482,115 +486,36 @@ where
     true
 }
 
-/// Point-on-segment test in 2D. Mirrors the per-segment short-circuit
-/// in `cartesian_winding_base::apply` at
-/// `strategy/cartesian/point_in_poly_winding.hpp:91-131`: the point
-/// lies on `s1->s2` iff the side cross product is zero **and** the
-/// point's parameter along the segment lies in `[0, 1]`.
+/// Point-on-segment test in 2D: one step of the [`crate::winding`]
+/// kernel, which finds the point on `s1->s2` or not.
+///
+/// Mirrors `point_in_geometry<Segment>` at
+/// `algorithms/detail/within/point_in_geometry.hpp`, which feeds the
+/// segment to `cartesian_winding` and reads a touch as "on it".
 fn point_on_segment<P>(p: &P, s1: &P, s2: &P) -> bool
 where
     P: PointTrait,
     P::Scalar: CoordinateScalar,
 {
-    let px = p.get::<0>();
-    let py = p.get::<1>();
-    let ax = s1.get::<0>();
-    let ay = s1.get::<1>();
-    let bx = s2.get::<0>();
-    let by = s2.get::<1>();
-    let cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-    if cross != P::Scalar::ZERO {
-        return false;
-    }
-    let (xlo, xhi) = if ax <= bx { (ax, bx) } else { (bx, ax) };
-    let (ylo, yhi) = if ay <= by { (ay, by) } else { (by, ay) };
-    xlo <= px && px <= xhi && ylo <= py && py <= yhi
+    let xy = |q: &P| (q.get::<0>(), q.get::<1>());
+    let mut winding = Winding::default();
+    winding.apply(xy(p), xy(s1), xy(s2));
+    winding.location() == PointLocation::Boundary
 }
 
-/// 2D segment-segment intersection test. Returns `true` iff the two
-/// closed segments share at least one point — proper crossing,
-/// endpoint touch, or collinear overlap. Mirrors the boolean
-/// projection of `strategy/cartesian/intersection.hpp:139-260`.
+/// 2D segment-segment intersection test: `true` iff the two closed
+/// segments share a point — a crossing, an endpoint touch, or a collinear
+/// overlap — within the rounding Boost allows. Mirrors
+/// `detail::disjoint::disjoint_segment`, which asks
+/// `strategy::intersection::cartesian_segments` for a meeting point
+/// ([`crate::segment_intersection`]).
 fn segments_intersect<P>(p1: &P, p2: &P, p3: &P, p4: &P) -> bool
 where
     P: PointTrait,
     P::Scalar: CoordinateScalar,
 {
-    let x1 = p1.get::<0>();
-    let y1 = p1.get::<1>();
-    let x2 = p2.get::<0>();
-    let y2 = p2.get::<1>();
-    let x3 = p3.get::<0>();
-    let y3 = p3.get::<1>();
-    let x4 = p4.get::<0>();
-    let y4 = p4.get::<1>();
-
-    let d1 = side_sign((x3, y3), (x4, y4), (x1, y1));
-    let d2 = side_sign((x3, y3), (x4, y4), (x2, y2));
-    let d3 = side_sign((x1, y1), (x2, y2), (x3, y3));
-    let d4 = side_sign((x1, y1), (x2, y2), (x4, y4));
-
-    // Proper crossing — the endpoints of each segment lie on
-    // opposite sides of the other segment's line.
-    if ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)) {
-        return true;
-    }
-
-    // Endpoint-on-segment / collinear cases: a `side_sign` of zero
-    // means the third point lies on the other segment's line; we
-    // still have to check the bounding-box containment.
-    if d1 == 0 && point_on_segment(p1, p3, p4) {
-        return true;
-    }
-    if d2 == 0 && point_on_segment(p2, p3, p4) {
-        return true;
-    }
-    if d3 == 0 && point_on_segment(p3, p1, p2) {
-        return true;
-    }
-    if d4 == 0 && point_on_segment(p4, p1, p2) {
-        return true;
-    }
-    false
-}
-
-/// Sign of the side cross product `(b - a) × (c - a)`. `+1` left,
-/// `-1` right, `0` collinear. Mirrors `side_by_triangle::side_value`
-/// at `strategy/cartesian/side_by_triangle.hpp:178-200`.
-#[inline]
-fn side_sign<T: CoordinateScalar>(a: (T, T), b: (T, T), c: (T, T)) -> i32 {
-    let v = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
-    if v > T::ZERO {
-        1
-    } else if v < T::ZERO {
-        -1
-    } else {
-        0
-    }
-}
-
-/// Whether the closed axis-aligned bounds of two segments are disjoint.
-///
-/// Comparisons are written without `min`/`max` so a coordinate that is not
-/// ordered (for example, `NaN`) falls through to the exact segment predicate.
-#[inline]
-fn segment_bounds_disjoint<P>(p1: &P, p2: &P, p3: &P, p4: &P) -> bool
-where
-    P: PointTrait,
-{
-    let x1 = p1.get::<0>();
-    let y1 = p1.get::<1>();
-    let x2 = p2.get::<0>();
-    let y2 = p2.get::<1>();
-    let x3 = p3.get::<0>();
-    let y3 = p3.get::<1>();
-    let x4 = p4.get::<0>();
-    let y4 = p4.get::<1>();
-
-    (x1 < x3 && x1 < x4 && x2 < x3 && x2 < x4)
-        || (x3 < x1 && x3 < x2 && x4 < x1 && x4 < x2)
-        || (y1 < y3 && y1 < y4 && y2 < y3 && y2 < y4)
-        || (y3 < y1 && y3 < y2 && y4 < y1 && y4 < y2)
+    let xy = |q: &P| (q.get::<0>(), q.get::<1>());
+    segment_meeting(xy(p1), xy(p2), xy(p3), xy(p4)) != SegmentMeeting::Disjoint
 }
 
 /// Does any sub-segment of `ls` cross any sub-segment of `r` (with
@@ -630,7 +555,7 @@ where
     let mut has_edge = false;
     for qr in ir {
         has_edge = true;
-        if !segment_bounds_disjoint(pls, qls, pr, qr) && segments_intersect(pls, qls, pr, qr) {
+        if segments_intersect(pls, qls, pr, qr) {
             return true;
         }
         pr = qr;
@@ -640,7 +565,7 @@ where
     }
     // Close an open coordinate sequence explicitly. A one-point ring keeps
     // its degenerate edge so its established point-like behavior is intact.
-    !segment_bounds_disjoint(pls, qls, pr, first) && segments_intersect(pls, qls, pr, first)
+    segments_intersect(pls, qls, pr, first)
 }
 
 /// Does any edge of ring `a` cross any edge of ring `b`? Both rings

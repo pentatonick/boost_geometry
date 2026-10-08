@@ -16,14 +16,12 @@
 //! * `boost/geometry/strategy/cartesian/area.hpp:91-120` — the
 //!   trapezoidal-rule accumulation `(x1 + x2) * (y1 - y2)` summed over
 //!   consecutive segments and halved at the end. The Boost code wraps
-//!   the ring in `closed_clockwise_view` first so a counter-clockwise
-//!   declared ring traversed in its declared order still produces a
-//!   positive area; the Rust port mirrors that by flipping the sign
-//!   when [`PointOrder::CounterClockwise`] is declared.
+//!   the ring in `closed_clockwise_view` first, closed and reversed
+//!   when counter-clockwise, so a ring wound as declared has a positive
+//!   area; the Rust port walks the same view, in the same order.
 //!
-//! T34 lands the Cartesian implementation only — Boost's Spherical /
-//! Geographic area strategies arrive alongside the Haversine /
-//! geographic distance work in later tasks (T40+).
+//! The spherical and geographic strategies live beside their families'
+//! other strategies, in [`crate::spherical`] and [`crate::geographic`].
 //!
 //! # Coherence note
 //!
@@ -41,9 +39,13 @@
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem, GeographicFamily, SphericalFamily};
 use geometry_tag::SameAs;
-use geometry_trait::{
-    Box, Closure, Geometry, MultiPolygon, Point, PointOrder, Polygon, Ring, corner,
-};
+use geometry_trait::{Box, Geometry, MultiPolygon, Point, Polygon, Ring, corner};
+
+use crate::clockwise_view::clockwise_points;
+
+/// The scalar a Cartesian area of `P` coordinates is computed and returned
+/// in — `f64` for integer coordinates, as Boost's `area_result` has it.
+type Measure<P> = <<P as Point>::Scalar as CoordinateScalar>::Measure;
 
 /// A strategy for computing the area of a geometry.
 ///
@@ -85,7 +87,8 @@ pub trait AreaStrategy<G: Geometry> {
 /// `dispatch::area<Ring, ring_tag>` arm at `algorithms/area.hpp:154-157`.
 ///
 /// Sign convention follows Boost: rings whose vertices match the
-/// declared [`PointOrder`] yield a positive area, rings traversed in
+/// declared [`PointOrder`](geometry_trait::PointOrder) yield a positive
+/// area, rings traversed in
 /// the opposite direction yield a negative area
 /// (`test/algorithms/area/area.cpp:63-64`).
 #[derive(Debug, Default, Clone, Copy)]
@@ -128,12 +131,9 @@ pub struct ShoelaceMultiPolygonArea;
 // `algorithms/area.hpp:154-157`, which inherits from
 // `detail::area::ring_area::apply` (`algorithms/area.hpp:82-118`).
 // The Boost code wraps the ring in `closed_clockwise_view` first so
-// that a counter-clockwise declared ring traversed in its declared
-// order still feeds clockwise vertices to the strategy; we mirror
-// that by negating the accumulator when [`PointOrder::CounterClockwise`]
-// is declared (the arithmetic equivalent of reversing the iteration).
-// The "open ring closes itself" half of `closed_clockwise_view` is
-// mirrored by an explicit `last -> first` step when [`Closure::Open`].
+// that a counter-clockwise declared ring still feeds clockwise vertices
+// to the strategy, and an open one its closing edge; the port walks the
+// same view, so the terms are summed in Boost's order.
 
 impl<R> AreaStrategy<R> for ShoelaceArea
 where
@@ -141,17 +141,13 @@ where
     <R::Point as Point>::Cs: CoordinateSystem,
     <<R::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    type Out = <R::Point as Point>::Scalar;
+    type Out = Measure<R::Point>;
 
     #[inline]
     fn area(&self, r: &R) -> Self::Out {
         let acc = shoelace_accumulator::<R>(r);
         let two = <Self::Out as CoordinateScalar>::ONE + <Self::Out as CoordinateScalar>::ONE;
-        let half = acc / two;
-        match r.point_order() {
-            PointOrder::Clockwise => half,
-            PointOrder::CounterClockwise => -half,
-        }
+        acc / two
     }
 }
 
@@ -169,17 +165,20 @@ where
 impl<P> AreaStrategy<P> for ShoelacePolygonArea
 where
     P: Polygon,
-    ShoelaceArea: AreaStrategy<P::Ring, Out = <P::Point as Point>::Scalar>,
+    ShoelaceArea: AreaStrategy<P::Ring, Out = Measure<P::Point>>,
 {
-    type Out = <P::Point as Point>::Scalar;
+    type Out = Measure<P::Point>;
 
     #[inline]
     fn area(&self, p: &P) -> Self::Out {
-        let mut total = ShoelaceArea.area(p.exterior());
-        for inner in p.interiors() {
-            total = total + ShoelaceArea.area(inner);
-        }
-        total
+        // The interiors summed from zero, then added to the exterior:
+        // `calculate_polygon_sum` (`algorithms/detail/calculate_sum.hpp:36-55`).
+        let interiors = p
+            .interiors()
+            .fold(<Self::Out as CoordinateScalar>::ZERO, |sum, inner| {
+                sum + ShoelaceArea.area(inner)
+            });
+        ShoelaceArea.area(p.exterior()) + interiors
     }
 }
 
@@ -200,14 +199,14 @@ where
     <B::Point as Point>::Cs: CoordinateSystem,
     <<B::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    type Out = <B::Point as Point>::Scalar;
+    type Out = Measure<B::Point>;
 
     #[inline]
     fn area(&self, b: &B) -> Self::Out {
-        let xmin = b.get_indexed::<{ corner::MIN }, 0>();
-        let ymin = b.get_indexed::<{ corner::MIN }, 1>();
-        let xmax = b.get_indexed::<{ corner::MAX }, 0>();
-        let ymax = b.get_indexed::<{ corner::MAX }, 1>();
+        let xmin = b.get_indexed::<{ corner::MIN }, 0>().to_measure();
+        let ymin = b.get_indexed::<{ corner::MIN }, 1>().to_measure();
+        let xmax = b.get_indexed::<{ corner::MAX }, 0>().to_measure();
+        let ymax = b.get_indexed::<{ corner::MAX }, 1>().to_measure();
         (xmax - xmin) * (ymax - ymin)
     }
 }
@@ -222,9 +221,9 @@ where
 impl<MPg> AreaStrategy<MPg> for ShoelaceMultiPolygonArea
 where
     MPg: MultiPolygon,
-    ShoelacePolygonArea: AreaStrategy<MPg::ItemPolygon, Out = <MPg::Point as Point>::Scalar>,
+    ShoelacePolygonArea: AreaStrategy<MPg::ItemPolygon, Out = Measure<MPg::Point>>,
 {
-    type Out = <MPg::Point as Point>::Scalar;
+    type Out = Measure<MPg::Point>;
 
     #[inline]
     fn area(&self, mpg: &MPg) -> Self::Out {
@@ -237,34 +236,19 @@ where
 }
 
 /// Sum `(x_i + x_{i+1}) * (y_i - y_{i+1})` over the consecutive
-/// vertex pairs of `r`. For an open ring the implicit `last -> first`
-/// closing pair is added explicitly, mirroring Boost's
-/// `closed_clockwise_view` closure half at
-/// `algorithms/area.hpp:104` and `strategy/cartesian/area.hpp:109-112`.
-///
-/// Returns `R::Point::Scalar::ZERO` for rings with fewer than two
-/// vertices — same as Boost's `ring_area::apply` early return at
-/// `algorithms/area.hpp:99-102` (`detail::minimum_ring_size`).
+/// vertex pairs of `r`, walked as `ring_area` walks
+/// `closed_clockwise_view` (`algorithms/area.hpp:82-118`,
+/// `strategy/cartesian/area.hpp:91-120`): closed, reversed when
+/// counter-clockwise, and zero for a ring below its closure's minimum
+/// size.
 #[inline]
-fn shoelace_accumulator<R>(r: &R) -> <R::Point as Point>::Scalar
+fn shoelace_accumulator<R>(r: &R) -> Measure<R::Point>
 where
     R: Ring,
 {
-    let mut acc = <<R::Point as Point>::Scalar as CoordinateScalar>::ZERO;
-    let it = r.points();
-    let next = it.clone().skip(1);
-    for (a, b) in it.zip(next) {
-        acc = acc + segment_term::<R::Point>(a, b);
-    }
-    if matches!(r.closure(), Closure::Open) {
-        // Open ring leaves the closing edge implicit — add it
-        // explicitly. Mirrors the `closed_clockwise_view` closure half
-        // at `views/detail/closed_clockwise_view.hpp`.
-        let mut points = r.points();
-        if let Some(first) = points.next() {
-            let last = points.last().unwrap_or(first);
-            acc = acc + segment_term::<R::Point>(last, first);
-        }
+    let mut acc = <Measure<R::Point> as CoordinateScalar>::ZERO;
+    for edge in clockwise_points(r).windows(2) {
+        acc = acc + segment_term::<R::Point>(edge[0], edge[1]);
     }
     acc
 }
@@ -277,11 +261,12 @@ where
 /// `x_a * y_b - x_b * y_a` cross product at large coordinate values
 /// (Boost trac #11928 cited in the same header).
 #[inline]
-fn segment_term<P>(a: &P, b: &P) -> P::Scalar
+fn segment_term<P>(a: &P, b: &P) -> Measure<P>
 where
     P: Point,
 {
-    (a.get::<0>() + b.get::<0>()) * (a.get::<1>() - b.get::<1>())
+    (a.get::<0>().to_measure() + b.get::<0>().to_measure())
+        * (a.get::<1>().to_measure() - b.get::<1>().to_measure())
 }
 
 // ---- Default area strategy per CS family ----------------------------
@@ -321,8 +306,7 @@ impl DefaultArea<SphericalFamily> for SphericalFamily {
 }
 
 /// Geographic family defaults to [`GeographicPolygonArea`](crate::geographic::GeographicPolygonArea)
-/// — the authalic-sphere approximation (see its docs for the precision
-/// caveat).
+/// — Boost's spheroidal series with Andoyer azimuths.
 impl DefaultArea<GeographicFamily> for GeographicFamily {
     type Strategy = crate::geographic::GeographicPolygonArea;
 }
@@ -485,6 +469,62 @@ mod tests {
         ]);
         let got = ShoelaceArea.area(&r);
         assert!((got - 2.0).abs() < 1e-12);
+    }
+
+    /// A ring below its closure's minimum size encloses nothing: a
+    /// closed ring of three points measures `0` in Boost (`aed7bc3`),
+    /// whatever the points.
+    #[test]
+    fn a_closed_ring_of_three_points_has_no_area() {
+        let r: Ring<P> = Ring::from_vec(vec![
+            Point2D::new(-376_534.732_048_763_54, -217_554.022_127_133_94),
+            Point2D::new(-709_156.943_996_279_5, 106_487.395_991_661_45),
+            Point2D::new(-376_534.732_048_763_54, -217_554.022_127_133_94),
+        ]);
+        assert_eq!(ShoelaceArea.area(&r), 0.0);
+        let open: Ring<P, true, false> =
+            Ring::from_vec(vec![Point2D::new(0.0, 0.0), Point2D::new(0.0, 1.0)]);
+        assert_eq!(ShoelaceArea.area(&open), 0.0);
+    }
+
+    /// A counter-clockwise ring is summed backwards, as Boost walks its
+    /// `closed_clockwise_view`: near `1e9` the trapezoids cancel to their
+    /// last bits, and Boost (`aed7bc3`) gets `0.22786015272140503` where
+    /// the forward sum negated gets `0.22786018252372742`.
+    /// The interiors are summed from zero and then added to the exterior,
+    /// as `calculate_polygon_sum` adds them
+    /// (`algorithms/detail/calculate_sum.hpp:36-55`); added one by one, these
+    /// two holes round to `99.14349899999999`. Boost (`aed7bc3`): `99.143499`.
+    #[test]
+    fn interiors_are_summed_before_the_exterior() {
+        let pg: Polygon<P> = polygon![
+            [
+                (0.0, 0.0),
+                (0.0, 10.0),
+                (10.0, 10.0),
+                (10.0, 0.0),
+                (0.0, 0.0)
+            ],
+            [(3.759, 2.11), (2.758, 2.983), (2.047, 2.849), (3.759, 2.11)],
+            [
+                (7.813, 6.224),
+                (7.157, 7.791),
+                (7.194, 6.242),
+                (7.813, 6.224)
+            ]
+        ];
+        assert_eq!(ShoelacePolygonArea.area(&pg), 99.143_499);
+    }
+
+    #[test]
+    fn a_counter_clockwise_ring_sums_in_boosts_order() {
+        let r: Ring<P, false, false> = Ring::from_vec(vec![
+            Point2D::new(1_000_000_000.841_793_4, 999_999_999.538_218_6),
+            Point2D::new(999_999_999.912_683_4, 999_999_999.114_749_9),
+            Point2D::new(1_000_000_000.825_902_5, 999_999_999.081_959_4),
+            Point2D::new(1_000_000_000.932_290_7, 999_999_999.711_619),
+        ]);
+        assert_eq!(ShoelaceArea.area(&r), 0.227_860_152_721_405_03);
     }
 
     // KC1.T2 witness: proves this strategy accepts a geometry whose

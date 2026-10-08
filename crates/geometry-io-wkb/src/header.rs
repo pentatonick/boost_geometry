@@ -13,11 +13,10 @@
 /// type word (OGC 06-103r4 §8.2.3-8.2.4). The aggregate that owns the
 /// header owns its width; `parse` and `write` both point here rather
 /// than spelling `5` a second and third time.
-pub(crate) const RECORD_HEADER_LEN: usize = 5;
+pub(crate) const RECORD_HEADER_LEN: usize = 1 + TYPE_WORD_LEN;
 /// Bytes in the 32-bit type word — the other half of
 /// [`RECORD_HEADER_LEN`], the first being the order flag.
 pub(crate) const TYPE_WORD_LEN: usize = 4;
-const _: () = assert!(RECORD_HEADER_LEN == 1 + TYPE_WORD_LEN);
 
 /// The two byte orders a WKB record may declare.
 ///

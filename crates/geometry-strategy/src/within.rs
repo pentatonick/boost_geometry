@@ -57,20 +57,12 @@
 //! |        `0` | on the boundary    |  `false` |       `true` |
 //! |       `+1` | strict interior    |   `true` |       `true` |
 //!
-//! ## Precision limit (Cartesian, `f64`)
+//! ## Precision (Cartesian, floating point)
 //!
-//! The winding kernel decides each point's side of a segment from the
-//! sign of a cross product of coordinate *differences*. For `f64` that
-//! sign is exact only while the operands stay within the mantissa: past
-//! roughly `±2^26` (`67_108_864`) the products no longer fit in 53 bits
-//! and the sign can flip, so a strict-interior / boundary / exterior
-//! classification may be wrong for coordinates beyond that magnitude.
-//! This is the same limit the overlay engine gates on with its
-//! `SAFE_ABS_MAX` range guard, and it matches Boost: the non-rescaled
-//! `cartesian_winding` shares the bound (Boost's rescaling only ever
-//! applied at the overlay/turn layer, not here). `within` does **not**
-//! reject out-of-range input — callers that work with coordinates beyond
-//! `±2^26` must scale down first.
+//! The ring walk is the shared [`crate::winding`] kernel, so a point's side
+//! of an edge is Boost's `side_by_triangle`, not an exact sign: a point
+//! within an epsilon of an edge — scaled by the edge's extent — is on it,
+//! as it is to Boost, at any magnitude.
 
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
@@ -79,6 +71,8 @@ use geometry_trait::{
     Box as BoxTrait, Point as PointTrait, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
     corner, fold_dims, ordinate,
 };
+
+use crate::winding::{PointLocation, polygon_location, ring_location};
 
 /// A strategy for point-in-geometry containment.
 ///
@@ -203,12 +197,12 @@ where
 {
     #[inline]
     fn within(&self, p: &P, r: &G) -> bool {
-        winding_result(p, r) == InOut::Interior
+        ring_location(xy(p), r.points().map(xy)) == PointLocation::Interior
     }
 
     #[inline]
     fn covered_by(&self, p: &P, r: &G) -> bool {
-        !matches!(winding_result(p, r), InOut::Exterior)
+        ring_location(xy(p), r.points().map(xy)) != PointLocation::Exterior
     }
 }
 
@@ -221,28 +215,12 @@ where
 {
     #[inline]
     fn within(&self, p: &P, pg: &G) -> bool {
-        if !WithinRing.within(p, pg.exterior()) {
-            return false;
-        }
-        for hole in pg.interiors() {
-            if WithinRing.covered_by(p, hole) {
-                return false;
-            }
-        }
-        true
+        location_in_polygon(p, pg) == PointLocation::Interior
     }
 
     #[inline]
     fn covered_by(&self, p: &P, pg: &G) -> bool {
-        if !WithinRing.covered_by(p, pg.exterior()) {
-            return false;
-        }
-        for hole in pg.interiors() {
-            if WithinRing.within(p, hole) {
-                return false;
-            }
-        }
-        true
+        location_in_polygon(p, pg) != PointLocation::Exterior
     }
 }
 
@@ -267,168 +245,27 @@ impl WithinStrategyForKind for PolygonTag {
     type S = WithinPoly;
 }
 
-// ---- Winding-number kernel ------------------------------------------
+// ---- Point location --------------------------------------------------
 
-/// Tri-state outcome of the winding-number walk.
-///
-/// Mirrors the integer return of `cartesian_winding::result` at
-/// `strategy/cartesian/point_in_poly_winding.hpp:69-74`:
-/// `-1` outside, `0` on the boundary, `+1` strict interior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InOut {
-    Exterior,
-    Boundary,
-    Interior,
+/// The planar ordinates of `p`: the walk is two-dimensional.
+fn xy<P: PointTrait>(p: &P) -> (P::Scalar, P::Scalar) {
+    (p.get::<0>(), p.get::<1>())
 }
 
-/// Walk the segments of `r` accumulating the winding count and the
-/// "on a segment" flag, then collapse to an [`InOut`].
+/// Where `p` lies relative to `pg`, by the [`crate::winding`] kernel.
 ///
-/// Mirrors `cartesian_winding_base::apply` together with `result` at
-/// `strategy/cartesian/point_in_poly_winding.hpp:91-131, 69-74`. The
-/// closing edge for an open ring is added explicitly here — matches
-/// Boost's `closed_clockwise_view` wrap done one layer up at
+/// Mirrors `point_in_geometry<Polygon>` driving `cartesian_winding` at
 /// `algorithms/detail/within/point_in_geometry.hpp`.
-fn winding_result<P, R>(p: &P, r: &R) -> InOut
+fn location_in_polygon<P, G>(p: &P, pg: &G) -> PointLocation
 where
+    G: PolygonTrait<Point = P>,
     P: PointTrait,
-    P::Scalar: CoordinateScalar,
-    R: RingTrait<Point = P>,
 {
-    let mut count: i32 = 0;
-    let mut it = r.points();
-    let Some(mut prev) = it.next() else {
-        // Empty ring — outside by convention. Mirrors the
-        // `boost::size(ring) < minimum_ring_size` guard at
-        // `algorithms/detail/within/point_in_geometry.hpp:198`.
-        return InOut::Exterior;
-    };
-    let first = prev;
-    let mut has_segment = false;
-    for curr in it {
-        has_segment = true;
-        match apply_segment(p, prev, curr) {
-            Step::Touches => return InOut::Boundary,
-            Step::Count(c) => count += c,
-        }
-        prev = curr;
-    }
-    // Close an open coordinate sequence explicitly. A repeated closing
-    // vertex already contributed through the preceding real edge.
-    let repeats_first =
-        has_segment && prev.get::<0>() == first.get::<0>() && prev.get::<1>() == first.get::<1>();
-    if !repeats_first {
-        match apply_segment(p, prev, first) {
-            Step::Touches => return InOut::Boundary,
-            Step::Count(c) => count += c,
-        }
-    }
-    if count == 0 {
-        InOut::Exterior
-    } else {
-        InOut::Interior
-    }
-}
-
-/// Per-segment outcome of the winding kernel.
-#[derive(Debug, Clone, Copy)]
-enum Step {
-    /// The point lies on this segment; the walk can short-circuit.
-    Touches,
-    /// Contribution to the running winding count.
-    Count(i32),
-}
-
-/// Single-segment contribution of the winding number, plus the
-/// on-segment short-circuit.
-///
-/// Mirrors `cartesian_winding_base::apply` at
-/// `strategy/cartesian/point_in_poly_winding.hpp:91-131` together
-/// with its `check_segment` / `check_touch` / `calculate_count` /
-/// `side_equal` helpers (lines 139-217). The cartesian side strategy
-/// reduces to the cross-product sign
-/// `(s2.x - s1.x) * (p.y - s1.y) - (s2.y - s1.y) * (p.x - s1.x)`
-/// (`strategy/cartesian/side_by_triangle.hpp:178-200`).
-fn apply_segment<P>(p: &P, s1: &P, s2: &P) -> Step
-where
-    P: PointTrait,
-    P::Scalar: CoordinateScalar,
-{
-    let px = p.get::<0>();
-    let py = p.get::<1>();
-    let s1x = s1.get::<0>();
-    let s2x = s2.get::<0>();
-    let s1y = s1.get::<1>();
-    let s2y = s2.get::<1>();
-
-    let eq1 = s1x == px;
-    let eq2 = s2x == px;
-
-    // check_touch: vertical segment exactly on the point's x.
-    // Mirrors lines 154-184 of point_in_poly_winding.hpp.
-    if eq1 && eq2 {
-        let (lo, hi) = if s1y <= s2y { (s1y, s2y) } else { (s2y, s1y) };
-        if lo <= py && py <= hi {
-            return Step::Touches;
-        }
-        return Step::Count(0);
-    }
-
-    // An endpoint on the ray contributes a half count only when it is
-    // vertically below the query. This is the direct form of Boost's
-    // `side_equal * count > 0` reduction.
-    if eq1 {
-        if py == s1y {
-            return Step::Touches;
-        }
-        return if py < s1y {
-            Step::Count(0)
-        } else if s2x > px {
-            Step::Count(1)
-        } else {
-            Step::Count(-1)
-        };
-    }
-    if eq2 {
-        if py == s2y {
-            return Step::Touches;
-        }
-        return if py < s2y {
-            Step::Count(0)
-        } else if s1x > px {
-            Step::Count(-1)
-        } else {
-            Step::Count(1)
-        };
-    }
-
-    let count = if s1x < px && s2x > px {
-        2
-    } else if s2x < px && s1x > px {
-        -2
-    } else {
-        return Step::Count(0);
-    };
-
-    // Cartesian side: sign of (s2 - s1) × (p - s1). A zero side is a
-    // boundary touch; otherwise it contributes only when its sign agrees
-    // with the crossing direction.
-    let cross = (s2x - s1x) * (py - s1y) - (s2y - s1y) * (px - s1x);
-    if cross > P::Scalar::ZERO {
-        if count > 0 {
-            Step::Count(count)
-        } else {
-            Step::Count(0)
-        }
-    } else if cross < P::Scalar::ZERO {
-        if count < 0 {
-            Step::Count(count)
-        } else {
-            Step::Count(0)
-        }
-    } else {
-        Step::Touches
-    }
+    polygon_location(
+        xy(p),
+        pg.exterior().points().map(xy),
+        pg.interiors().map(|hole| hole.points().map(xy)),
+    )
 }
 
 #[cfg(test)]
@@ -437,106 +274,14 @@ mod tests {
     //! (the Cartesian section). Each test cites the C++ line(s) it
     //! mirrors.
 
-    use super::{Step, WithinBox, WithinPoly, WithinRing, WithinStrategy, apply_segment};
+    use super::{WithinBox, WithinPoly, WithinRing, WithinStrategy};
     use geometry_cs::Cartesian;
     use geometry_model::{Box, Point2D, Polygon, Ring, polygon};
-    use geometry_trait::Point as _;
 
     type P = Point2D<f64, Cartesian>;
 
     fn pt(x: f64, y: f64) -> P {
         Point2D::new(x, y)
-    }
-
-    #[allow(clippy::float_cmp)]
-    fn reference_step(p: &P, s1: &P, s2: &P) -> i32 {
-        let px = p.get::<0>();
-        let py = p.get::<1>();
-        let s1x = s1.get::<0>();
-        let s2x = s2.get::<0>();
-        let s1y = s1.get::<1>();
-        let s2y = s2.get::<1>();
-
-        let eq1 = s1x == px;
-        let eq2 = s2x == px;
-        if eq1 && eq2 {
-            let (lo, hi) = if s1y <= s2y { (s1y, s2y) } else { (s2y, s1y) };
-            return if lo <= py && py <= hi { i32::MIN } else { 0 };
-        }
-
-        let count = if eq1 {
-            if s2x > px { 1 } else { -1 }
-        } else if eq2 {
-            if s1x > px { -1 } else { 1 }
-        } else if s1x < px && s2x > px {
-            2
-        } else if s2x < px && s1x > px {
-            -2
-        } else {
-            0
-        };
-        if count == 0 {
-            return 0;
-        }
-
-        let side = if count == 1 || count == -1 {
-            let sey = if eq1 { s1y } else { s2y };
-            if py == sey {
-                0
-            } else if py < sey {
-                -count
-            } else {
-                count
-            }
-        } else {
-            let cross = (s2x - s1x) * (py - s1y) - (s2y - s1y) * (px - s1x);
-            if cross > 0.0 {
-                1
-            } else if cross < 0.0 {
-                -1
-            } else {
-                0
-            }
-        };
-        if side == 0 {
-            i32::MIN
-        } else if side * count > 0 {
-            count
-        } else {
-            0
-        }
-    }
-
-    fn step_code(step: Step) -> i32 {
-        match step {
-            Step::Touches => i32::MIN,
-            Step::Count(count) => count,
-        }
-    }
-
-    #[test]
-    fn segment_step_matches_the_reference_branch_matrix() {
-        let values = [-2.0, -1.0, 0.0, 1.0, 2.0];
-        for &px in &values {
-            for &py in &values {
-                for &s1x in &values {
-                    for &s1y in &values {
-                        for &s2x in &values {
-                            for &s2y in &values {
-                                let point = pt(px, py);
-                                let first = pt(s1x, s1y);
-                                let second = pt(s2x, s2y);
-                                assert_eq!(
-                                    step_code(apply_segment(&point, &first, &second)),
-                                    reference_step(&point, &first, &second),
-                                    "point=({px}, {py}), segment=({s1x}, {s1y})→({s2x}, {s2y})"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     fn box_polygon() -> Polygon<P> {

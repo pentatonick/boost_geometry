@@ -161,6 +161,33 @@ fn spherical_and_geographic_compare_handle_angular_coordinates() {
     assert!(EQUAL_TO.apply(&degrees, &radians));
 }
 
+/// Points sharing a unit compare in it, as Boost (`aed7bc3`) reads them:
+/// `1e-15°` from the equator is not `0°`, though in radians it would sit
+/// within the relative epsilon of zero; two longitudes two units in the
+/// last place apart at `118.9°` differ too. The antimeridian is told with
+/// `math::equals` even by the exact policy, so `179.99999999999997°` lies on
+/// it beside `-180°`.
+#[test]
+fn angular_compare_reads_points_in_their_own_unit() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let origin = SphericalPoint::new(0.0, 0.0);
+    let east = SphericalPoint::new(1e-15, 0.0);
+    assert!(!EQUAL_TO.apply(&origin, &east));
+    assert!(LESS.apply(&origin, &east));
+    assert!(LESS_EXACT.apply(&origin, &east));
+
+    let left = Point2D::<f64, Geographic<Degree>>::new(118.941_803_214_890_29, 43.6);
+    let right = Point2D::<f64, Geographic<Degree>>::new(118.941_803_214_890_31, 43.6);
+    assert!(!EQUAL_TO.apply(&left, &right));
+    assert!(LESS.apply(&left, &right));
+
+    let nearly = SphericalPoint::new(179.999_999_999_999_97, 10.0);
+    let west = SphericalPoint::new(-180.0, 10.0);
+    assert!(EQUAL_TO.apply(&nearly, &west));
+    assert!(!LESS_EXACT.apply(&nearly, &west));
+    assert!(!LESS_EXACT.apply(&west, &nearly));
+}
+
 /// The public angular policies cover explicit latitude and higher-dimension
 /// selection, pole equivalence, both antimeridian orderings, and every scalar
 /// conversion supported by angular coordinate systems.

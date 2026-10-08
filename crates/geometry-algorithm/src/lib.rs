@@ -70,6 +70,7 @@ mod dyn_envelope;
 mod dyn_error;
 mod dyn_length;
 mod dyn_within;
+mod exact_orientation;
 
 // feature-group: Mutation & assembly
 // feature-desc: Build up or normalise a geometry in place

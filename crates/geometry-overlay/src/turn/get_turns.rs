@@ -291,7 +291,7 @@ mod tests {
         let a = square(0.0, 0.0, 1.0);
         let b = square(5.0, 5.0, 1.0);
         let turns = get_turns_ring_ring(&a, 0, RingKind::Exterior, &b, 1, RingKind::Exterior);
-        assert!(turns.is_empty());
+        assert_eq!(turns.len(), 0);
     }
 
     #[test]

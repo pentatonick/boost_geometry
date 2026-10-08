@@ -218,7 +218,7 @@ fn public_parser_contract_covers_dimensions_unicode_and_errors() {
         WktError::NestingTooDeep,
     ];
     for error in displays {
-        assert!(!error.to_string().is_empty());
+        assert_ne!(error.to_string().len(), 0);
     }
 }
 

@@ -417,3 +417,56 @@ fn write_errors_explain_geometry_and_sink_failures() {
         assert_eq!(error.to_string(), message);
     }
 }
+
+/// A ring its polygon declares open (`Closure::Open`) is written closed, as
+/// Boost's `wkt` writes it, rather than rejected as an unclosed ring.
+#[test]
+fn open_polygon_is_written_closed() {
+    use geometry_io_wkt::{GeometryStructureError, WktWriteError, to_wkt, to_wkt_polygon};
+    use geometry_model::{MultiPolygon, Polygon, Ring};
+    type Open = Polygon<Pt, true, false>;
+    let open = Open {
+        outer: Ring::from_vec(vec![
+            Pt::new(0.0, 0.0),
+            Pt::new(0.0, 2.0),
+            Pt::new(2.0, 2.0),
+            Pt::new(2.0, 0.0),
+        ]),
+        inners: vec![Ring::from_vec(vec![
+            Pt::new(0.5, 0.5),
+            Pt::new(1.5, 0.5),
+            Pt::new(1.0, 1.5),
+        ])],
+    };
+    // An open ring whose last point already repeats its first gets no
+    // second copy.
+    let repeated = Open::new(Ring::from_vec(vec![
+        Pt::new(0.0, 0.0),
+        Pt::new(0.0, 2.0),
+        Pt::new(2.0, 2.0),
+        Pt::new(0.0, 0.0),
+    ]));
+    assert_eq!(
+        to_wkt_polygon(&open).unwrap(),
+        "POLYGON((0 0,0 2,2 2,2 0,0 0),(0.5 0.5,1.5 0.5,1 1.5,0.5 0.5))"
+    );
+    assert_eq!(
+        to_wkt_polygon(&repeated).unwrap(),
+        "POLYGON((0 0,0 2,2 2,0 0))"
+    );
+    assert_eq!(
+        to_wkt(&MultiPolygon(vec![open, repeated])).unwrap(),
+        "MULTIPOLYGON(((0 0,0 2,2 2,2 0,0 0),(0.5 0.5,1.5 0.5,1 1.5,0.5 0.5)),((0 0,0 2,2 2,0 0)))"
+    );
+    // Closing does not lengthen a ring past the minimum it lacks.
+    let segment = Open::new(Ring::from_vec(vec![Pt::new(0.0, 0.0), Pt::new(1.0, 1.0)]));
+    assert_eq!(
+        to_wkt_polygon(&segment),
+        Err(WktWriteError::InvalidGeometry(
+            GeometryStructureError::TooFewPoints {
+                minimum: 4,
+                actual: 3
+            }
+        ))
+    );
+}

@@ -20,8 +20,10 @@ pub enum Predicate {
     /// Values whose bounds intersect the query box. Boost's
     /// `index::intersects`.
     Intersects(Bounds),
-    /// Values whose non-degenerate bounds are fully inside the query
-    /// box. Boost's `index::within`.
+    /// Points strictly inside the query box, and boxes with
+    /// non-degenerate bounds fully inside it. Boost's `index::within`,
+    /// which asks `within(point, box)` of a point
+    /// ([`Indexable::IS_POINT`]) and `within(box, box)` of a box.
     Within(Bounds),
     /// Values whose bounds contain a non-degenerate query box. Boost's
     /// `index::contains`.
@@ -42,7 +44,10 @@ pub enum Predicate {
 }
 
 impl Predicate {
-    /// Whether a leaf value with box `value` satisfies this predicate.
+    /// Whether a leaf value with box `value` satisfies this predicate,
+    /// taking the value as a box; a query decides a point value's
+    /// [`Within`](Predicate::Within) by
+    /// [`QueryPredicate::matches`].
     #[must_use]
     #[inline]
     pub fn matches(&self, value: &Bounds) -> bool {
@@ -133,7 +138,13 @@ pub trait QueryPredicate<T: Indexable> {
 impl<T: Indexable> QueryPredicate<T> for Predicate {
     #[inline]
     fn matches(&self, value: &T) -> bool {
-        self.matches(&value.bounds())
+        match self {
+            Predicate::Within(q) if T::IS_POINT => {
+                let [x, y] = value.bounds().min;
+                q.min[0] < x && x < q.max[0] && q.min[1] < y && y < q.max[1]
+            }
+            _ => self.matches(&value.bounds()),
+        }
     }
 
     #[inline]

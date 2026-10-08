@@ -232,7 +232,7 @@ fn derived_hulls_are_public() {
 #[test]
 fn minimum_rotated_rect_handles_degenerate_point_sets() {
     let empty = minimum_rotated_rect(&MultiPoint::<P2>::from_vec(vec![]));
-    assert!(empty.outer.0.is_empty());
+    assert_eq!(empty.outer.0.len(), 0);
 
     let point = P2::new(2.0, 3.0);
     let single = minimum_rotated_rect(&MultiPoint::from_vec(vec![point]));
@@ -252,7 +252,7 @@ fn minimum_rotated_rect_handles_degenerate_point_sets() {
         P2::new(tiny, 0.0),
         P2::new(0.0, tiny),
     ]));
-    assert!(sub_epsilon.outer.0.is_empty());
+    assert_eq!(sub_epsilon.outer.0.len(), 0);
 }
 
 /// Degenerate point sets and an over-large edge threshold are reference cases
@@ -261,7 +261,7 @@ fn minimum_rotated_rect_handles_degenerate_point_sets() {
 #[test]
 fn concave_hull_handles_degenerate_and_threshold_boundaries() {
     let empty = MultiPoint::<P2>::from_vec(vec![]);
-    assert!(concave_hull(&empty).outer.0.is_empty());
+    assert_eq!(concave_hull(&empty).outer.0.len(), 0);
 
     let repeated = MultiPoint::from_vec(vec![P2::new(1.0, 1.0); 4]);
     assert_eq!(
@@ -380,7 +380,7 @@ fn earcut_handles_degenerate_and_redundant_vertices() {
         ]),
     ];
     for exterior in degenerate_exteriors {
-        assert!(triangulate_earcut(&Polygon::new(exterior)).is_empty());
+        assert_eq!(triangulate_earcut(&Polygon::new(exterior)).len(), 0);
     }
 
     let polygon: Polygon<P2> = Polygon::new(Ring::from_vec(vec![
@@ -613,10 +613,11 @@ fn geographic_azimuth_uses_boost_pole_limits() {
 
 /// `test/algorithms/is_simple.cpp:93-139` — duplicate, fold-back,
 /// self-crossing, closed, and empty linestring paths plus areal duplicate
-/// handling are observable through the public predicate.
+/// handling are observable through the public predicate. An empty
+/// linestring is not simple (`is_simple.cpp:136-139`).
 #[test]
 fn is_simple_covers_reference_edge_cases() {
-    assert!(is_simple(&Linestring::<P2>::default()));
+    assert!(!is_simple(&Linestring::<P2>::default()));
     assert!(!is_simple(&Linestring::from_vec(vec![
         P2::new(0.0, 0.0),
         P2::new(0.0, 0.0),
@@ -743,6 +744,21 @@ fn expand_box_with_box_and_segment_envelopes() {
     assert_eq!(bounds.get_indexed::<0, 1>(), 1.0);
     assert_eq!(bounds.get_indexed::<1, 0>(), 7.0);
     assert_eq!(bounds.get_indexed::<1, 1>(), 8.0);
+}
+
+/// An empty geometry's envelope is Boost's inverse box, which widens
+/// nothing: expanding by it leaves the bounds as they were rather than
+/// pulling in the origin.
+#[test]
+fn expanding_by_an_empty_geometry_changes_nothing() {
+    let mut bounds = ModelBox::from_corners(P2::new(5.0, 5.0), P2::new(6.0, 6.0));
+    expand(&mut bounds, &Linestring::<P2>::from_vec(Vec::new()));
+    expand(&mut bounds, &Polygon::<P2>::new(Ring::from_vec(Vec::new())));
+    expand(&mut bounds, &MultiPoint::<P2>::default());
+    assert_eq!(bounds.get_indexed::<0, 0>(), 5.0);
+    assert_eq!(bounds.get_indexed::<0, 1>(), 5.0);
+    assert_eq!(bounds.get_indexed::<1, 0>(), 6.0);
+    assert_eq!(bounds.get_indexed::<1, 1>(), 6.0);
 }
 
 /// `test/algorithms/comparable_distance.cpp:34-50` and
@@ -893,8 +909,7 @@ fn coordinate_wise_algorithms_reach_the_fourth_ordinate() {
 }
 
 /// Open rings carry an implicit closing edge in Boost's area and centroid
-/// algorithms. Empty point collections use the public centroid's zero-value
-/// fallback (`test/algorithms/centroid.cpp`).
+/// algorithms.
 #[test]
 fn open_ring_area_and_centroid_include_the_implicit_edge() {
     let open: Ring<P2, true, false> = Ring::from_vec(vec![
@@ -908,10 +923,35 @@ fn open_ring_area_and_centroid_include_the_implicit_edge() {
 
     let empty_open: Ring<P2, true, false> = Ring::from_vec(Vec::new());
     assert_eq!(ring_area(&empty_open), 0.0);
-    assert_eq!(centroid(&empty_open), P2::default());
+}
 
-    let empty = MultiPoint::<P2>::default();
-    assert_eq!(centroid(&empty), P2::default());
+/// An empty geometry has no centroid: Boost throws `centroid_exception`
+/// (`test/algorithms/centroid.cpp:172-183`), even for a polygon whose
+/// exterior is empty but whose interior is not. The port panics.
+#[test]
+fn empty_geometries_have_no_centroid() {
+    let empty_ring: Ring<P2, true, false> = Ring::from_vec(Vec::new());
+    assert!(std::panic::catch_unwind(|| centroid(&empty_ring)).is_err());
+
+    let empty_line = Linestring::<P2>::from_vec(Vec::new());
+    assert!(std::panic::catch_unwind(|| centroid(&empty_line)).is_err());
+
+    let mut hollow = Polygon::<P2>::new(Ring::from_vec(Vec::new()));
+    hollow.inners.push(Ring::from_vec(vec![
+        P2::new(0.0, 0.0),
+        P2::new(1.0, 0.0),
+        P2::new(1.0, 1.0),
+        P2::new(0.0, 1.0),
+        P2::new(0.0, 0.0),
+    ]));
+    assert!(std::panic::catch_unwind(|| centroid(&hollow)).is_err());
+
+    let empty_points = MultiPoint::<P2>::default();
+    assert!(std::panic::catch_unwind(|| centroid(&empty_points)).is_err());
+
+    let empty_polygons =
+        MultiPolygon::<Polygon<P2>>(vec![Polygon::new(Ring::from_vec(Vec::new()))]);
+    assert!(std::panic::catch_unwind(|| centroid(&empty_polygons)).is_err());
 }
 
 /// `test/algorithms/closest_points` and `densify.cpp` exercise the public
@@ -1154,7 +1194,7 @@ fn chaikin_smoothing_subdivides_an_open_linestring() {
 #[test]
 fn chaikin_smoothing_covers_stock_topologies_and_dimensions() {
     let empty = Linestring::<P2>::from_vec(vec![]);
-    assert!(chaikin_smoothing(&empty, 2).0.is_empty());
+    assert_eq!(chaikin_smoothing(&empty, 2).0.len(), 0);
     let singleton = Linestring::from_vec(vec![P2::new(1.0, 2.0)]);
     assert_eq!(chaikin_smoothing(&singleton, 1), singleton);
 
@@ -1286,18 +1326,20 @@ fn segmentize_with_haversine_uses_spherical_interpolation() {
 fn segmentize_handles_dimensions_and_degenerate_metrics() {
     type SphericalPoint = Point2D<f64, Spherical<Degree>>;
 
-    assert!(
+    assert_eq!(
         linestring_segmentize(&Linestring::<P2>::from_vec(Vec::new()), 2)
             .0
-            .is_empty()
+            .len(),
+        0
     );
-    assert!(
+    assert_eq!(
         linestring_segmentize(
             &Linestring::from_vec(vec![P2::new(0.0, 0.0), P2::new(1.0, 0.0)]),
             0,
         )
         .0
-        .is_empty()
+        .len(),
+        0
     );
 
     let mut end = P4::default();
@@ -1411,6 +1453,40 @@ fn spherical_cross_track_public_edge_cases_choose_endpoints() {
             || (projected_pole.get::<0>() - equator.end().get::<0>()).abs() < 1e-12
     );
     assert!(projected_pole.get::<1>().abs() < 1e-12);
+}
+
+/// Boost's spherical cross track (`aed7bc3`) on the unit sphere: from
+/// `(30 60)` to the segment `(0 50)–(60 50)` it is `0.10481077087737954`,
+/// with the foot at `(30 53.99478518121346)`, poleward of the parallel
+/// where the great circle runs; and a segment between antipodes, which
+/// every great circle through its ends contains, is `0` from any point,
+/// that point its own foot.
+#[test]
+fn spherical_cross_track_and_closest_point_match_boost() {
+    type SphericalPoint = Point2D<f64, Spherical<Degree>>;
+    let point = SphericalPoint::new(30.0, 60.0);
+    let segment = Segment::new(
+        SphericalPoint::new(0.0, 50.0),
+        SphericalPoint::new(60.0, 50.0),
+    );
+    let distance = distance_with(&point, &segment, CrossTrack::UNIT);
+    assert!(
+        (distance - 0.104_810_770_877_379_54).abs() < 1e-15,
+        "{distance}"
+    );
+    let foot = closest_points_with(&point, &segment, HaversineClosestPoints::UNIT).1;
+    assert!((foot.get::<0>() - 30.0).abs() < 1e-12);
+    assert!((foot.get::<1>() - 53.994_785_181_213_46).abs() < 1e-12);
+
+    let antipodal = Segment::new(
+        SphericalPoint::new(6.0, 15.0),
+        SphericalPoint::new(186.0, -15.0),
+    );
+    let beside = SphericalPoint::new(96.0, 0.0);
+    assert_eq!(distance_with(&beside, &antipodal, CrossTrack::UNIT), 0.0);
+    let foot = closest_points_with(&beside, &antipodal, HaversineClosestPoints::UNIT).1;
+    assert!((foot.get::<0>() - 96.0).abs() < 1e-12);
+    assert!(foot.get::<1>().abs() < 1e-12);
 }
 
 /// Non-positive and NaN area tolerances are public no-op cases for the

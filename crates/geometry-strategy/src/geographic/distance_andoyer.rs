@@ -15,7 +15,7 @@
 //! scalar; the v1 Rust port follows Haversine's approach (T40 spec) and
 //! hardcodes `Scalar = f64` on both inputs. This lets the kernel reach
 //! for `f64::sin` / `cos` / `acos` / `sqrt` directly without growing
-//! the [`CoordinateScalar`](geometry_coords::CoordinateScalar) trait
+//! the [`CoordinateScalar`] trait
 //! surface. Mixed-scalar support folds in alongside the `Promote`
 //! lattice when a real caller appears.
 //!
@@ -32,12 +32,23 @@
 //! (`strategies/geographic/distance_andoyer.hpp:91-94`) and set
 //! `type Comparable = Self;`.
 
-use geometry_cs::{CoordinateSystem, GeographicFamily, Spheroid};
+#[cfg(feature = "std")]
+use geometry_cs::CoordinateSystem;
+use geometry_cs::{GeographicFamily, Spheroid};
+#[cfg(feature = "std")]
 use geometry_tag::SameAs;
+#[cfg(feature = "std")]
 use geometry_trait::Point;
 
-use crate::distance::{DefaultDistance, DistanceStrategy};
+use crate::distance::DefaultDistance;
+#[cfg(feature = "std")]
+use crate::distance::DistanceStrategy;
 
+#[cfg(feature = "std")]
+use geometry_coords::CoordinateScalar;
+
+#[cfg(feature = "std")]
+use crate::geographic::InverseResult;
 #[cfg(feature = "std")]
 use crate::geographic::Meridian;
 #[cfg(feature = "std")]
@@ -74,6 +85,144 @@ impl Andoyer {
     pub const WGS84: Self = Self {
         spheroid: Spheroid::WGS84,
     };
+
+    /// The inverse geodesic problem between two longitude/latitude pairs in
+    /// radians: the distance always, both azimuths when `AZIMUTHS` is set.
+    ///
+    /// Mirrors `formula::andoyer_inverse::apply`
+    /// (`formulas/andoyer_inverse.hpp:58-243`), whose `math::equals` guards
+    /// are [`CoordinateScalar::tolerant_eq`] here. Coincident points keep
+    /// the zero result; a coincident or antipodal pair the guards let
+    /// through gets the fixed azimuths of
+    /// `formulas/andoyer_inverse.hpp:127-163`.
+    #[cfg(feature = "std")]
+    #[allow(
+        clippy::many_single_char_names,
+        clippy::similar_names,
+        reason = "the single-letter names mirror formula::andoyer_inverse letter for letter"
+    )]
+    pub(crate) fn inverse<const AZIMUTHS: bool>(
+        &self,
+        lon1: f64,
+        lat1: f64,
+        lon2: f64,
+        lat2: f64,
+    ) -> InverseResult {
+        let mut result = InverseResult {
+            converged: true,
+            ..InverseResult::default()
+        };
+        if lon1.tolerant_eq(lon2) && lat1.tolerant_eq(lat2) {
+            return result;
+        }
+
+        let calc = SpheroidCalc::from(self.spheroid);
+        let f = calc.f;
+        let pi = core::f64::consts::PI;
+        let dlon = lon2 - lon1;
+        let sin_dlon = dlon.sin();
+        let cos_dlon = dlon.cos();
+        let sin_lat1 = lat1.sin();
+        let cos_lat1 = lat1.cos();
+        let sin_lat2 = lat2.sin();
+        let cos_lat2 = lat2.cos();
+
+        // Rounding can carry `cos_d` past ±1 (`andoyer_inverse.hpp:90-95`).
+        let cos_d = (sin_lat1 * sin_lat2 + cos_lat1 * cos_lat2 * cos_dlon).clamp(-1.0, 1.0);
+        let d = cos_d.acos();
+        let sin_d = d.sin();
+
+        // `H` and `G` are infinite where `cos_d` is ±1: points very close
+        // or antipodal (`andoyer_inverse.hpp:102-122`).
+        let k = (sin_lat1 - sin_lat2) * (sin_lat1 - sin_lat2);
+        let l = (sin_lat1 + sin_lat2) * (sin_lat1 + sin_lat2);
+        let three_sin_d = 3.0 * sin_d;
+        let one_minus_cos_d = 1.0 - cos_d;
+        let one_plus_cos_d = 1.0 + cos_d;
+        let h = if one_minus_cos_d.tolerant_eq(0.0) {
+            0.0
+        } else {
+            (d + three_sin_d) / one_minus_cos_d
+        };
+        let g = if one_plus_cos_d.tolerant_eq(0.0) {
+            0.0
+        } else {
+            (d - three_sin_d) / one_plus_cos_d
+        };
+        let dd = -(f / 4.0) * (h * k + g * l);
+        result.distance = calc.a * (d + dd);
+        if !AZIMUTHS {
+            return result;
+        }
+
+        if sin_d.tolerant_eq(0.0) {
+            // Very close points keep both azimuths at zero; antipodal ones
+            // head north, or south from the north pole.
+            if cos_d < 0.0 {
+                if sin_lat1.tolerant_eq(1.0) {
+                    result.azimuth = pi;
+                } else {
+                    result.reverse_azimuth = pi;
+                }
+            }
+            return result;
+        }
+
+        let (a, u) = if cos_lat2.tolerant_eq(0.0) {
+            (if sin_lat2 < 0.0 { pi } else { 0.0 }, 0.0)
+        } else {
+            let tan_lat2 = sin_lat2 / cos_lat2;
+            let m = cos_lat1 * tan_lat2 - sin_lat1 * cos_dlon;
+            let a = sin_dlon.atan2(m);
+            (a, (f / 2.0) * (cos_lat1 * cos_lat1) * (2.0 * a).sin())
+        };
+        let (b, v) = if cos_lat1.tolerant_eq(0.0) {
+            (if sin_lat1 < 0.0 { pi } else { 0.0 }, 0.0)
+        } else {
+            let tan_lat1 = sin_lat1 / cos_lat1;
+            let n = cos_lat2 * tan_lat1 - sin_lat2 * cos_dlon;
+            let b = sin_dlon.atan2(n);
+            (b, (f / 2.0) * (cos_lat2 * cos_lat2) * (2.0 * b).sin())
+        };
+        let t = d / sin_d;
+
+        let da = v * t - u;
+        result.azimuth = a - da;
+        normalize_azimuth(&mut result.azimuth, a, da);
+
+        let db = -u * t + v;
+        result.reverse_azimuth = if b >= 0.0 { pi - b - db } else { -pi - b - db };
+        normalize_azimuth(&mut result.reverse_azimuth, b, db);
+        result
+    }
+}
+
+/// Keep a corrected azimuth from crossing the meridian its uncorrected
+/// value `base` lies beside: the correction `delta` may carry it to the
+/// meridian but not past.
+///
+/// Mirrors `andoyer_inverse::normalize_azimuth`
+/// (`formulas/andoyer_inverse.hpp:246-286`).
+#[cfg(feature = "std")]
+fn normalize_azimuth(azimuth: &mut f64, base: f64, delta: f64) {
+    let pi = core::f64::consts::PI;
+    if base >= 0.0 {
+        // Eastern hemisphere.
+        if delta >= 0.0 {
+            if *azimuth < 0.0 {
+                *azimuth = 0.0;
+            }
+        } else if *azimuth > pi {
+            *azimuth = pi;
+        }
+    } else if delta <= 0.0 {
+        // Western hemisphere, corrected towards zero.
+        if *azimuth > 0.0 {
+            *azimuth = 0.0;
+        }
+    } else if *azimuth < -pi {
+        *azimuth = -pi;
+    }
 }
 
 impl Default for Andoyer {
@@ -94,9 +243,13 @@ impl Default for Andoyer {
 
 /// Andoyer on `f64` geographic points.
 ///
-/// Mirrors `formula::andoyer_inverse<CT, true, false>::apply` at
-/// `formulas/andoyer_inverse.hpp:58-123` — the distance-only branch
-/// (`EnableDistance = true`, all other flags false). Computes:
+/// Mirrors `strategy::distance::geographic<andoyer>::apply`
+/// (`strategies/geographic/distance.hpp:91-112`): endpoints on one
+/// meridian, or on opposite meridians with the route over a pole, take the
+/// meridian arc at Andoyer's order-one series
+/// (`strategies/geographic/parameters.hpp:186-189`); the rest take the
+/// distance branch of `formula::andoyer_inverse`
+/// (`formulas/andoyer_inverse.hpp:58-123`), see [`Andoyer`]'s inverse:
 ///
 /// ```text
 /// cos_d  = sin(lat1)·sin(lat2) + cos(lat1)·cos(lat2)·cos(Δlon)
@@ -134,84 +287,18 @@ where
     type Out = f64;
     type Comparable = Self;
 
-    // `many_single_char_names`, `float_cmp`: the single-letter names
-    // `d, dd, h, g, k, l` and the exact `== 0.0` / `== same-lonlat`
-    // checks mirror `formula::andoyer_inverse::apply` in
-    // `formulas/andoyer_inverse.hpp:74-122` letter-for-letter; the
-    // exact-equality short-circuit is the intentional analogue of
-    // Boost's `math::equals` against zero on the same line numbers.
-    #[allow(clippy::many_single_char_names, clippy::float_cmp)]
     #[inline]
     fn distance(&self, a: &P1, b: &P2) -> Self::Out {
-        let calc = SpheroidCalc::from(self.spheroid);
         let (lon1, lat1) = lonlat_radians(a);
         let (lon2, lat2) = lonlat_radians(b);
-
-        // Mirrors the `math::equals(lon1, lon2) && math::equals(lat1, lat2)`
-        // short-circuit at `formulas/andoyer_inverse.hpp:69-72`.
-        if lon1 == lon2 && lat1 == lat2 {
-            return 0.0;
-        }
-
-        // Boost's `strategy::distance::geographic` runs
-        // `formula::meridian_inverse` before the general formula
-        // (`strategies/geographic/distance.hpp:91-112`): endpoints on one
-        // meridian, or on opposite meridians with the route over a pole,
-        // take the exact meridian-arc distance — the antipodal region
-        // where the general formula is least trustworthy.
         let meridian = Meridian {
             spheroid: self.spheroid,
         }
-        .inverse(lon1, lat1, lon2, lat2);
+        .inverse_to_order(lon1, lat1, lon2, lat2, 1);
         if meridian.meridian {
             return meridian.distance;
         }
-
-        let dlon = lon2 - lon1;
-        let cos_dlon = dlon.cos();
-        let sin_lat1 = lat1.sin();
-        let cos_lat1 = lat1.cos();
-        let sin_lat2 = lat2.sin();
-        let cos_lat2 = lat2.cos();
-
-        // Spherical great-circle term, clamped to [-1, 1] to defend
-        // against rounding pushing `cos_d` slightly outside the
-        // acos domain — same defence as
-        // `formulas/andoyer_inverse.hpp:90-95`.
-        let cos_d = (sin_lat1 * sin_lat2 + cos_lat1 * cos_lat2 * cos_dlon).clamp(-1.0, 1.0);
-
-        let d = cos_d.acos();
-        let sin_d = d.sin();
-
-        // Andoyer–Lambert flattening correction. Mirrors
-        // `formulas/andoyer_inverse.hpp:102-122`.
-        let k = (sin_lat1 - sin_lat2) * (sin_lat1 - sin_lat2);
-        let l = (sin_lat1 + sin_lat2) * (sin_lat1 + sin_lat2);
-        let three_sin_d = 3.0 * sin_d;
-
-        let one_minus_cos_d = 1.0 - cos_d;
-        let one_plus_cos_d = 1.0 + cos_d;
-
-        // `cos_d == 1` ⇒ near-coincident, `cos_d == -1` ⇒ antipodal.
-        // Boost guards `H` / `G` against the singular denominators
-        // with `math::equals(..., c0)` — we use exact `== 0.0`
-        // because the trig of finite inputs that escaped the
-        // earlier `lon1 == lon2 && lat1 == lat2` short-circuit can
-        // only land on exactly 0.0 in pathological cases.
-        let h = if one_minus_cos_d == 0.0 {
-            0.0
-        } else {
-            (d + three_sin_d) / one_minus_cos_d
-        };
-        let g = if one_plus_cos_d == 0.0 {
-            0.0
-        } else {
-            (d - three_sin_d) / one_plus_cos_d
-        };
-
-        let dd = -(calc.f / 4.0) * (h * k + g * l);
-
-        calc.a * (d + dd)
+        self.inverse::<false>(lon1, lat1, lon2, lat2).distance
     }
 
     #[inline]
@@ -285,13 +372,15 @@ mod tests {
     /// `strategy::distance::geographic<andoyer>`
     /// (`strategies/geographic/distance.hpp:91-112`) runs
     /// `formula::meridian_inverse` first, and `|Δlon| == 180°` routes
-    /// these pairs over a pole — twice the quarter meridian — instead of
-    /// the raw formula's half equatorial circumference (`20_037.5 km`),
-    /// which is longer than that known path. Tolerance is 1 km.
+    /// these pairs over a pole instead of the raw formula's half
+    /// equatorial circumference (`20_037.5 km`), which is longer than that
+    /// known path. Andoyer measures the route with the order-one meridian
+    /// series, `20_003_917.356955905` m in Boost (`aed7bc3`), 14 m short
+    /// of twice the quarter meridian.
     #[test]
     fn antipodal_equatorial() {
-        let expected_km = 2.0 * Meridian::WGS84.quarter_length() / 1000.0;
-        assert!((expected_km - 20_003.931).abs() < 0.01);
+        let expected = 20_003_917.356_955_905;
+        assert!((2.0 * Meridian::WGS84.quarter_length() - expected - 14.1).abs() < 0.01);
         for (a, b) in [
             (deg(0.0, 0.0), deg(180.0, 0.0)),
             (deg(0.0, 0.0), deg(-180.0, 0.0)),
@@ -300,8 +389,61 @@ mod tests {
             (deg(10.0, 20.0), deg(-170.0, -20.0)),
         ] {
             let d = Andoyer::WGS84.distance(&a, &b);
-            assert!((d / 1000.0 - expected_km).abs() < 1.0, "{d}");
+            assert!((d - expected).abs() < 1e-6, "{d}");
         }
+    }
+
+    /// Points on one meridian take Andoyer's order-one meridian series
+    /// (`strategies/geographic/parameters.hpp:186-189`), not the full arc:
+    /// Boost (`aed7bc3`) gives `110_573.13812782228` m for a degree from
+    /// the equator, 1.25 m short of the meridian, and `10_001_958.678477952`
+    /// m to the pole.
+    #[test]
+    fn meridian_pairs_take_the_order_one_series() {
+        let degree = Andoyer::WGS84.distance(&deg(0.0, 0.0), &deg(0.0, 1.0));
+        assert!((degree - 110_573.138_127_822_28).abs() < 1e-8, "{degree}");
+        let quarter = Andoyer::WGS84.distance(&deg(0.0, 0.0), &deg(0.0, 90.0));
+        assert!((quarter - 10_001_958.678_477_952).abs() < 1e-6, "{quarter}");
+        let full = Meridian::WGS84.arc_length(1.0_f64.to_radians());
+        assert!((full - degree - 1.25).abs() < 0.01);
+    }
+
+    /// The clamp branches of `normalize_azimuth`
+    /// (`andoyer_inverse.hpp:246-286`): the flattening correction must
+    /// not push an azimuth past 0 / ±π on the side it started.
+    #[test]
+    fn normalize_azimuth_clamps_all_four_quadrants() {
+        use super::normalize_azimuth;
+        let pi = core::f64::consts::PI;
+
+        // A ≥ 0, dA ≥ 0: an azimuth pushed below 0 clamps to 0.
+        let mut az = -0.1;
+        normalize_azimuth(&mut az, 0.05, 0.15);
+        assert_eq!(az, 0.0);
+
+        // A ≥ 0, dA < 0: an azimuth pushed above π clamps to π.
+        let mut az = pi + 0.1;
+        normalize_azimuth(&mut az, pi - 0.05, -0.15);
+        assert_eq!(az, pi);
+
+        // A < 0, dA ≤ 0: an azimuth pushed above 0 clamps to 0.
+        let mut az = 0.1;
+        normalize_azimuth(&mut az, -0.05, -0.15);
+        assert_eq!(az, 0.0);
+
+        // A < 0, dA > 0: an azimuth pushed below −π clamps to −π.
+        let mut az = -pi - 0.1;
+        normalize_azimuth(&mut az, -pi + 0.05, 0.15);
+        assert_eq!(az, -pi);
+
+        // In-range azimuths pass through untouched.
+        let mut az = 0.5;
+        normalize_azimuth(&mut az, 0.4, -0.1);
+        assert_eq!(az, 0.5);
+
+        let mut az = -0.5;
+        normalize_azimuth(&mut az, -0.4, -0.1);
+        assert_eq!(az, -0.5);
     }
 
     /// Andoyer's default constructor selects WGS84 — mirrors Boost's
@@ -345,5 +487,17 @@ mod tests {
     fn readonly_witness_computes_distance() {
         let d = _accepts_readonly_point(&Andoyer::WGS84, &deg(4.0, 52.0), &deg(3.0, 40.0));
         assert!(d > 1_000_000.0, "≈1336 km, got {d}");
+    }
+
+    /// Two longitudes at the same pole are one point to the formula: the
+    /// central angle rounds to zero and both azimuths stay at zero
+    /// (`formulas/andoyer_inverse.hpp:127-163`).
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_pole_under_two_longitudes_keeps_zero_azimuths() {
+        let half_pi = core::f64::consts::FRAC_PI_2;
+        let result = Andoyer::WGS84.inverse::<true>(0.0, half_pi, 1.0, half_pi);
+        assert!(result.distance.abs() < 1e-6, "got {}", result.distance);
+        assert_eq!((result.azimuth, result.reverse_azimuth), (0.0, 0.0));
     }
 }

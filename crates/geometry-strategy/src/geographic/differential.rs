@@ -1,8 +1,13 @@
 //! Reduced length and geodesic scale between spheroidal endpoints.
 //!
-//! Mirrors `boost::geometry::formula::differential_quantities` with the
-//! maximum third-order flattening expansion exposed by the C++ header.
+//! Mirrors `boost::geometry::formula::differential_quantities`. The public
+//! [`differential_quantities`] expands `J12` to the third order in the
+//! flattening, the most the C++ header offers; the direct formulas use the
+//! order Boost instantiates each of them with.
 
+#[cfg(feature = "std")]
+use geometry_coords::CoordinateScalar;
+#[cfg(feature = "std")]
 use geometry_cs::Spheroid;
 
 /// Differential quantities attached to a direct or inverse geodesic result.
@@ -26,13 +31,40 @@ impl Default for DifferentialQuantities {
 /// Calculate reduced length and geodesic scale for a solved geodesic.
 #[cfg(feature = "std")]
 #[must_use]
+pub fn differential_quantities(
+    longitude1: f64,
+    latitude1: f64,
+    longitude2: f64,
+    latitude2: f64,
+    azimuth: f64,
+    reverse_azimuth: f64,
+    spheroid: Spheroid,
+) -> DifferentialQuantities {
+    quantities_to_order::<3>(
+        longitude1,
+        latitude1,
+        longitude2,
+        latitude2,
+        azimuth,
+        reverse_azimuth,
+        spheroid,
+    )
+}
+
+/// [`differential_quantities`] with `J12` expanded to `ORDER` in the
+/// flattening: the `Order` a Boost formula instantiates
+/// `differential_quantities<CT, …, Order>` with — 2 for the Vincenty and
+/// Thomas formulas (`vincenty_direct.hpp:162`, `thomas_direct.hpp:202`),
+/// and 3 and above for the full third-order expansion.
+#[cfg(feature = "std")]
+#[must_use]
 #[allow(
     clippy::too_many_arguments,
     clippy::many_single_char_names,
     clippy::similar_names,
     reason = "the inputs and symbols mirror Boost's differential formula"
 )]
-pub fn differential_quantities(
+pub(crate) fn quantities_to_order<const ORDER: u32>(
     longitude1: f64,
     latitude1: f64,
     longitude2: f64,
@@ -50,7 +82,8 @@ pub fn differential_quantities(
     let mut sin_beta1 = one_minus_f * sin_latitude1;
     let mut sin_beta2 = one_minus_f * sin_latitude2;
 
-    if sin_beta1.abs() <= 1e-15 && sin_beta2.abs() <= 1e-15 {
+    // On the equator by `math::equals`, as Boost tests it.
+    if sin_beta1.tolerant_eq(0.0) && sin_beta2.tolerant_eq(0.0) {
         let sigma12 = longitude_difference / one_minus_f;
         let azimuth_sign = if azimuth >= 0.0 { 1.0 } else { -1.0 };
         return DifferentialQuantities {
@@ -77,7 +110,7 @@ pub fn differential_quantities(
     normalize(&mut sin_sigma2, &mut cos_sigma2);
     let sin_alpha0 = sin_alpha1 * cos_beta1;
     let cos_alpha0_squared = 1.0 - sin_alpha0 * sin_alpha0;
-    let j12 = j12_flattening(
+    let j12 = j12_flattening::<ORDER>(
         sin_sigma1,
         cos_sigma1,
         sin_sigma2,
@@ -85,12 +118,12 @@ pub fn differential_quantities(
         cos_alpha0_squared,
         f,
     );
-    let dn1 = (1.0 + ep2 * sin_beta1 * sin_beta1).sqrt();
-    let dn2 = (1.0 + ep2 * sin_beta2 * sin_beta2).sqrt();
-    let reduced_length = spheroid.polar_radius()
-        * (dn2 * cos_sigma1 * sin_sigma2
-            - dn1 * sin_sigma1 * cos_sigma2
-            - cos_sigma1 * cos_sigma2 * j12);
+    let dn1 = (1.0 + ep2 * (sin_beta1 * sin_beta1)).sqrt();
+    let dn2 = (1.0 + ep2 * (sin_beta2 * sin_beta2)).sqrt();
+    let reduced_length = (dn2 * (cos_sigma1 * sin_sigma2)
+        - dn1 * (sin_sigma1 * cos_sigma2)
+        - cos_sigma1 * cos_sigma2 * j12)
+        * spheroid.polar_radius();
     let cos_sigma12 = cos_sigma1 * cos_sigma2 + sin_sigma1 * sin_sigma2;
     let t = ep2 * (cos_beta1 - cos_beta2) * (cos_beta1 + cos_beta2) / (dn1 + dn2);
     let geodesic_scale = cos_sigma12 + (t * sin_sigma2 - cos_sigma2 * j12) * sin_sigma1 / dn1;
@@ -105,7 +138,7 @@ pub fn differential_quantities(
     clippy::similar_names,
     reason = "sigma-indexed symbols mirror Boost's differential formula"
 )]
-fn j12_flattening(
+fn j12_flattening<const ORDER: u32>(
     sin_sigma1: f64,
     cos_sigma1: f64,
     sin_sigma2: f64,
@@ -113,12 +146,18 @@ fn j12_flattening(
     cos_alpha0_squared: f64,
     flattening: f64,
 ) -> f64 {
+    if ORDER == 0 {
+        return 0.0;
+    }
     let sigma12 = (cos_sigma1 * sin_sigma2 - sin_sigma1 * cos_sigma2)
         .atan2(cos_sigma1 * cos_sigma2 + sin_sigma1 * sin_sigma2);
     let sin_2sigma1 = 2.0 * cos_sigma1 * sin_sigma1;
     let sin_2sigma2 = 2.0 * cos_sigma2 * sin_sigma2;
     let sin_2sigma12 = sin_2sigma2 - sin_2sigma1;
     let l1 = sigma12 - sin_2sigma12 / 2.0;
+    if ORDER == 1 {
+        return cos_alpha0_squared * flattening * l1;
+    }
     let sin_4sigma1 = 2.0 * sin_2sigma1 * (cos_sigma1 * cos_sigma1 - sin_sigma1 * sin_sigma1);
     let sin_4sigma2 = 2.0 * sin_2sigma2 * (cos_sigma2 * cos_sigma2 - sin_sigma2 * sin_sigma2);
     let sin_4sigma12 = sin_4sigma2 - sin_4sigma1;
@@ -126,6 +165,9 @@ fn j12_flattening(
         + (-8.0 * cos_alpha0_squared + 12.0) * sin_2sigma12
         + (12.0 * cos_alpha0_squared - 24.0) * sigma12)
         / 16.0;
+    if ORDER == 2 {
+        return cos_alpha0_squared * flattening * (l1 + flattening * l2);
+    }
     let cos_alpha0_fourth = cos_alpha0_squared * cos_alpha0_squared;
     let sin_2sigma1_cubed = sin_2sigma1 * sin_2sigma1 * sin_2sigma1;
     let sin_2sigma2_cubed = sin_2sigma2 * sin_2sigma2 * sin_2sigma2;
@@ -139,7 +181,41 @@ fn j12_flattening(
 
 #[cfg(feature = "std")]
 fn normalize(x: &mut f64, y: &mut f64) {
-    let length = x.hypot(*y);
+    // `sqrt(x² + y²)`, as Boost's `differential_quantities::normalize`
+    // has it, rather than the differently rounded `hypot`.
+    let length = (*x * *x + *y * *y).sqrt();
     *x /= length;
     *y /= length;
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::quantities_to_order;
+    use crate::geographic::KarneyInverse;
+    use geometry_cs::Spheroid;
+
+    /// Order zero drops `J12` altogether, leaving the spherical reduced
+    /// length; each order in the flattening then closes on the third.
+    #[test]
+    fn each_j12_order_closes_on_the_third() {
+        let (lon1, lat1, lon2, lat2) = (0.1, 0.3, 0.9, 0.8);
+        let inverse = KarneyInverse::WGS84.apply(lon1, lat1, lon2, lat2);
+        let at = |order: u32| {
+            let (alpha1, alpha2) = (inverse.azimuth, inverse.reverse_azimuth);
+            let spheroid = Spheroid::WGS84;
+            match order {
+                0 => quantities_to_order::<0>(lon1, lat1, lon2, lat2, alpha1, alpha2, spheroid),
+                1 => quantities_to_order::<1>(lon1, lat1, lon2, lat2, alpha1, alpha2, spheroid),
+                _ => quantities_to_order::<3>(lon1, lat1, lon2, lat2, alpha1, alpha2, spheroid),
+            }
+        };
+        let third = at(3).reduced_length;
+        let zeroth = (at(0).reduced_length - third).abs();
+        let first = (at(1).reduced_length - third).abs();
+        assert!(
+            first < zeroth,
+            "order 1 off by {first}, order 0 by {zeroth}"
+        );
+        assert!((inverse.reduced_length - third).abs() < 1.0);
+    }
 }

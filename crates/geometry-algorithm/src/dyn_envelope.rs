@@ -7,10 +7,10 @@
 //! Every single/multi variant is supported (each per-kind envelope
 //! strategy resolves through the tag-keyed
 //! [`geometry_strategy::EnvelopeStrategyForKind`] picker). The
-//! `GeometryCollection` arm returns `Err(DynKindMismatch)`: computing
-//! its envelope needs a box-merge primitive v1 does not yet ship (and
-//! an empty collection has no well-defined envelope). That arm lands
-//! when the merge helper does.
+//! `GeometryCollection` arm returns `Err(DynKindMismatch)`: Boost's
+//! `envelope<geometry_collection_tag>` — the members' boxes merged
+//! breadth-first, empty members skipped, the inverse box when none is
+//! left — is not ported yet.
 
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
@@ -39,7 +39,7 @@ const SUPPORTED: &[&[DynKind]] = &[
 /// # Errors
 ///
 /// Returns `Err(DynKindMismatch)` for `GeometryCollection` (see the
-/// module docs — it needs a box-merge primitive v1 lacks).
+/// module docs — its envelope is not ported yet).
 pub fn envelope_dyn<S, Cs>(g: &DynGeometry<S, Cs>) -> Result<Box<Point<S, 2, Cs>>, DynKindMismatch>
 where
     S: CoordinateScalar,

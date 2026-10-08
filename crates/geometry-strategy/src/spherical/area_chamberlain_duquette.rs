@@ -14,7 +14,7 @@ use geometry_tag::SameAs;
 use geometry_trait::{Point, PointOrder, Polygon, Ring};
 
 use crate::area::AreaStrategy;
-use crate::normalise::{HasAngularUnits, lonlat_radians};
+use crate::normalise::{HasAngularUnits, longitude_distance_signed, lonlat_radians};
 
 /// Chamberlain–Duquette area for a spherical polygon.
 ///
@@ -29,9 +29,10 @@ pub struct ChamberlainDuquetteArea {
 }
 
 impl ChamberlainDuquetteArea {
-    /// Mean Earth radius in metres.
+    /// The Earth sphere of [`SphericalArea::EARTH`](super::SphericalArea::EARTH),
+    /// in metres, so the two area strategies measure one sphere.
     pub const EARTH: Self = Self {
-        radius: 6_371_008.8,
+        radius: super::SphericalArea::EARTH.radius,
     };
 
     /// Unit sphere; output is a solid angle in steradians.
@@ -81,17 +82,13 @@ where
         let previous = coordinates[(index + coordinates.len() - 1) % coordinates.len()];
         let current = coordinates[index];
         let next = coordinates[(index + 1) % coordinates.len()];
-        sum += longitude_delta(next.0 - previous.0) * current.1.sin();
+        sum += longitude_distance_signed(previous.0, next.0) * current.1.sin();
     }
     let signed = sum * radius * radius / 2.0;
     match ring.point_order() {
         PointOrder::Clockwise => signed,
         PointOrder::CounterClockwise => -signed,
     }
-}
-
-fn longitude_delta(delta: f64) -> f64 {
-    (delta + core::f64::consts::PI).rem_euclid(core::f64::consts::TAU) - core::f64::consts::PI
 }
 
 #[cfg(test)]

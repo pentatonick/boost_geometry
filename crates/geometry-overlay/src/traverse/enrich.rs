@@ -251,7 +251,7 @@ mod tests {
         let enriched = enrich(&one, &empty, &[]);
 
         assert_eq!(enriched.rings[0], vec![Node::Vertex(P::new(1.0, 2.0))]);
-        assert!(enriched.rings[1].is_empty());
+        assert_eq!(enriched.rings[1].len(), 0);
     }
 
     #[test]

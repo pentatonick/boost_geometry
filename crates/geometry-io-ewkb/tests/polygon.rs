@@ -100,3 +100,25 @@ fn empty_exterior_or_interior_does_not_erase_other_rings() {
         }
     }
 }
+
+#[test]
+fn open_polygon_is_written_closed() {
+    let open = Polygon::<Pt, true, false>::new(Ring::from_vec(vec![
+        Pt::new(0.0, 0.0),
+        Pt::new(0.0, 2.0),
+        Pt::new(2.0, 2.0),
+    ]));
+    let closed = DynGeometry::Polygon(Polygon::new(Ring::from_vec(vec![
+        Pt::new(0.0, 0.0),
+        Pt::new(0.0, 2.0),
+        Pt::new(2.0, 2.0),
+        Pt::new(0.0, 0.0),
+    ])));
+    for order in [ByteOrder::LittleEndian, ByteOrder::BigEndian] {
+        let bytes = to_ewkb_polygon(&open, Some(Srid::new(4326)), order);
+        let read = from_ewkb(&bytes).unwrap();
+        assert_eq!(read.geometry, closed);
+        assert_eq!(read.srid, Some(Srid::new(4326)));
+        assert_eq!(bytes, to_ewkb(&closed, Some(Srid::new(4326)), order));
+    }
+}

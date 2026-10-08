@@ -130,7 +130,7 @@ fn distance_dyn_supported_and_unsupported() {
     // Unsupported in v1: Polygon × Polygon.
     let err = distance_dyn(&xs[2], &xs[2]).unwrap_err();
     assert_eq!(err.got, vec![DynKind::Polygon, DynKind::Polygon]);
-    assert!(!err.expected.is_empty());
+    assert_ne!(err.expected.len(), 0);
 }
 
 #[test]

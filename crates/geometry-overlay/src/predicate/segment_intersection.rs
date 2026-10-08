@@ -187,10 +187,17 @@ where
 /// Intersection point of the two infinite lines through `p1p2` and
 /// `p3p4`, assuming a proper crossing has already been confirmed (so
 /// the denominator is non-zero).
+///
+/// Two segments a rounding error from parallel cross wherever rounding
+/// puts it: the solved point can land beyond the end of either. The
+/// crossing is on both, so a point past either segment's end — read along
+/// the axis the segment runs more along, as the other can be a rounding
+/// error wide — is replaced by the endpoint lying nearest the other
+/// segment, where two segments that close to parallel come together.
 fn line_cross_point<P>(p1: &P, p2: &P, p3: &P, p4: &P) -> P
 where
     P: PointMut + Default,
-    P::Scalar: CoordinateScalar,
+    P::Scalar: CoordinateScalar + Into<f64>,
 {
     let x1 = p1.get::<0>();
     let y1 = p1.get::<1>();
@@ -220,7 +227,50 @@ where
     let t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
     let px = x1 + t * (x2 - x1);
     let py = y1 + t * (y2 - y1);
-    make_point::<P>(px, py)
+    let within = |s1: &P, s2: &P| {
+        let (ax, ay) = (s1.get::<0>(), s1.get::<1>());
+        let (bx, by) = (s2.get::<0>(), s2.get::<1>());
+        if (bx - ax).abs() >= (by - ay).abs() {
+            min(ax, bx) <= px && px <= max(ax, bx)
+        } else {
+            min(ay, by) <= py && py <= max(ay, by)
+        }
+    };
+    if within(p1, p2) && within(p3, p4) {
+        return make_point::<P>(px, py);
+    }
+    let nearest = [(p1, p3, p4), (p2, p3, p4), (p3, p1, p2), (p4, p1, p2)]
+        .into_iter()
+        .map(|(point, s1, s2)| (point, squared_distance_to_segment(point, s1, s2)))
+        .fold(
+            None,
+            |best: Option<(&P, f64)>, (point, distance)| match best {
+                Some((_, held)) if held <= distance => best,
+                _ => Some((point, distance)),
+            },
+        )
+        .map_or(p1, |(point, _)| point);
+    clone_point(nearest)
+}
+
+/// The squared distance from `p` to the segment `s1 s2`.
+fn squared_distance_to_segment<P>(p: &P, s1: &P, s2: &P) -> f64
+where
+    P: Point,
+    P::Scalar: Into<f64>,
+{
+    let (px, py): (f64, f64) = (p.get::<0>().into(), p.get::<1>().into());
+    let (ax, ay): (f64, f64) = (s1.get::<0>().into(), s1.get::<1>().into());
+    let (bx, by): (f64, f64) = (s2.get::<0>().into(), s2.get::<1>().into());
+    let (dx, dy) = (bx - ax, by - ay);
+    let length_squared = dx * dx + dy * dy;
+    let along = if length_squared > 0.0 {
+        (((px - ax) * dx + (py - ay) * dy) / length_squared).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (ex, ey) = (px - (ax + along * dx), py - (ay + along * dy));
+    ex * ex + ey * ey
 }
 
 /// Whether the collinear point `p` lies within the axis-aligned
@@ -308,7 +358,9 @@ mod tests {
     //! `test/algorithms/overlay/segment_identifier.cpp` /
     //! `get_turn_info.cpp`.
 
-    use super::{SegmentIntersection, segment_intersection};
+    use super::{
+        SegmentIntersection, line_cross_point, segment_intersection, squared_distance_to_segment,
+    };
     use geometry_cs::Cartesian;
     use geometry_model::{Point2D, Segment};
     use geometry_trait::Point as _;
@@ -438,7 +490,7 @@ mod tests {
         };
         // Exact equality on purpose: the edge is horizontal, so the crossing's
         // y is one of the inputs and no arithmetic should alter it.
-        #[expect(
+        #[allow(
             clippy::float_cmp,
             reason = "the crossing's y must reproduce the horizontal edge's y bit for bit"
         )]
@@ -458,5 +510,29 @@ mod tests {
             side.abs() < 1e-19,
             "the crossing must sit on the sloped segment, off by {side:e}"
         );
+    }
+
+    /// A crossing computed off either segment — rounding the side tests
+    /// did not see — falls back on the endpoint nearest the other segment.
+    /// Here the lines meet at (2, 0), past the end of `a`; `a`'s end at
+    /// (1, 0) is the endpoint closest to `b`.
+    #[test]
+    fn a_crossing_off_the_segments_falls_back_on_the_nearest_endpoint() {
+        let crossing: P = line_cross_point(
+            &P::new(0.0, 0.0),
+            &P::new(1.0, 0.0),
+            &P::new(2.0, -1.0),
+            &P::new(2.0, 1.0),
+        );
+        assert_eq!(crossing, P::new(1.0, 0.0));
+    }
+
+    /// A zero-length segment is its one point: the distance to it is the
+    /// distance to that point.
+    #[test]
+    fn distance_to_a_zero_length_segment_is_to_its_point() {
+        let d =
+            squared_distance_to_segment(&P::new(3.0, 4.0), &P::new(0.0, 0.0), &P::new(0.0, 0.0));
+        assert!((d - 25.0).abs() < 1e-12, "got {d}");
     }
 }

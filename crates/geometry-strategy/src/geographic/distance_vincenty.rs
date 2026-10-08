@@ -14,7 +14,7 @@
 //! Like [`Andoyer`](super::Andoyer), this implementation hardcodes
 //! `Scalar = f64` on both inputs (the T40 / T43 convention). The
 //! kernel reaches for `f64::sin` / `cos` / `atan2` / `sqrt` directly
-//! without growing the [`CoordinateScalar`](geometry_coords::CoordinateScalar)
+//! without growing the [`CoordinateScalar`]
 //! trait surface; mixed-scalar support folds in alongside the
 //! `Promote` lattice once a real caller appears.
 //!
@@ -40,11 +40,19 @@
 //! tag). Callers opt into Vincenty via
 //! `geometry_algorithm::distance_with(a, b, Vincenty::WGS84)`.
 
-use geometry_cs::{CoordinateSystem, GeographicFamily, Spheroid};
+use geometry_cs::Spheroid;
+#[cfg(feature = "std")]
+use geometry_cs::{CoordinateSystem, GeographicFamily};
+#[cfg(feature = "std")]
 use geometry_tag::SameAs;
+#[cfg(feature = "std")]
 use geometry_trait::Point;
 
+#[cfg(feature = "std")]
 use crate::distance::DistanceStrategy;
+
+#[cfg(feature = "std")]
+use geometry_coords::CoordinateScalar;
 
 #[cfg(feature = "std")]
 use crate::geographic::Meridian;
@@ -142,58 +150,57 @@ where
     type Out = f64;
     type Comparable = Self;
 
-    // `many_single_char_names`, `float_cmp`, `similar_names`: the
-    // single-letter names `A, B, C, L, u_sq`, the `sin_sigma` /
-    // `sin2_sigma` / `cos_2sigma_m` / `cos2_2sigma_m` family, and the
-    // exact `== same-lonlat` short-circuit mirror
+    // `many_single_char_names`, `similar_names`: the single-letter
+    // names `A, B, C, L, u_sq` and the `sin_sigma` / `sin2_sigma` /
+    // `cos_2sigma_m` / `cos2_2sigma_m` family mirror
     // `formula::vincenty_inverse::apply` in
-    // `formulas/vincenty_inverse.hpp:76-187` letter-for-letter; the
-    // exact-equality early-out is the intentional analogue of Boost's
-    // `math::equals` against the same inputs at lines 76-79.
-    #[allow(
-        clippy::many_single_char_names,
-        clippy::float_cmp,
-        clippy::similar_names
-    )]
+    // `formulas/vincenty_inverse.hpp:76-187` letter-for-letter.
+    #[allow(clippy::many_single_char_names, clippy::similar_names)]
     #[inline]
     fn distance(&self, a: &P1, b: &P2) -> Self::Out {
         let calc = SpheroidCalc::from(self.spheroid);
         let (lon1, lat1) = lonlat_radians(a);
         let (lon2, lat2) = lonlat_radians(b);
 
-        // Mirrors the `math::equals(lat1, lat2) && math::equals(lon1, lon2)`
-        // short-circuit at `formulas/vincenty_inverse.hpp:76-79`.
-        if lon1 == lon2 && lat1 == lat2 {
-            return 0.0;
-        }
-
         // Boost's `strategy::distance::geographic` runs
         // `formula::meridian_inverse` before the general formula
-        // (`strategies/geographic/distance.hpp:91-112`): endpoints on one
-        // meridian, or on opposite meridians with the route over a pole,
-        // take the exact meridian-arc distance — the antipodal region
+        // (`strategies/geographic/distance.hpp:91-112`), at Vincenty's
+        // order-four series (`strategies/geographic/parameters.hpp:196-199`):
+        // endpoints on one meridian, or on opposite meridians with the route
+        // over a pole, take the meridian-arc distance — the antipodal region
         // where the general formula is least trustworthy.
         let meridian = Meridian {
             spheroid: self.spheroid,
         }
-        .inverse(lon1, lat1, lon2, lat2);
+        .inverse_to_order(lon1, lat1, lon2, lat2, 4);
         if meridian.meridian {
             return meridian.distance;
+        }
+
+        // Mirrors the `math::equals(lat1, lat2) && math::equals(lon1, lon2)`
+        // short-circuit at `formulas/vincenty_inverse.hpp:76-79`.
+        if lat1.tolerant_eq(lat2) && lon1.tolerant_eq(lon2) {
+            return 0.0;
         }
 
         let pi = core::f64::consts::PI;
         let two_pi = 2.0 * pi;
 
-        // λ: difference in longitude on an auxiliary sphere. Mirrors
-        // `formulas/vincenty_inverse.hpp:92-97`.
+        // λ: difference in longitude on an auxiliary sphere, starting from
+        // the difference as given while `L` is folded into `[−π, π]`.
+        // Mirrors `formulas/vincenty_inverse.hpp:92-97`, except that Boost
+        // folds once: past three half-turns of longitude its `L` stays
+        // outside `[−π, π]`, so λ fails the `|λ| < π` test after one step
+        // and the distance comes back unconverged (36 km short for
+        // `(540 22.9)`–`(−67.2 −20)`).
         let mut big_l = lon2 - lon1;
-        if big_l < -pi {
+        let mut lambda = big_l;
+        while big_l < -pi {
             big_l += two_pi;
         }
-        if big_l > pi {
+        while big_l > pi {
             big_l -= two_pi;
         }
-        let mut lambda = big_l;
 
         let f = calc.f;
         let a_radius = calc.a;
@@ -249,8 +256,8 @@ where
             cos2_alpha = 1.0 - sin_alpha * sin_alpha;
 
             // (18) cos 2σ_m — guard the equatorial line (cos²α == 0)
-            // exactly as `formulas/vincenty_inverse.hpp:148`.
-            cos_2sigma_m = if cos2_alpha == 0.0 {
+            // as `formulas/vincenty_inverse.hpp:148` does.
+            cos_2sigma_m = if cos2_alpha.tolerant_eq(0.0) {
                 0.0
             } else {
                 cos_sigma - 2.0 * sin_u1 * sin_u2 / cos2_alpha
@@ -527,5 +534,59 @@ mod tests {
             (d - polar_route).abs() < 1.0,
             "Vincenty returned {d} m, polar geodesic is {polar_route} m"
         );
+    }
+
+    /// Points on one meridian take Vincenty's order-four meridian series
+    /// (`strategies/geographic/parameters.hpp:196-199`): Boost (`aed7bc3`)
+    /// gives `110_574.38855779087` m for a degree from the equator.
+    #[test]
+    fn meridian_pairs_take_the_order_four_series() {
+        let d = Vincenty::WGS84.distance(&deg(0.0, 0.0), &deg(0.0, 1.0));
+        assert!((d - 110_574.388_557_790_87).abs() < 1e-8, "{d}");
+    }
+
+    /// Longitudes a hair apart are a meridian only within `math::equals`:
+    /// two points `1e-12°` apart on a parallel are `1.0345e-7` m apart in
+    /// Boost (`aed7bc3`), not on one meridian at zero.
+    #[test]
+    fn near_meridian_pairs_keep_their_longitude_offset() {
+        let d = Vincenty::WGS84.distance(
+            &deg(89.555_457_241_503_35, 20.126_505_525_451_35),
+            &deg(89.555_457_241_504_34, 20.126_505_525_451_35),
+        );
+        assert!((d - 1.034_546_682_590_203_2e-7).abs() < 1e-15, "{d}");
+    }
+
+    /// A longitude given past a full turn names the same meridian: Boost
+    /// folds the difference once, so from `540°` its iteration stops after
+    /// one step 36 km short; the fold here is complete.
+    #[test]
+    fn longitudes_past_a_turn_fold_completely() {
+        let wrapped = Vincenty::WGS84.distance(
+            &deg(540.0, 22.926_475_873_701_804),
+            &deg(-67.184_791_442_882_84, -20.001_872_458_458_777),
+        );
+        let folded = Vincenty::WGS84.distance(
+            &deg(180.0, 22.926_475_873_701_804),
+            &deg(-67.184_791_442_882_84, -20.001_872_458_458_777),
+        );
+        assert!((wrapped - folded).abs() < 1e-6, "{wrapped} vs {folded}");
+        assert!((folded - 13_121_974.745_318_633).abs() < 1e-6, "{folded}");
+    }
+
+    /// Longitudes one ulp apart are one longitude by `math::equals`,
+    /// which scales its epsilon by their magnitude, yet their difference
+    /// is too large to make the pair a meridian: the coincident
+    /// short-circuit answers zero.
+    #[test]
+    fn longitudes_one_ulp_apart_are_coincident() {
+        use geometry_cs::Radian;
+
+        type Rad = WithCs<Adapt<[f64; 2]>, Geographic<Radian>>;
+        let lon = 3.0_f64;
+        let next = f64::from_bits(lon.to_bits() + 1);
+        let a: Rad = WithCs::new(Adapt([lon, 0.5]));
+        let b: Rad = WithCs::new(Adapt([next, 0.5]));
+        assert_eq!(Vincenty::WGS84.distance(&a, &b), 0.0);
     }
 }

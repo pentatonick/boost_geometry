@@ -10,6 +10,8 @@ use geometry_trait::Point;
 #[cfg(feature = "std")]
 use crate::normalise::{HasAngularUnits, lonlat_radians};
 #[cfg(feature = "std")]
+use crate::spherical::direct::spherical_direct;
+#[cfg(feature = "std")]
 use geometry_cs::AngleUnit;
 #[cfg(feature = "std")]
 use geometry_model::Point2D;
@@ -55,17 +57,9 @@ where
 
     fn destination(&self, origin: &P, bearing: f64, distance: f64) -> Self::Output {
         let (longitude, latitude) = lonlat_radians(origin);
-        let angular_distance = distance / self.radius;
-        let sin_latitude = latitude.sin();
-        let cos_latitude = latitude.cos();
-        let sin_distance = angular_distance.sin();
-        let cos_distance = angular_distance.cos();
-        let latitude2 =
-            (sin_latitude * cos_distance + cos_latitude * sin_distance * bearing.cos()).asin();
-        let longitude2 = longitude
-            + (bearing.sin() * sin_distance * cos_latitude)
-                .atan2(cos_distance - sin_latitude * latitude2.sin());
-        point_from_radians::<P>(normalize_longitude(longitude2), latitude2)
+        let (longitude2, latitude2) =
+            spherical_direct(longitude, latitude, distance / self.radius, bearing);
+        point_from_radians::<P>(longitude2, latitude2)
     }
 }
 
@@ -104,9 +98,4 @@ where
         Units::<P>::from_radians(longitude),
         Units::<P>::from_radians(latitude),
     )
-}
-
-#[cfg(feature = "std")]
-fn normalize_longitude(longitude: f64) -> f64 {
-    (longitude + core::f64::consts::PI).rem_euclid(core::f64::consts::TAU) - core::f64::consts::PI
 }

@@ -9,6 +9,8 @@
 //! (`length.hpp:251-265`) recursively sums the length of every member,
 //! so this wrapper does too.
 
+use alloc::collections::VecDeque;
+
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_model::{DynGeometry, Linestring, Point};
@@ -25,36 +27,52 @@ use crate::length::length;
 /// matching Boost's contract (`length.hpp:75-80`, plus the
 /// `geometry_collection_tag` specialisation at `:251-265`).
 #[must_use]
-pub fn length_dyn<S, Cs>(g: &DynGeometry<S, Cs>) -> S
+pub fn length_dyn<S, Cs>(g: &DynGeometry<S, Cs>) -> S::Measure
 where
     S: CoordinateScalar,
     Cs: CoordinateSystem,
     Cs::Family: SameAs<CartesianFamily> + DefaultLength<Cs::Family>,
-    CartesianLength: LengthStrategy<Linestring<Point<S, 2, Cs>>, Out = S>,
+    CartesianLength: LengthStrategy<Linestring<Point<S, 2, Cs>>, Out = S::Measure>,
     DefaultLengthStrategy<Linestring<Point<S, 2, Cs>>>:
-        LengthStrategy<Linestring<Point<S, 2, Cs>>, Out = S> + Default,
+        LengthStrategy<Linestring<Point<S, 2, Cs>>, Out = S::Measure> + Default,
 {
     use DynGeometry::{
         GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon,
         Point as PointArm, Polygon,
     };
-    // A collection's length is the sum of its members' lengths
-    // (`length.hpp:251-265` recurses via `visit_breadth_first`). The walk
-    // is an explicit work-list rather than recursion so an adversarially
-    // deep `GeometryCollection` chain cannot overflow the native stack (an
-    // uncatchable process abort).
-    let mut total = S::ZERO;
-    let mut stack = alloc::vec![g];
-    while let Some(node) = stack.pop() {
-        match node {
-            LineString(ls) => total = total + length(ls),
-            MultiLineString(ml) => {
-                total = ml.0.iter().fold(total, |acc, ls| acc + length(ls));
+    let zero = <S::Measure as CoordinateScalar>::ZERO;
+    let leaf = |node: &DynGeometry<S, Cs>| match node {
+        LineString(ls) => length(ls),
+        // `length<multi_linestring_tag>` sums its own members from zero
+        // (`length.hpp:147-165`, `multi_sum.hpp:31-43`) before a
+        // collection adds it.
+        MultiLineString(ml) => ml.0.iter().fold(zero, |sum, ls| sum + length(ls)),
+        // Non-linear leaf kinds have no length — Boost returns 0.
+        PointArm(_) | Polygon(_) | MultiPoint(_) | MultiPolygon(_) | GeometryCollection(_) => zero,
+    };
+    let GeometryCollection(members) = g else {
+        return leaf(g);
+    };
+    // A collection's length is the sum of its members' lengths, added in
+    // the order of Boost's `visit_breadth_first` (`length.hpp:251-265`,
+    // `algorithms/detail/visit.hpp:193-241`): a collection's own members
+    // left to right, each nested collection queued and walked after them.
+    // A floating-point sum depends on that order. The queue, not
+    // recursion, also keeps an adversarially deep `GeometryCollection`
+    // chain off the native stack (an uncatchable process abort).
+    let mut total = zero;
+    let mut queue = VecDeque::new();
+    let mut members = members.iter();
+    loop {
+        for member in members {
+            match member {
+                GeometryCollection(nested) => queue.push_back(nested),
+                _ => total = total + leaf(member),
             }
-            GeometryCollection(items) => stack.extend(items.iter()),
-            // Non-linear leaf kinds have no length — Boost returns 0.
-            PointArm(_) | Polygon(_) | MultiPoint(_) | MultiPolygon(_) => {}
+        }
+        match queue.pop_front() {
+            Some(nested) => members = nested.iter(),
+            None => return total,
         }
     }
-    total
 }

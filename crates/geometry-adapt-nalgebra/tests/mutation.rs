@@ -57,3 +57,13 @@ fn na_vector3_set_get_and_unwrap() {
     assert_eq!((v.get::<0>(), v.get::<1>(), v.get::<2>()), (7.0, 8.0, 9.0));
     assert_eq!(v.into_inner(), Vector3::new(7.0, 8.0, 9.0));
 }
+
+/// Every wrapper defaults to the origin, as the wrapped `nalgebra` type
+/// does.
+#[test]
+fn every_wrapper_defaults_to_the_origin() {
+    assert_eq!(NaPoint2::<f64>::default().into_inner(), Point2::origin());
+    assert_eq!(NaPoint3::<f64>::default().into_inner(), Point3::origin());
+    assert_eq!(NaVector2::<f64>::default().into_inner(), Vector2::zeros());
+    assert_eq!(NaVector3::<f64>::default().into_inner(), Vector3::zeros());
+}

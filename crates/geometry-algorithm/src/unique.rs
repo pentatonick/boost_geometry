@@ -9,17 +9,20 @@
 //! * `MultiLinestring`     → dedup each member
 //! * `MultiPolygon`        → dedup each member polygon
 //!
-//! Two points are equal iff every coordinate matches. Boost uses `==`
-//! on the coordinate type, which for floats is exact equality; we
-//! mirror that via [`Point::get`](geometry_trait::Point::get) per
-//! dimension, driven by [`geometry_trait::fold_dims`].
+//! Two points are equal by Boost's default point comparison,
+//! `geometry::equal_to` (`policies/compare.hpp:370-470`), which
+//! [`EqualTo`] ports: `math::equals` in every dimension of a Cartesian
+//! point; on a spherical or geographic one, `−180°` and `180°` name one
+//! meridian and every longitude at a pole names the pole
+//! (`strategies/spherical/compare.hpp`).
 
+use geometry_cs::CoordinateSystem;
 use geometry_model::{Linestring, MultiLinestring, MultiPolygon, Polygon, Ring};
-use geometry_trait::{
-    Linestring as LinestringTrait, Point as PointTrait, Polygon as PolygonTrait, fold_dims,
-};
+use geometry_strategy::compare::ComparisonFamily;
+use geometry_strategy::{ALL_DIMENSIONS, EqualTo};
+use geometry_trait::{Linestring as LinestringTrait, Point as PointTrait, Polygon as PolygonTrait};
 
-/// Collapse runs of coordinate-equal consecutive points in `g`.
+/// Collapse runs of equal consecutive points in `g`.
 ///
 /// Mirrors `boost::geometry::unique(g)` from
 /// `boost/geometry/algorithms/unique.hpp`.
@@ -33,40 +36,41 @@ pub trait Unique {
     fn unique(&mut self);
 }
 
-/// Coordinate-wise equality. Mirrors Boost's `operator==` path through
-/// `traits::access<P, D>::get` — exact (bitwise-via-`==`) per Boost.
-fn points_equal<P: PointTrait>(a: &P, b: &P) -> bool {
-    // `fold_dims` recurses over the dimensions with a hard-coded const
-    // `D`; the closure receives the runtime index only as a label, so
-    // we re-issue `get::<D>` with matching literals.
-    fold_dims(true, a, |acc, _p, d| {
-        acc && match d {
-            0 => a.get::<0>() == b.get::<0>(),
-            1 => a.get::<1>() == b.get::<1>(),
-            2 => a.get::<2>() == b.get::<2>(),
-            3 => a.get::<3>() == b.get::<3>(),
-            _ => unreachable!("fold_dims caps at MAX_DIM"),
-        }
-    })
+/// Drops each point equal to the last one kept, as `std::unique` with
+/// Boost's `equal_to` does.
+fn dedup_vec<P>(v: &mut alloc::vec::Vec<P>)
+where
+    P: PointTrait,
+    <P::Cs as CoordinateSystem>::Family: ComparisonFamily<P, P>,
+{
+    v.dedup_by(|next, kept| EqualTo::<ALL_DIMENSIONS>.apply(kept, next));
 }
 
-fn dedup_vec<P: PointTrait>(v: &mut alloc::vec::Vec<P>) {
-    v.dedup_by(|a, b| points_equal::<P>(a, b));
-}
-
-impl<P: PointTrait> Unique for Linestring<P> {
+impl<P> Unique for Linestring<P>
+where
+    P: PointTrait,
+    <P::Cs as CoordinateSystem>::Family: ComparisonFamily<P, P>,
+{
     fn unique(&mut self) {
         dedup_vec(&mut self.0);
     }
 }
 
-impl<P: PointTrait, const CW: bool, const CL: bool> Unique for Ring<P, CW, CL> {
+impl<P, const CW: bool, const CL: bool> Unique for Ring<P, CW, CL>
+where
+    P: PointTrait,
+    <P::Cs as CoordinateSystem>::Family: ComparisonFamily<P, P>,
+{
     fn unique(&mut self) {
         dedup_vec(&mut self.0);
     }
 }
 
-impl<P: PointTrait, const CW: bool, const CL: bool> Unique for Polygon<P, CW, CL> {
+impl<P, const CW: bool, const CL: bool> Unique for Polygon<P, CW, CL>
+where
+    P: PointTrait,
+    <P::Cs as CoordinateSystem>::Family: ComparisonFamily<P, P>,
+{
     fn unique(&mut self) {
         dedup_vec(&mut self.outer.0);
         for inner in &mut self.inners {
@@ -189,9 +193,8 @@ mod tests {
         }
     }
 
-    /// `points_equal` compares the third ordinate for 3D points — the
-    /// `2 =>` arm. Two points equal in x,y but differing in z are *not*
-    /// merged.
+    /// The third ordinate of a 3D point counts: two points equal in x,y
+    /// but differing in z are *not* merged.
     #[test]
     fn three_d_points_compare_all_three_ordinates() {
         type P3 = Point3D<f64, Cartesian>;
@@ -204,8 +207,8 @@ mod tests {
         assert_eq!(ls.points().count(), 2);
     }
 
-    /// `points_equal` reaches the `3 =>` arm for 4D points (`MAX_DIM)`:
-    /// two points differing only in the fourth ordinate are distinct.
+    /// So does the fourth of a 4D point (`MAX_DIM`): two points
+    /// differing only in it are distinct.
     #[test]
     fn four_d_points_compare_the_fourth_ordinate() {
         type P4 = Point<f64, 4, Cartesian>;
@@ -222,5 +225,37 @@ mod tests {
         // a, b differ (4th ordinate); dup == a but is not adjacent to a,
         // so nothing collapses.
         assert_eq!(ls.points().count(), 3);
+    }
+
+    /// On a sphere `−180°` and `180°` are one meridian and every longitude
+    /// at a pole is the pole, so Boost (`aed7bc3`) collapses both pairs;
+    /// `370°` is not normalised to `10°`, and stays.
+    #[test]
+    fn spherical_points_on_one_meridian_or_pole_collapse() {
+        use geometry_cs::{Degree, Spherical};
+        use geometry_trait::Point as _;
+        type S = Point2D<f64, Spherical<Degree>>;
+        let mut ls: geometry_model::Linestring<S> = geometry_model::Linestring(vec![
+            S::new(180.0, 10.0),
+            S::new(-180.0, 10.0),
+            S::new(0.0, 90.0),
+            S::new(45.0, 90.0),
+            S::new(10.0, 20.0),
+            S::new(370.0, 20.0),
+            S::new(-190.0, -90.0),
+            S::new(170.0, -90.0),
+        ]);
+        unique(&mut ls);
+        let kept: Vec<(f64, f64)> = ls.points().map(|p| (p.get::<0>(), p.get::<1>())).collect();
+        assert_eq!(
+            kept,
+            vec![
+                (180.0, 10.0),
+                (0.0, 90.0),
+                (10.0, 20.0),
+                (370.0, 20.0),
+                (-190.0, -90.0)
+            ]
+        );
     }
 }

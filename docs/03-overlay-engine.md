@@ -26,7 +26,7 @@ flowchart TD
         classify["classify: Method + OperationType"]
     end
 
-    subgraph OVL3["OVL3 — traversal"]
+    subgraph OVL3["OVL3 — two-ring traversal"]
         enrich["enrich: splice turns into<br/>both rings (EnrichedRings)"]
         walk["traverse: walk turn-to-turn,<br/>switch ring at each turn"]
     end
@@ -36,7 +36,8 @@ flowchart TD
         nest["nest holes under outers"]
     end
 
-    subgraph OVL5["OVL5 — public operations"]
+    subgraph OVL5["OVL5 — Boolean operations"]
+        arrangement["split-edge arrangement<br/>(operation/areal.rs)"]
         intersection_fn["intersection"]
         union_fn["r#union / union_poly"]
         difference_fn["difference"]
@@ -55,16 +56,18 @@ flowchart TD
 
     orientation --> get_turns
     seg_int --> get_turns
-    range_guard -.gates input.-> get_turns
+    range_guard -.gates input.-> arrangement
     get_turns --> turn_info --> classify
-    classify --> enrich
-    enrich --> walk
-    walk --> classify_rings --> nest
+    classify --> enrich --> walk
+    classify --> line_int["line_intersection"]
+    seg_int --> arrangement
+    arrangement --> classify_rings --> nest
     nest --> intersection_fn
     nest --> union_fn
     nest --> difference_fn
     difference_fn --> symdiff_fn
-    classify --> relate_fn --> preds
+    union_fn --> symdiff_fn
+    arrangement --> relate_fn --> preds
     seg_int --> is_valid
     union_fn --> buffer_fn
 ```
@@ -103,7 +106,10 @@ that looks plausible but is wrong.**
 ### OVL2 — Turn graph (`turn.rs` + submodules)
 
 A **turn** is an intersection point between the two input geometries'
-boundaries, carried with the metadata traversal needs.
+boundaries, carried with the metadata traversal needs. The turn graph is a
+public building block — `line_intersection` classifies its meeting points
+with it, and OVL3 walks it — but the Boolean operations collect their
+crossings inside the arrangement kernel instead (OVL5).
 
 * **`info`** — the data model: `Turn { point, method, operations: [Operation; 2] }`,
   `Method` (how the segments meet: crossing, touching, collinear, …),
@@ -114,9 +120,10 @@ boundaries, carried with the metadata traversal needs.
   (what each side should do at this turn — continue on this ring, or switch
   to the other).
 
-### OVL3 — Traversal (`traverse.rs` + `enrich`/`state`)
+### OVL3 — Two-ring traversal (`traverse.rs` + `enrich`/`state`)
 
-The densest single piece of overlay — described in its own module docs as
+A standalone walker over the OVL2 turn graph of two rings — described in its
+own module docs as
 "a clean-room implementation of the classic Weiler–Atherton ring traversal
 the turn graph encodes, rather than a transliteration of Boost's template
 machinery."
@@ -150,13 +157,12 @@ as a hole against its own outer ring — the `DisconnectedInterior` result the
 `every_boolean_result_over_the_fixtures_is_valid` sweep in
 `overlay_parity.rs` now guards against.
 
-**Scope (v1):** the clean, non-degenerate areal case — simple polygons
-whose boundaries cross transversally. Clustered turns (three-or-more
+**Scope of `traverse`:** the clean, non-degenerate case — two simple rings
+whose boundaries cross transversally. Clustered turns (three or more
 segments meeting at a point), self-intersections, and long collinear
-overlaps are deferred (they are the two hardest sub-problems in Boost's
-own history). Inputs that
-hit them return `TraversalError::Unsupported` rather than a wrong ring —
-the same "refuse, don't guess" contract as OVL1's range guard.
+overlaps return `TraversalError::Unsupported` rather than a wrong ring. The
+Boolean operations do not have that limit: their arrangement kernel (OVL5)
+handles all three.
 
 ### OVL4 — Assembly (`assemble.rs`)
 
@@ -176,22 +182,45 @@ would otherwise both appear to "contain" each other via a shared
 representative point. Three regression tests in `assemble.rs` exist
 specifically for these edge cases (same-winding hole, vertex-sharing hole).
 
-### OVL5 — Public operations (`operation.rs`)
+### OVL5 — Boolean operations (`operation.rs`)
 
-Thin orchestration over the pipeline above:
-`get_turns → enrich → traverse → assemble`.
+`operation/areal.rs` mirrors the combined role of Boost's turn collection,
+colocation handling, enrichment, traversal, and ring selection with a planar
+**split-edge arrangement**. Every boundary of both operands — exteriors,
+holes, every member of a multi-polygon — is split at each crossing and
+collinear-overlap endpoint, and where a ring of one operand touches another
+ring of the same operand (a hole touching its exterior); a vertex of one
+operand within the snap distance of the other's segment splits it too. The
+two sides of each atomic edge are classified against the requested operation
+by containment — an operand that runs along the edge is sampled either side
+of its own segment, closer than any other of its edges comes, and one that
+does not is asked at the edge itself — leaving a directed result-boundary
+graph that `trace_rings` walks with the cluster rule described above; Boost's rule for which
+self-touch points a traced ring passes through, the ring start Boost's
+`get_turns` section order gives, and its collinear clean-up are reproduced so
+output rings match Boost's vertex for vertex. OVL4 then assembles the rings.
 
-| Function | Boost equivalent | Behavior on no crossings |
+| Function | Boost equivalent | Notes |
 |---|---|---|
-| `intersection(a, b)` | `algorithms/intersection.hpp` | inner polygon if one contains the other, else empty |
-| `r#union(a, b)` | `algorithms/union.hpp` (raw identifier because `union` is a Rust keyword; `union_poly` remains as a compatibility name) | outer polygon if one contains the other, else both side by side |
-| `difference(a, b)` | `algorithms/difference.hpp` | `A` whole if disjoint; empty if `A` inside `B`; **refused** if `B` inside `A` (would need a hole the exterior-only assembler can't build yet) |
-| `sym_difference(a, b)` | `algorithms/sym_difference.hpp` | computed as `(A−B) ∪ (B−A)`, concatenated since the two differences are disjoint by construction |
+| `intersection(a, b)` | `algorithms/intersection.hpp` | |
+| `r#union(a, b)` | `algorithms/union.hpp` (raw identifier because `union` is a Rust keyword; `union_poly` remains as a compatibility name) | |
+| `difference(a, b)` | `algorithms/difference.hpp` | the second operand is read backwards, as Boost reads it; an operand strictly inside the first becomes a hole |
+| `sym_difference(a, b)` | `algorithms/sym_difference.hpp` | the union of `a − b` and `b − a`, as Boost builds it |
 
-**v1 scope:** polygon × polygon → `MultiPolygon`, operating on each input's
-**exterior ring only**. A polygon with holes is refused
-(`OverlayError::Unsupported`) rather than silently treated as solid — same
-"refuse over silently wrong" contract throughout this crate.
+Each has a `*_multi` form taking two multi-polygons. Inputs may carry holes,
+touch, share edges, or contain one another. Because faces are classified by
+containment, the result does not depend on the operands' ring orientation,
+where Boost reads its declared orientation and returns garbage for rings
+wound the other way. Operands that come closer than the snap distance
+(`1e-10` of the coordinate scale) without meeting — near copies of each
+other, a vertex a hair off an edge — can leave a sliver whose sides no
+sample tells apart; a stretch that short is settled so the boundary closes,
+and an arrangement that still does not close is made again at a coarser snap
+(`1e-7`), which folds the sliver into the edges it hugs. The integer
+coordinate scalars are refused at compile time — a crossing is a fractional
+point — and coordinates outside the predicate range are refused at run time
+(`OverlayError::Unsupported`), as is an arrangement that does not close even
+at the coarser snap.
 
 ### OVL6 — Relate & validity (`relate.rs`, `validity.rs`)
 
@@ -203,41 +232,59 @@ Thin orchestration over the pipeline above:
   covers static single kinds, homogeneous multis, runtime geometries, and
   heterogeneous geometry collections. Collection topology uses OGC union
   semantics, including mod-2 multiline boundaries.
-* **`is_valid`** tag-dispatches to the ring/polygon validators (and validates
-  each multi-polygon member). The validators check the OGC simple-feature rules:
-  finite in-range coordinates, enough points, closed boundary, no spikes, no
-  consecutive duplicate points, no self-intersections, correct orientation,
-  and (for polygons) every interior ring covered by the exterior. Deferred:
-  ring×ring edge-crossing between a hole and the exterior/other holes and
-  intersections between distinct multi-polygon members.
+  A point of either geometry is located the way Boost locates a point —
+  the winding rule with its epsilon side test (`point_in_geometry`) — so
+  `relate` agrees with `within` and `covered_by`; crossings and samples the
+  engine computes are located within the rounding their construction left.
+* **`is_valid`** tag-dispatches to the ring, polygon, and multi-polygon
+  validators, in Boost's phase order: each ring on its own (coordinates,
+  size, topological dimension, closure, duplicates, spikes, orientation),
+  then the turns between rings (`failure_self_intersections`), holes inside
+  the exterior and not nested, and a connected interior
+  (`failure_disconnected_interior`); multi-polygon members may touch only at
+  isolated points and may not nest (`failure_intersecting_interiors`).
+  `ValidityOptions::BOOST_DEFAULT` accepts consecutive duplicates as Boost's
+  default policy does; `is_valid` itself is the strict policy.
 
-Both `relate` and the boolean ops share the same honesty policy: a
-non-transversal boundary contact (edge-aligned or vertex-only) that the
-turn graph cannot disambiguate from a genuine area overlap returns
-`OverlayError::Unsupported` rather than guessing `false`. The
-`edge_aligned_overlap_is_unsupported_not_false` regression test documents
-exactly this failure mode being caught.
+`relate` and the Boolean operations refuse coordinates outside the range
+their exact predicates trust (`OverlayError::Unsupported`), and the Boolean
+operations an arrangement they cannot close (OVL5); every boundary contact —
+edge-aligned, vertex-only, a hole touching its exterior — is computed.
 
 ### OVL7 — Buffer (`buffer.rs`)
 
 The public `buffer` entry tag-dispatches every static single and homogeneous
 multi kind and grows or erodes it using explicit distance, side, join, end,
 and point roles. Cartesian offsets are native and include holes, non-convex
-polygons, signed distances, asymmetric linear widths, capped miters, and
-round/flat ends. Spherical and geographic inputs use family-selected radius
+polygons, signed distances, asymmetric linear widths, miters drawn back to
+their limit, and round/flat ends. A point or linear geometry takes a negative
+distance's magnitude, as Boost's distance strategies hand it to them, and an
+input that simplifies to a single point is buffered as that point. Spherical and geographic inputs use family-selected radius
 or spheroid bundles, project into a local tangent plane, reuse the Cartesian
 engine, and transform back. That angular path is an intentional local-extent
 approximation; the feature-parity assumptions identify global/polar accuracy
 as the revisit trigger.
 
-Polygon offsets keep the raw offsetted ring where it is simple. Where it
-crosses itself or another ring — a notch narrower than twice the distance, a
-neck thinner than that, a hole whose arm fills in — or an erosion loses its
-clearance, the offset is rebuilt the way Boost builds every buffer: from a
-side piece per edge and a join piece per rounded or mitered corner, merged
-through the overlay engine and unioned with (growth) or subtracted from
-(erosion) the polygon (`buffer.rs`, `dissolve_offset`). That is what closes a
+Polygon offsets work on each ring as Boost does — simplified at a thousandth
+of the distance, an exterior that simplifies to a point buffered as that
+point — and keep the raw offsetted ring where it is the outline: simple, and
+cut at every concave corner within both sides' reach. Where it crosses
+itself or another ring — a notch narrower than twice the distance, a neck
+thinner than that, a hole whose arm fills in — where a concave cut runs past
+a side shorter than it reaches, or where an erosion loses its clearance, the
+offset is rebuilt the way Boost builds every buffer: from a side piece per
+edge and a join piece per rounded or mitered corner, merged through the
+overlay engine and unioned with (growth) or subtracted from (erosion) the
+simplified polygon (`buffer.rs`, `dissolve_offset`). That is what closes a
 notch into one valid polygon and pinches a thin neck off into separate ones.
+
+Linear offsets walk each side as Boost walks it — the input simplified at a
+thousandth of the distance, convex corners joined, concave ones cut where
+their offsets cross, spikes and ends capped — and keep that outline where it
+is simple and every concave cut is covered by the neighbouring segment's
+pieces. Otherwise the buffer is the union of the same pieces, as Boost's
+traversal makes it: a line crossing itself, doubling back, or turning
+sharper than its segments are long.
 
 ## The recurring design principle: refuse, don't guess
 
@@ -253,17 +300,16 @@ Concretely, every one of these is a documented past bug, now guarded by a
 regression test:
 
 * Out-of-range coordinates silently emptying the turn graph → misread as
-  "disjoint" → intersection area over-reported ~4×. Now refused up front by
+  "disjoint" → intersection area over-reported ~4×. Refused up front by
   `range_guard`.
-* A polygon with holes silently treated as solid. Now refused by `has_holes`
-  checks in every OVL5 function.
-* Edge-aligned/vertex-only boundary contact silently reported as
-  `overlaps = false`. Now refused by `relate`.
-* `A − B` when `B` is strictly inside `A` (needs a hole) silently returned
-  as `A` whole (over-reporting area). Now refused rather than wrong.
+* A polygon with holes silently treated as solid, edge-aligned or
+  vertex-only boundary contact silently reported as `overlaps = false`, and
+  `A − B` with `B` strictly inside `A` silently returned as `A` whole. Each
+  was refused first, and is computed now that the arrangement kernel handles
+  it.
 
 If you extend this crate, preserve that contract: a new degenerate case you
-discover should get an `Unsupported` arm and a regression test, not a
-best-effort guess.
+discover should get an `Unsupported` arm and a regression test until it is
+computed right, not a best-effort guess.
 
 ## Back to [the index](README.md) · [Architecture](01-architecture.md) · [Tag-dispatch pattern](02-tag-dispatch-pattern.md)

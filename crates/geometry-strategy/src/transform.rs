@@ -69,6 +69,12 @@ impl Scale {
 }
 
 /// Named constructor for 2D rotation strategies.
+///
+/// A positive angle turns counter-clockwise, the mathematical convention.
+/// Boost's `rotate_transformer` turns clockwise
+/// (`strategies/transform/matrix_transformers.hpp:481-491`; its test maps
+/// `(1, 1)` by 90° to `(1, −1)`, `test/strategies/transformer.cpp:84-91`):
+/// negate the angle to reproduce it.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Rotate;
 

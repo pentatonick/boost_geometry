@@ -30,6 +30,10 @@ use geometry_trait::{Closure, Geometry, Linestring, Point, Ring};
 use crate::cartesian::Pythagoras;
 use crate::distance::DistanceStrategy;
 
+/// The scalar a Cartesian length of `P` coordinates is computed and
+/// returned in — `f64` for integer coordinates, as in Boost.
+type Measure<P> = <<P as Point>::Scalar as CoordinateScalar>::Measure;
+
 /// A strategy for computing the length of a sequence of points.
 ///
 /// Mirrors the per-CS length-strategy concept declared in
@@ -99,7 +103,7 @@ where
     <L::Point as Point>::Cs: CoordinateSystem,
     <<L::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    type Out = <L::Point as Point>::Scalar;
+    type Out = Measure<L::Point>;
 
     #[inline]
     fn length(&self, g: &L) -> Self::Out {
@@ -123,7 +127,7 @@ where
     <R::Point as Point>::Cs: CoordinateSystem,
     <<R::Point as Point>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    type Out = <R::Point as Point>::Scalar;
+    type Out = Measure<R::Point>;
 
     #[inline]
     fn length(&self, g: &R) -> Self::Out {
@@ -148,7 +152,7 @@ where
 /// default-constructed (`return_type sum = return_type();`,
 /// `algorithms/length.hpp:89`).
 #[inline]
-fn sum_pairwise<'a, P, I>(it: I) -> P::Scalar
+fn sum_pairwise<'a, P, I>(it: I) -> Measure<P>
 where
     P: Point + 'a,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
@@ -157,9 +161,10 @@ where
 {
     let it = it.into_iter();
     let next = it.clone().skip(1);
-    it.zip(next).fold(P::Scalar::ZERO, |acc, (a, b)| {
-        acc + Pythagoras.distance(a, b)
-    })
+    it.zip(next)
+        .fold(<Measure<P> as CoordinateScalar>::ZERO, |acc, (a, b)| {
+            acc + Pythagoras.distance(a, b)
+        })
 }
 
 // Zero-on-mismatched-kind (Boost `length.hpp:75-80`: length of a

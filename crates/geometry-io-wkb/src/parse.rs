@@ -366,6 +366,12 @@ impl<'a> Parser<'a> {
 /// with [`WkbError::HigherDimension`]; extra ordinates are never
 /// silently dropped.
 ///
+/// # Structure
+///
+/// Point counts and ring closure are read as written: a one-point
+/// `LineString` or an unclosed ring parses, although a Simple Features
+/// line needs two points and a ring four with matching ends.
+///
 /// # Errors
 ///
 /// Returns a [`WkbError`] on a truncated buffer

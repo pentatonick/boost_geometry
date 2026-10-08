@@ -45,6 +45,15 @@ use crate::area::{AreaStrategy, ShoelaceArea};
 use crate::cartesian::Pythagoras;
 use crate::distance::DistanceStrategy;
 
+/// The scalar a centroid of `P` coordinates is computed in: `f64` for
+/// integer coordinates, which Boost likewise accumulates in `double`
+/// before it converts the result back with `numeric_cast`.
+type Measure<P> = <<P as PointTrait>::Scalar as CoordinateScalar>::Measure;
+
+/// Largest `DIM` a point may have. Matches `geometry_trait`'s `MAX_DIM`,
+/// the dimensions [`fold_dims`] visits.
+const MAX_DIM: usize = 4;
+
 /// A strategy for computing the centroid of `G`.
 ///
 /// Mirrors the per-CS centroid-strategy concept from
@@ -99,8 +108,8 @@ pub struct CartesianMultiPolygonCentroid;
 ///
 /// Mirrors the `linear_tag` arm of
 /// `boost/geometry/algorithms/centroid.hpp` together with
-/// `strategies/cartesian/centroid_average.hpp`, which averages segment
-/// midpoints weighted by segment length.
+/// `strategies/cartesian/centroid_weighted_length.hpp`, which averages
+/// segment midpoints weighted by segment length.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CartesianLinestringCentroid;
 
@@ -132,18 +141,48 @@ pub struct CartesianMultiPointCentroid;
 
 // ---- helpers ---------------------------------------------------------
 
-/// Build a 2-D point from its two coordinates via [`Default`] +
-/// `set::<0>` / `set::<1>`. Shared by the areal (Bashein–Detmer) impls,
-/// which are inherently 2-D — the C++ strategy reads only `get<0>` /
-/// `get<1>` (`centroid_bashein_detmer.hpp:191-199`).
+/// `p − origin` in the measure: the translation Boost's
+/// `translating_transformer` applies before it accumulates the centroid of
+/// an areal geometry (`algorithms/detail/centroid/translating_transformer.hpp`).
+/// The accumulators then hold products of the geometry's extent rather than
+/// of its absolute position, which would cancel catastrophically far from
+/// the coordinate origin. A linear or pointlike geometry is accumulated
+/// untranslated, as Boost's identity transformer leaves it.
 #[inline]
-fn point_2d<P>(x: P::Scalar, y: P::Scalar) -> P
+fn translated<P: PointTrait>(p: &P, origin: &P) -> (Measure<P>, Measure<P>) {
+    (
+        p.get::<0>().to_measure() - origin.get::<0>().to_measure(),
+        p.get::<1>().to_measure() - origin.get::<1>().to_measure(),
+    )
+}
+
+/// Build a 2-D point from its two coordinates via [`Default`] +
+/// `set::<0>` / `set::<1>`, each converted to the point's scalar — Boost's
+/// `numeric_cast`.
+#[inline]
+fn point_2d<P>(x: Measure<P>, y: Measure<P>) -> P
 where
     P: PointTrait + PointMut + Default,
 {
     let mut p = P::default();
-    p.set::<0>(x);
-    p.set::<1>(y);
+    p.set::<0>(P::Scalar::from_measure(x));
+    p.set::<1>(P::Scalar::from_measure(y));
+    p
+}
+
+/// [`point_2d`] for a [`translated`] centroid, moved back by `origin` once
+/// converted — `translating_transformer::apply_reverse`, in Boost's order.
+/// Shared by the areal (Bashein–Detmer) impls, which are inherently 2-D —
+/// the C++ strategy reads only `get<0>` / `get<1>`
+/// (`centroid_bashein_detmer.hpp:191-199`).
+#[inline]
+fn translated_back<P>(x: Measure<P>, y: Measure<P>, origin: &P) -> P
+where
+    P: PointTrait + PointMut + Default,
+{
+    let mut p = point_2d::<P>(x, y);
+    p.set::<0>(p.get::<0>() + origin.get::<0>());
+    p.set::<1>(p.get::<1>() + origin.get::<1>());
     p
 }
 
@@ -160,150 +199,151 @@ fn three<T: CoordinateScalar>() -> T {
     T::ONE + T::ONE + T::ONE
 }
 
-/// The Bashein–Detmer accumulator triple `(sum_a2, sum_x, sum_y)`, all in
-/// the ring's scalar type.
-type BasheinDetmerSums<R> = (
-    <<R as Geometry>::Point as PointTrait>::Scalar,
-    <<R as Geometry>::Point as PointTrait>::Scalar,
-    <<R as Geometry>::Point as PointTrait>::Scalar,
-);
+/// Boost's Bashein–Detmer state, `bashein_detmer::sums`
+/// (`strategies/cartesian/centroid_bashein_detmer.hpp:139-167`): one count
+/// and three running sums that every ring of an areal geometry adds to, in
+/// order, once translated by `origin`.
+struct BasheinDetmer<'a, P: PointTrait> {
+    origin: &'a P,
+    count: usize,
+    sum_a2: Measure<P>,
+    sum_x: Measure<P>,
+    sum_y: Measure<P>,
+}
 
-/// Sum the Bashein–Detmer accumulators `(sum_a2, sum_x, sum_y)` over the
-/// consecutive vertex pairs of `r`. Mirrors the per-segment `apply` at
-/// `centroid_bashein_detmer.hpp:191-199`:
-///
-/// ```text
-/// ai      = x1 * y2 - x2 * y1
-/// sum_a2 += ai
-/// sum_x  += ai * (x1 + x2)
-/// sum_y  += ai * (y1 + y2)
-/// ```
-///
-/// For an open ring the implicit `last -> first` closing pair is added
-/// explicitly, mirroring the way [`crate::area`] closes an open ring.
-fn bashein_detmer_sums<R>(r: &R) -> BasheinDetmerSums<R>
+impl<'a, P> BasheinDetmer<'a, P>
 where
-    R: RingTrait,
-    R::Point: PointTrait,
+    P: PointTrait + PointMut + Default,
 {
-    let zero = <R::Point as PointTrait>::Scalar::ZERO;
-    let mut sum_a2 = zero;
-    let mut sum_x = zero;
-    let mut sum_y = zero;
-
-    let mut acc = |a: &R::Point, b: &R::Point| {
-        let x1 = a.get::<0>();
-        let y1 = a.get::<1>();
-        let x2 = b.get::<0>();
-        let y2 = b.get::<1>();
-        let ai = x1 * y2 - x2 * y1;
-        sum_a2 = sum_a2 + ai;
-        sum_x = sum_x + ai * (x1 + x2);
-        sum_y = sum_y + ai * (y1 + y2);
-    };
-
-    let it = r.points();
-    let next = it.clone().skip(1);
-    for (a, b) in it.zip(next) {
-        acc(a, b);
-    }
-    if matches!(r.closure(), geometry_trait::Closure::Open) {
-        let mut points = r.points();
-        if let Some(first) = points.next() {
-            let last = points.last().unwrap_or(first);
-            acc(last, first);
+    fn new(origin: &'a P) -> Self {
+        let zero = <Measure<P> as CoordinateScalar>::ZERO;
+        Self {
+            origin,
+            count: 0,
+            sum_a2: zero,
+            sum_x: zero,
+            sum_y: zero,
         }
     }
 
-    (sum_a2, sum_x, sum_y)
+    /// Add every edge of `ring`, the closing edge of an open ring included:
+    /// `centroid_range_state` over the ring's closed view
+    /// (`algorithms/centroid.hpp:163-195`).
+    fn add_ring<R: RingTrait<Point = P>>(&mut self, ring: &R) {
+        let mut points = ring.points();
+        let Some(first) = points.next() else {
+            return;
+        };
+        let first = translated(first, self.origin);
+        let mut previous = first;
+        for point in points {
+            let point = translated(point, self.origin);
+            self.add_edge(previous, point);
+            previous = point;
+        }
+        if matches!(ring.closure(), geometry_trait::Closure::Open) {
+            self.add_edge(previous, first);
+        }
+    }
+
+    /// `bashein_detmer::apply` (`centroid_bashein_detmer.hpp:173-200`).
+    fn add_edge(&mut self, (x1, y1): (Measure<P>, Measure<P>), (x2, y2): (Measure<P>, Measure<P>)) {
+        let ai = x1 * y2 - y1 * x2;
+        self.count += 1;
+        self.sum_a2 = self.sum_a2 + ai;
+        self.sum_x = self.sum_x + ai * (x1 + x2);
+        self.sum_y = self.sum_y + ai * (y1 + y2);
+    }
+
+    /// The centroid, moved back by `origin`: `bashein_detmer::result`
+    /// (`centroid_bashein_detmer.hpp:203-231`) and `apply_reverse`. `None`
+    /// where Boost's `result` fails — for no edge, for an area of zero by
+    /// `math::equals`, or for an area whose triple is not finite.
+    fn result(&self) -> Option<P> {
+        if self.count == 0
+            || self
+                .sum_a2
+                .tolerant_eq(<Measure<P> as CoordinateScalar>::ZERO)
+        {
+            return None;
+        }
+        let a3 = three::<Measure<P>>() * self.sum_a2;
+        a3.is_finite()
+            .then(|| translated_back::<P>(self.sum_x / a3, self.sum_y / a3, self.origin))
+    }
 }
 
 // ---- Ring ------------------------------------------------------------
 //
-// Mirrors `strategy::centroid::bashein_detmer::result` at
-// `centroid_bashein_detmer.hpp:202-231`: `Cx = sum_x / (3 * sum_a2)`,
-// `Cy = sum_y / (3 * sum_a2)`. When `sum_a2 == 0` (a degenerate, zero-
-// area ring) Boost's `result` returns `false` and the higher-level
-// `centroid_polygon` falls back to the first ring vertex
-// (`test/algorithms/centroid.cpp:50-57`); we mirror that fallback here.
-
+// Mirrors `centroid_range` under `centroid_linear_areal`
+// (`algorithms/centroid.hpp:134-157,197-226,357-369`): an empty ring is an
+// error (Boost's `centroid_exception`), a ring of one point is that point,
+// and a ring Boost's `result` fails on falls back to its first point,
+// `point_on_border`.
 impl<G> CentroidStrategy<G> for CartesianRingCentroid
 where
     G: RingTrait,
     G::Point: PointTrait + PointMut + Default + Copy,
     <<G::Point as PointTrait>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
-    ShoelaceArea: AreaStrategy<G, Out = <G::Point as PointTrait>::Scalar>,
+    ShoelaceArea: AreaStrategy<G, Out = Measure<G::Point>>,
 {
     type Output = G::Point;
 
     fn centroid(&self, r: &G) -> G::Point {
-        let (sum_a2, sum_x, sum_y) = bashein_detmer_sums(r);
-        let zero = <G::Point as PointTrait>::Scalar::ZERO;
-        if sum_a2 == zero {
-            // Degenerate ring: fall back to the first vertex
-            // (`centroid.cpp:50-57`). An empty ring yields the origin
-            // (Default), matching a zero-init result point.
-            return r.points().next().copied().unwrap_or_default();
+        let mut points = r.points();
+        let first = *points.next().expect("centroid of an empty ring");
+        if points.next().is_none() {
+            return first;
         }
-        let a3 = three::<<G::Point as PointTrait>::Scalar>() * sum_a2;
-        point_2d::<G::Point>(sum_x / a3, sum_y / a3)
+        let mut state = BasheinDetmer::new(&first);
+        state.add_ring(r);
+        state.result().unwrap_or(first)
     }
 }
 
 // ---- Polygon ---------------------------------------------------------
 //
-// Mirrors the polygon arm of `algorithms/centroid.hpp`. Each ring
-// contributes `signed_area_k * centroid_k`; the interior rings arrive
-// with the opposite sign under `ShoelaceArea` (Boost's signed-area
-// convention winds holes opposite the exterior), so a plain sum performs
-// the hole subtraction. The result is `sum_c / sum_area`, degenerating
-// to the exterior ring's first vertex when the total signed area is 0.
-
+// Mirrors `centroid_polygon` (`algorithms/centroid.hpp:234-288`): the
+// exterior decides as a ring does, then the exterior and every interior ring
+// add to one state. The interior rings arrive with the opposite sign — Boost
+// winds holes opposite the exterior — so the plain sum subtracts them.
 impl<G> CentroidStrategy<G> for CartesianPolygonCentroid
 where
     G: PolygonTrait,
     G::Point: PointTrait + PointMut + Default + Copy,
     <<G::Point as PointTrait>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
-    ShoelaceArea: AreaStrategy<G::Ring, Out = <G::Point as PointTrait>::Scalar>,
+    ShoelaceArea: AreaStrategy<G::Ring, Out = Measure<G::Point>>,
     CartesianRingCentroid: CentroidStrategy<G::Ring, Output = G::Point>,
 {
     type Output = G::Point;
 
     fn centroid(&self, pg: &G) -> G::Point {
-        let zero = <G::Point as PointTrait>::Scalar::ZERO;
-        let mut sum_a2 = zero;
-        let mut sum_x = zero;
-        let mut sum_y = zero;
-
-        let mut fold_ring = |ring: &G::Ring| {
-            let (a2, x, y) = bashein_detmer_sums(ring);
-            sum_a2 = sum_a2 + a2;
-            sum_x = sum_x + x;
-            sum_y = sum_y + y;
-        };
-
-        fold_ring(pg.exterior());
+        let mut exterior = pg.exterior().points();
+        let first = *exterior
+            .next()
+            .expect("centroid of a polygon with an empty exterior ring");
+        if exterior.next().is_none() {
+            return first;
+        }
+        let mut state = BasheinDetmer::new(&first);
+        state.add_ring(pg.exterior());
         for inner in pg.interiors() {
-            fold_ring(inner);
+            state.add_ring(inner);
         }
-
-        if sum_a2 == zero {
-            return pg.exterior().points().next().copied().unwrap_or_default();
-        }
-        let a3 = three::<<G::Point as PointTrait>::Scalar>() * sum_a2;
-        point_2d::<G::Point>(sum_x / a3, sum_y / a3)
+        state.result().unwrap_or(first)
     }
 }
 
 // ---- MultiPolygon ----------------------------------------------------
 //
-// Mirrors the multi-polygon arm of `algorithms/centroid.hpp`, which runs
-// one `centroid_multi` state over every ring of every member and divides
-// once. Same reason the polygon arm accumulates rather than combining
-// per-part centroids: a member with zero area drops out of an
-// area-weighted combine but still contributes to the running numerator,
-// and Boost keeps that contribution.
-
+// Mirrors `centroid_multi<centroid_polygon_state>`
+// (`algorithms/centroid.hpp:314-354`), which runs one state over every ring
+// of every member and divides once. That is also why it accumulates rather
+// than combining per-part centroids: a member with zero area drops out of an
+// area-weighted combine but still adds to the running numerator, and Boost
+// keeps that contribution. The translation origin is the multi-polygon's
+// first point; a failed `result` falls back to the first point of the first
+// exterior ring that has one, `point_on_border`.
 impl<G> CentroidStrategy<G> for CartesianMultiPolygonCentroid
 where
     G: MultiPolygonTrait,
@@ -313,71 +353,71 @@ where
     type Output = G::Point;
 
     fn centroid(&self, mp: &G) -> G::Point {
-        let zero = <G::Point as PointTrait>::Scalar::ZERO;
-        let mut sum_a2 = zero;
-        let mut sum_x = zero;
-        let mut sum_y = zero;
-        let mut first_point = None;
-
-        for polygon in mp.polygons() {
-            if first_point.is_none() {
-                first_point = polygon.exterior().points().next().copied();
-            }
-            for ring in core::iter::once(polygon.exterior()).chain(polygon.interiors()) {
-                let (a2, x, y) = bashein_detmer_sums(ring);
-                sum_a2 = sum_a2 + a2;
-                sum_x = sum_x + x;
-                sum_y = sum_y + y;
-            }
+        let rings = || {
+            mp.polygons()
+                .flat_map(|polygon| core::iter::once(polygon.exterior()).chain(polygon.interiors()))
+        };
+        let origin = *rings()
+            .find_map(|ring| ring.points().next())
+            .expect("centroid of an empty multi-polygon");
+        let mut state = BasheinDetmer::new(&origin);
+        for ring in rings() {
+            state.add_ring(ring);
         }
-
-        if sum_a2 == zero {
-            return first_point.unwrap_or_default();
-        }
-        let a3 = three::<<G::Point as PointTrait>::Scalar>() * sum_a2;
-        point_2d::<G::Point>(sum_x / a3, sum_y / a3)
+        state.result().unwrap_or_else(|| {
+            mp.polygons()
+                .find_map(|polygon| polygon.exterior().points().next().copied())
+                .unwrap_or(origin)
+        })
     }
 }
 
 // ---- Linestring ------------------------------------------------------
 //
-// Mirrors the linear arm of `algorithms/centroid.hpp`: each segment
-// contributes `seg_length * midpoint`, summed and divided by the total
-// length. Degenerate (total length 0) falls back to the first point
-// (`centroid.cpp:81-82`).
-
+// Mirrors `centroid_range` with `weighted_length`
+// (`strategies/cartesian/centroid_weighted_length.hpp:97-141`) under
+// `centroid_linear_areal`: each segment adds its length and its midpoint
+// weighted by it, in every dimension, and the sums are divided by the total
+// length. An empty linestring is an error; a total length of zero by
+// `math::equals`, or one that is not finite, falls back to the first point.
 impl<G> CentroidStrategy<G> for CartesianLinestringCentroid
 where
     G: LinestringTrait,
     G::Point: PointTrait + PointMut + Default + Copy,
     <<G::Point as PointTrait>::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
-    Pythagoras: DistanceStrategy<G::Point, G::Point, Out = <G::Point as PointTrait>::Scalar>,
+    Pythagoras: DistanceStrategy<G::Point, G::Point, Out = Measure<G::Point>>,
 {
     type Output = G::Point;
 
     fn centroid(&self, ls: &G) -> G::Point {
-        let zero = <G::Point as PointTrait>::Scalar::ZERO;
-        let half =
-            <G::Point as PointTrait>::Scalar::ONE / two::<<G::Point as PointTrait>::Scalar>();
-        let mut total_len = zero;
-        let mut sum_x = zero;
-        let mut sum_y = zero;
-
-        let it = ls.points();
-        let next = it.clone().skip(1);
-        for (a, b) in it.zip(next) {
-            let seg_len = Pythagoras.distance(a, b);
-            let mid_x = (a.get::<0>() + b.get::<0>()) * half;
-            let mid_y = (a.get::<1>() + b.get::<1>()) * half;
-            total_len = total_len + seg_len;
-            sum_x = sum_x + seg_len * mid_x;
-            sum_y = sum_y + seg_len * mid_y;
+        let first = *ls.points().next().expect("centroid of an empty linestring");
+        let zero = <Measure<G::Point> as CoordinateScalar>::ZERO;
+        let two = two::<Measure<G::Point>>();
+        let mut length = zero;
+        let mut sums = [zero; MAX_DIM];
+        for (a, b) in ls.points().zip(ls.points().skip(1)) {
+            let d = Pythagoras.distance(a, b);
+            length = length + d;
+            let d_half = d / two;
+            fold_dims((), a, |(), a, dimension| {
+                let weighted_median = (ordinate(a, dimension).to_measure()
+                    + ordinate(b, dimension).to_measure())
+                    * d_half;
+                sums[dimension] = sums[dimension] + weighted_median;
+            });
         }
-
-        if total_len == zero {
-            return ls.points().next().copied().unwrap_or_default();
+        if length.tolerant_eq(zero) || !length.is_finite() {
+            return first;
         }
-        point_2d::<G::Point>(sum_x / total_len, sum_y / total_len)
+        let mut centroid = G::Point::default();
+        fold_dims((), &first, |(), _, dimension| {
+            set_ordinate(
+                &mut centroid,
+                dimension,
+                <G::Point as PointTrait>::Scalar::from_measure(sums[dimension] / length),
+            );
+        });
+        centroid
     }
 }
 
@@ -425,8 +465,8 @@ where
 // ---- MultiPoint ------------------------------------------------------
 //
 // Mirrors the pointlike arm of `algorithms/centroid.hpp`: the arithmetic
-// mean of the member points, per dimension. Degenerate (no points) falls
-// back to the origin (a zero-init default point).
+// mean of the member points, per dimension. An empty multi-point is an
+// error, Boost's `centroid_exception` (`algorithms/centroid.hpp:320-328`).
 
 impl<G> CentroidStrategy<G> for CartesianMultiPointCentroid
 where
@@ -437,42 +477,48 @@ where
     type Output = G::ItemPoint;
 
     fn centroid(&self, mp: &G) -> G::ItemPoint {
-        let zero = <G::ItemPoint as PointTrait>::Scalar::ZERO;
+        let zero = <Measure<G::ItemPoint> as CoordinateScalar>::ZERO;
         let mut count = zero;
-        // Per-dimension sums live in a point so every dimension of the
-        // mean is covered, not just the first two.
-        let mut sums = G::ItemPoint::default();
+        // One sum per dimension, so every dimension of the mean is
+        // covered, not just the first two.
+        let mut sums = [zero; MAX_DIM];
+        let mut dimensions = None;
         for p in mp.points() {
-            let so_far = sums;
             fold_dims((), p, |(), p, d| {
-                set_ordinate(&mut sums, d, ordinate(&so_far, d) + ordinate(p, d));
+                sums[d] = sums[d] + ordinate(p, d).to_measure();
             });
-            count = count + <G::ItemPoint as PointTrait>::Scalar::ONE;
+            count = count + <Measure<G::ItemPoint> as CoordinateScalar>::ONE;
+            dimensions = Some(*p);
         }
-        if count == zero {
-            return G::ItemPoint::default();
-        }
+        let dimensions = dimensions.expect("centroid of an empty multi-point");
         let mut mean = G::ItemPoint::default();
-        fold_dims((), &sums, |(), sums, d| {
-            set_ordinate(&mut mean, d, ordinate(sums, d) / count);
+        fold_dims((), &dimensions, |(), _, d| {
+            set_ordinate(
+                &mut mean,
+                d,
+                <G::ItemPoint as PointTrait>::Scalar::from_measure(sums[d] / count),
+            );
         });
         mean
     }
 }
 
-/// The per-dimension midpoint of two points — `(a + b) / 2` on
-/// dimensions `0` and `1`. Shared by the [`geometry_trait::Segment`] and [`geometry_trait::Box`] impls,
-/// which are both a two-corner midpoint. 2-D only, matching the rest of
-/// this module and the reference test coverage.
+/// The midpoint of two points, `(a + b) / 2` in every dimension: Boost's
+/// `centroid_indexed` (`algorithms/centroid.hpp:110-128`). Shared by the
+/// [`geometry_trait::Segment`] and [`geometry_trait::Box`] impls, which are
+/// both a two-corner midpoint.
 #[inline]
 fn midpoint<P>(a: &P, b: &P) -> P
 where
     P: PointTrait + PointMut + Default,
 {
-    let half = P::Scalar::ONE / two::<P::Scalar>();
-    let x = (a.get::<0>() + b.get::<0>()) * half;
-    let y = (a.get::<1>() + b.get::<1>()) * half;
-    point_2d::<P>(x, y)
+    let two = two::<Measure<P>>();
+    let mut midpoint = P::default();
+    fold_dims((), a, |(), a, dimension| {
+        let sum = ordinate(a, dimension).to_measure() + ordinate(b, dimension).to_measure();
+        set_ordinate(&mut midpoint, dimension, P::Scalar::from_measure(sum / two));
+    });
+    midpoint
 }
 
 /// Type-level "which centroid strategy does this geometry *kind* use".
@@ -788,6 +834,73 @@ mod tests {
         assert!(close_pt(&c, 34.0 / 3.0, 11.0, 1e-9), "{c:?}");
     }
 
+    /// Every ring adds to one running state, in order, as Boost's
+    /// `centroid_polygon_state` adds them; per-ring sums added afterwards
+    /// round differently. Boost (`aed7bc3`): (2.8222947186999883,
+    /// 3.8762772374738392).
+    #[test]
+    fn rings_add_to_one_running_state() {
+        let pg: Polygon<Pt> = polygon![
+            [(0., 0.), (0., 7.), (6., 8.), (5., 0.), (0., 0.)],
+            [(1.1, 2.1), (2.2, 2.1), (2.2, 2.8), (1.1, 2.1)]
+        ];
+        let c = CartesianPolygonCentroid.centroid(&pg);
+        assert_eq!(
+            (c.get::<0>(), c.get::<1>()),
+            (2.822_294_718_699_988_3, 3.876_277_237_473_839_2)
+        );
+    }
+
+    /// Boost's `result` calls an area of zero by `math::equals` degenerate,
+    /// so a triangle a nanometre across falls back to its first point.
+    /// Boost (`aed7bc3`): (1e-9, 1e-9).
+    #[test]
+    fn an_area_zero_by_math_equals_falls_back_to_the_first_point() {
+        let pg: Polygon<Pt> = polygon![[(1e-9, 1e-9), (1e-9, 2e-9), (2e-9, 2e-9), (1e-9, 1e-9)]];
+        let c = CartesianPolygonCentroid.centroid(&pg);
+        assert_eq!((c.get::<0>(), c.get::<1>()), (1e-9, 1e-9));
+    }
+
+    /// A length that overflows is not finite, and Boost's `result` refuses
+    /// to divide by it: the centroid falls back to the first point.
+    /// Boost (`aed7bc3`): the first point.
+    #[test]
+    fn an_overflowing_length_falls_back_to_the_first_point() {
+        let ls: geometry_model::Linestring<Pt> = linestring![
+            (-9.535_516_924_438_917e159, 4.820_435_616_002_894e159),
+            (-8.230_722_080_934_48e159, 6.172_257_949_105_479_4e159)
+        ];
+        let c = CartesianLinestringCentroid.centroid(&ls);
+        assert_eq!(
+            (c.get::<0>(), c.get::<1>()),
+            (-9.535_516_924_438_917e159, 4.820_435_616_002_894e159)
+        );
+    }
+
+    /// Boost's segment, box and linestring centroids cover every dimension
+    /// (`centroid_indexed`, `weighted_length`). Boost (`aed7bc3`): (1, 2, 4)
+    /// twice, then (1.4, 2.8, 5.6).
+    #[test]
+    fn indexed_and_linear_centroids_cover_the_third_dimension() {
+        use geometry_model::{Linestring, Point3D};
+        type P3 = Point3D<f64, Cartesian>;
+        let xyz = |p: P3| (p.get::<0>(), p.get::<1>(), p.get::<2>());
+        let (a, b) = (P3::new(0., 0., 2.), P3::new(2., 4., 6.));
+        assert_eq!(
+            xyz(CartesianSegmentCentroid.centroid(&Segment::new(a, b))),
+            (1., 2., 4.)
+        );
+        assert_eq!(
+            xyz(CartesianBoxCentroid.centroid(&Box::from_corners(a, b))),
+            (1., 2., 4.)
+        );
+        let ls = Linestring::from_vec(vec![a, b, P3::new(2., 4., 10.)]);
+        assert_eq!(
+            xyz(CartesianLinestringCentroid.centroid(&ls)),
+            (1.4, 2.8, 5.6)
+        );
+    }
+
     /// The pointlike arm averages *per dimension*: a 3-D multi-point's
     /// centroid carries the mean `z`.
     #[test]
@@ -801,5 +914,42 @@ mod tests {
         assert!((c.get::<1>() - 1.0).abs() < 1e-12);
         let z = c.get::<2>();
         assert!((z - 11.0).abs() < 1e-12, "z mean should be 11, got {z}");
+    }
+
+    /// A ring, or a polygon's exterior, of one point has that point for
+    /// its centroid.
+    #[test]
+    fn a_one_point_ring_is_its_own_centroid() {
+        let r: Ring<Pt> = Ring::from_vec(vec![Pt::new(3., 4.)]);
+        assert!(close_pt(&CartesianRingCentroid.centroid(&r), 3., 4., 1e-12));
+        let pg: Polygon<Pt> = Polygon::new(r);
+        assert!(close_pt(
+            &CartesianPolygonCentroid.centroid(&pg),
+            3.,
+            4.,
+            1e-12
+        ));
+    }
+
+    /// An empty interior ring adds nothing: the polygon's centroid is its
+    /// exterior's.
+    #[test]
+    fn an_empty_interior_ring_adds_nothing() {
+        let square = || {
+            Ring::from_vec(vec![
+                Pt::new(0., 0.),
+                Pt::new(0., 2.),
+                Pt::new(2., 2.),
+                Pt::new(2., 0.),
+                Pt::new(0., 0.),
+            ])
+        };
+        let pg: Polygon<Pt> = Polygon::with_inners(square(), vec![Ring::from_vec(vec![])]);
+        assert!(close_pt(
+            &CartesianPolygonCentroid.centroid(&pg),
+            1.,
+            1.,
+            1e-12
+        ));
     }
 }

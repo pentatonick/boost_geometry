@@ -29,7 +29,7 @@ use geometry_trait::{
     Geometry, Point as PointTrait, PointMut, Polygon as PolygonTrait, Ring as RingTrait,
 };
 
-use crate::surface_point::point_on_surface;
+use crate::surface_point::sweep_interior_point;
 
 /// Assemble traversed rings into a `MultiPolygon`, nesting holes under
 /// their containing outer rings.
@@ -198,7 +198,7 @@ where
     P::Scalar: CoordinateScalar,
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    let is_clockwise = ring_area(ring) > P::Scalar::ZERO;
+    let is_clockwise = ring_area(ring) > P::Scalar::ZERO.to_measure();
     if is_clockwise != clockwise {
         ring.0.reverse();
     }
@@ -223,7 +223,7 @@ where
     <P::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
     let own_area = ring_area(&rings[i]).abs();
-    let mut best: Option<(usize, P::Scalar)> = None;
+    let mut best = None::<(usize, <P::Scalar as CoordinateScalar>::Measure)>;
     for (j, other) in rings.iter().enumerate() {
         if j == i {
             continue;
@@ -251,20 +251,20 @@ where
 /// do: an overlay-produced hole routinely shares a vertex or edge with
 /// its containing outer, and that vertex lies on the outer's boundary,
 /// where `within` returns `false`. Taking an interior point via
-/// [`point_on_surface`](crate::surface_point::point_on_surface) (Boost's
-/// `point_on_border` role in `assign_parents.hpp`) sidesteps that: an
-/// interior point of a non-self-crossing overlay ring cannot lie on the
-/// boundary of a ring that contains it. Falls back to the first vertex
-/// only for a degenerate ring `point_on_surface` cannot sample.
+/// [`sweep_interior_point`] (Boost's `point_on_border` role in
+/// `assign_parents.hpp`) sidesteps that: an interior point of a
+/// non-self-crossing overlay ring cannot lie on the boundary of a ring
+/// that contains it. Falls back to the first vertex only for a degenerate
+/// ring the sweep cannot sample.
 fn representative_point<P>(ring: &Ring<P>) -> Option<P>
 where
     P: PointMut + Default + Copy,
     P::Scalar: CoordinateScalar,
 {
-    point_on_surface(&RingPolygon(ring)).or_else(|| ring.points().next().copied())
+    sweep_interior_point(&RingPolygon(ring)).or_else(|| ring.points().next().copied())
 }
 
-/// A hole-less polygon view of a borrowed ring, so `point_on_surface`
+/// A hole-less polygon view of a borrowed ring, so [`sweep_interior_point`]
 /// (which requires the `Polygon` interface for its hole-crossing sweep)
 /// can sample a bare ring without cloning it into a `model::Polygon`.
 struct RingPolygon<'a, P: PointTrait>(&'a Ring<P>);

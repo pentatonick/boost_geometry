@@ -24,7 +24,7 @@ functions (`intersection`, `union`, `difference`, `sym_difference`), plus
 | `operation` (+ `boolean`, `areal`) | OVL5 | split-edge arrangement; `intersection`, `r#union` (`union_poly` compatibility name), `difference`, `sym_difference`, `OverlayError` |
 | `relate` | OVL6 | Cartesian static/multi/runtime/collection `relation` matrix, `relate` mask, `De9im`, `crosses`/`overlaps`/`touches`, `Dimension` |
 | `validity` | OVL6 | ring/polygon/multi-polygon `is_valid`/`is_valid_with`, inter-ring/member topology, complete `ValidityFailure` taxonomy, `ValidityOptions`, allocation-free reason messages |
-| `surface_point` | — | `point_on_surface` — a representative interior point, used by `assemble` and `relate` |
+| `surface_point` | — | `point_on_surface` — a representative interior point; its sweep places `assemble`'s rings |
 | `buffer` | OVL7 | Cartesian/spherical/geographic single/multi dispatch, `buffer`/`buffer_with`/`buffer_with_strategy`, signed areal offsets, linear ends, strategy bundles |
 | `merge` | — | `merge_elements`, `merge_polygons`, `merge_multipolygon` |
 
@@ -54,5 +54,5 @@ instead and `geometry-algorithm` never depends back.
 
 ## Who depends on this
 
-`geometry-rtree` sits above it in the facade layering; re-exported wholesale
-by the `boost_geometry` facade as `boost_geometry::overlay`.
+Only the `boost_geometry` facade, which re-exports it wholesale as
+`boost_geometry::overlay`.

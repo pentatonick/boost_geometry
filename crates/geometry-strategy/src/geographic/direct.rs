@@ -3,6 +3,7 @@
 //! Mirrors `boost::geometry::formula::result_direct<CT>` from
 //! `formulas/result_direct.hpp:24-47`.
 
+#[cfg(feature = "std")]
 use geometry_cs::Spheroid;
 
 /// Coordinates and reverse azimuth produced by a direct geodesic solution.
@@ -11,7 +12,7 @@ use geometry_cs::Spheroid;
 /// `formulas/result_direct.hpp:29-42`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DirectResult {
-    /// Destination longitude in normalized radians, `[-π, π]`.
+    /// Destination longitude in normalized radians, `(-π, π]`.
     pub lon2: f64,
     /// Destination latitude in radians.
     pub lat2: f64,
@@ -36,8 +37,15 @@ impl Default for DirectResult {
 }
 
 impl DirectResult {
+    /// The result at `(lon2, lat2)`, its differential quantities expanded to
+    /// `ORDER` as the formula's Boost counterpart instantiates them.
+    ///
+    /// `lon2` is taken as the formula computed it: a longitude folded across
+    /// the antimeridian first would move the equatorial arc by a turn that the
+    /// division by `1 − f` no longer cancels, so each formula normalizes the
+    /// result afterwards, as Boost does (`vincenty_direct.hpp:169-176`).
     #[cfg(feature = "std")]
-    pub(crate) fn solved(
+    pub(crate) fn solved<const ORDER: u32>(
         longitude1: f64,
         latitude1: f64,
         azimuth1: f64,
@@ -46,7 +54,7 @@ impl DirectResult {
         lat2: f64,
         reverse_azimuth: f64,
     ) -> Self {
-        let quantities = super::differential::differential_quantities(
+        let quantities = super::differential::quantities_to_order::<ORDER>(
             longitude1,
             latitude1,
             lon2,
@@ -63,17 +71,4 @@ impl DirectResult {
             geodesic_scale: quantities.geodesic_scale,
         }
     }
-}
-
-#[cfg(feature = "std")]
-pub(crate) fn normalize_longitude(mut longitude: f64) -> f64 {
-    let pi = core::f64::consts::PI;
-    let two_pi = 2.0 * pi;
-    while longitude > pi {
-        longitude -= two_pi;
-    }
-    while longitude < -pi {
-        longitude += two_pi;
-    }
-    longitude
 }

@@ -9,9 +9,8 @@
 //! because we have no const-correctness story for an out-parameter
 //! that would make ownership any clearer than a return.
 //!
-//! Cartesian-only in v1; spherical / geographic envelope strategies
-//! arrive alongside the Haversine / Andoyer / Vincenty distance
-//! strategies in later tasks.
+//! Cartesian-only in v1: a spherical or geographic geometry is refused at
+//! compile time rather than bounded as if it were planar.
 
 use geometry_strategy::{EnvelopeStrategy, EnvelopeStrategyForKind};
 use geometry_trait::Geometry;
@@ -22,6 +21,10 @@ use geometry_trait::Geometry;
 /// `boost/geometry/algorithms/envelope.hpp` — the C++ side mutates
 /// `mbr` in place; the Rust side returns a fresh
 /// `geometry_model::Box<G::Point>`.
+///
+/// An empty geometry has Boost's inverse box for its envelope: every
+/// minimum at the scalar's highest value and every maximum at its lowest
+/// (`algorithms/detail/envelope/initialize.hpp:61-79`).
 ///
 /// Supported geometry kinds: `Point`, `Linestring`, `Ring`, `Polygon`,
 /// `Segment`, `Box`, `MultiPoint`, `MultiLinestring`, `MultiPolygon` —
@@ -126,8 +129,7 @@ mod tests {
 
     /// Multi-point with all-negative coordinates proves the box is
     /// seeded from the first real point, not from zero; an empty
-    /// multi-point returns the degenerate origin box (the documented
-    /// divergence from Boost's inverted empty envelope).
+    /// multi-point has Boost's inverse box for its envelope.
     #[test]
     fn multi_point_envelope() {
         let mp = geometry_model::MultiPoint(vec![
@@ -136,7 +138,55 @@ mod tests {
         ]);
         assert_2d(&envelope(&mp), -3.0, -1.0, -4.0, -1.0);
         let empty = geometry_model::MultiPoint::<P>(vec![]);
-        assert_2d(&envelope(&empty), 0.0, 0.0, 0.0, 0.0);
+        assert_2d(&envelope(&empty), f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    }
+
+    /// The envelope of nothing is Boost's inverse box: every minimum at the
+    /// highest value, every maximum at the lowest. Boost (`aed7bc3`):
+    /// `(1.7976931348623157e308, …) (-1.7976931348623157e308, …)` for every
+    /// empty kind, and `(2147483647, …) (-2147483648, …)` for `int`.
+    #[test]
+    fn empty_geometries_have_the_inverse_box() {
+        type I = Point2D<i32, Cartesian>;
+        let inverse = |b: &Box<P>| assert_2d(b, f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        inverse(&envelope(&Linestring::<P>::new()));
+        inverse(&envelope(&geometry_model::Ring::<P>::new()));
+        inverse(&envelope(&Polygon::<P>::default()));
+        inverse(&envelope(
+            &geometry_model::MultiLinestring::<Linestring<P>>(vec![]),
+        ));
+        inverse(&envelope(&geometry_model::MultiPolygon::<Polygon<P>>(
+            vec![Polygon::default()],
+        )));
+
+        let ints = envelope(&Linestring::<I>::new());
+        assert_eq!(
+            (ints.get_indexed::<0, 0>(), ints.get_indexed::<0, 1>()),
+            (i32::MAX, i32::MAX)
+        );
+        assert_eq!(
+            (ints.get_indexed::<1, 0>(), ints.get_indexed::<1, 1>()),
+            (i32::MIN, i32::MIN)
+        );
+    }
+
+    /// Boost bounds a polygon's interior rings when its exterior ring is
+    /// empty, member by member in a multi-polygon. Boost (`aed7bc3`):
+    /// `(1 1) (2 2)` and `(1 1) (6 6)`.
+    #[test]
+    fn an_empty_exterior_falls_back_to_the_interior_rings() {
+        let mut hollow = Polygon::<P>::default();
+        hollow.inners.push(geometry_model::Ring::from_vec(vec![
+            P::new(1.0, 1.0),
+            P::new(2.0, 1.0),
+            P::new(2.0, 2.0),
+            P::new(1.0, 1.0),
+        ]));
+        assert_2d(&envelope(&hollow), 1.0, 2.0, 1.0, 2.0);
+        let square: Polygon<P> =
+            polygon![[(5.0, 5.0), (5.0, 6.0), (6.0, 6.0), (6.0, 5.0), (5.0, 5.0)]];
+        let both = geometry_model::MultiPolygon(vec![hollow, square]);
+        assert_2d(&envelope(&both), 1.0, 6.0, 1.0, 6.0);
     }
 
     /// Multi-linestring: bounds span every member.

@@ -336,7 +336,10 @@ fn covers_matches_a_degenerate_point_window() {
         oracle,
         "boost Covers diverges from scan oracle on a non-empty degenerate window"
     );
-    assert!(boost_predicate_ids(&tree, Predicate::Contains(window)).is_empty());
+    assert_eq!(
+        boost_predicate_ids(&tree, Predicate::Contains(window)).len(),
+        0
+    );
 }
 
 #[test]
@@ -439,8 +442,11 @@ fn iterators_are_fused() {
 fn knn_k_zero_returns_nothing() {
     let points = uniform(100);
     let q = queries(1)[0];
-    assert!(knn_scan(&points, q, 0).is_empty());
-    assert!(boost_knn_distances(&boost_tree::<Quadratic>(&points), q, 0).is_empty());
+    assert_eq!(knn_scan(&points, q, 0).len(), 0);
+    assert_eq!(
+        boost_knn_distances(&boost_tree::<Quadratic>(&points), q, 0).len(),
+        0
+    );
 }
 
 #[test]
@@ -488,8 +494,8 @@ fn empty_tree_returns_nothing() {
     let boost = boost_tree::<Quadratic>(&points);
     let q = queries(1)[0];
     let (min, max) = window(q);
-    assert!(boost_knn_distances(&boost, q, K).is_empty());
-    assert!(boost_range_ids(&boost, min, max).is_empty());
+    assert_eq!(boost_knn_distances(&boost, q, K).len(), 0);
+    assert_eq!(boost_range_ids(&boost, min, max).len(), 0);
 }
 
 #[test]

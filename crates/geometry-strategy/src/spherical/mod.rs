@@ -9,6 +9,7 @@ pub mod area;
 pub mod area_chamberlain_duquette;
 pub mod azimuth;
 pub mod closest_points_haversine;
+pub(crate) mod direct;
 pub mod distance_cross_track;
 pub mod distance_haversine;
 mod great_circle;

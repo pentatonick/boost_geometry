@@ -25,12 +25,17 @@
 //! The v1 Rust port follows the T22 spec's "for simplicity" branch and
 //! requires `P2::Scalar = P1::Scalar`; the [`Promote`](geometry_coords::Promote) lattice is
 //! ready to fold in once a mixed-scalar caller appears
-//! (see `geometry-coords::Promote`).
+//! (see `geometry-coords::Promote`). The one promotion it does make is
+//! Boost's for an integer: both forms are computed in the scalar's
+//! [`CoordinateScalar::Measure`], `f64` for integer coordinates.
 
 use geometry_coords::CoordinateScalar;
 use geometry_cs::{CartesianFamily, CoordinateSystem};
 use geometry_tag::SameAs;
 use geometry_trait::Point;
+
+/// The scalar a distance between `P` coordinates is computed and returned in.
+type Measure<P> = <<P as Point>::Scalar as CoordinateScalar>::Measure;
 
 use crate::distance::{DefaultDistance, DistanceStrategy};
 
@@ -73,7 +78,7 @@ where
     <P1::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
     <P2::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    type Out = P1::Scalar;
+    type Out = Measure<P1>;
     type Comparable = ComparablePythagoras;
 
     #[inline]
@@ -96,7 +101,7 @@ where
     <P1::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
     <P2::Cs as CoordinateSystem>::Family: SameAs<CartesianFamily>,
 {
-    type Out = P1::Scalar;
+    type Out = Measure<P1>;
     type Comparable = Self;
 
     #[inline]
@@ -146,19 +151,20 @@ const MAX_DIM: usize = 4;
 /// Dispatches on `P1::DIM` to the right `(0, N)` start of the recursion,
 /// then descends one dimension at a time via [`SumSquares`].
 #[inline]
-fn sum_squared_diffs<P1, P2>(a: &P1, b: &P2) -> P1::Scalar
+fn sum_squared_diffs<P1, P2>(a: &P1, b: &P2) -> Measure<P1>
 where
     P1: Point,
     P2: Point<Scalar = P1::Scalar>,
 {
+    let zero = <Measure<P1> as CoordinateScalar>::ZERO;
     // `P1::DIM` is a monomorphisation-time constant but cannot appear
     // in a const-generic position on stable Rust. Same shape as
     // `geometry_trait::fold_dims` — match to the right `(0, N)` start.
     match P1::DIM {
-        1 => <Walk<0, 1> as SumSquares<0, 1>>::step(P1::Scalar::ZERO, a, b),
-        2 => <Walk<0, 2> as SumSquares<0, 2>>::step(P1::Scalar::ZERO, a, b),
-        3 => <Walk<0, 3> as SumSquares<0, 3>>::step(P1::Scalar::ZERO, a, b),
-        4 => <Walk<0, 4> as SumSquares<0, 4>>::step(P1::Scalar::ZERO, a, b),
+        1 => <Walk<0, 1> as SumSquares<0, 1>>::step(zero, a, b),
+        2 => <Walk<0, 2> as SumSquares<0, 2>>::step(zero, a, b),
+        3 => <Walk<0, 3> as SumSquares<0, 3>>::step(zero, a, b),
+        4 => <Walk<0, 4> as SumSquares<0, 4>>::step(zero, a, b),
         _ => panic!("Pythagoras: P1::DIM exceeds MAX_DIM ({MAX_DIM})"),
     }
 }
@@ -174,7 +180,7 @@ struct Walk<const I: usize, const N: usize>;
 /// Mirrors `detail::compute_pythagoras<I, T>` from
 /// `strategies/cartesian/distance_pythagoras.hpp:44-66`.
 trait SumSquares<const I: usize, const N: usize>: sealed::Sealed<I, N> {
-    fn step<P1, P2>(acc: P1::Scalar, a: &P1, b: &P2) -> P1::Scalar
+    fn step<P1, P2>(acc: Measure<P1>, a: &P1, b: &P2) -> Measure<P1>
     where
         P1: Point,
         P2: Point<Scalar = P1::Scalar>;
@@ -190,7 +196,7 @@ mod sealed {
 impl<const N: usize> sealed::Sealed<N, N> for Walk<N, N> {}
 impl<const N: usize> SumSquares<N, N> for Walk<N, N> {
     #[inline]
-    fn step<P1, P2>(acc: P1::Scalar, _a: &P1, _b: &P2) -> P1::Scalar
+    fn step<P1, P2>(acc: Measure<P1>, _a: &P1, _b: &P2) -> Measure<P1>
     where
         P1: Point,
         P2: Point<Scalar = P1::Scalar>,
@@ -209,12 +215,12 @@ macro_rules! impl_sum_squares {
         impl sealed::Sealed<$i, $n> for Walk<$i, $n> {}
         impl SumSquares<$i, $n> for Walk<$i, $n> {
             #[inline]
-            fn step<P1, P2>(acc: P1::Scalar, a: &P1, b: &P2) -> P1::Scalar
+            fn step<P1, P2>(acc: Measure<P1>, a: &P1, b: &P2) -> Measure<P1>
             where
                 P1: Point,
                 P2: Point<Scalar = P1::Scalar>,
             {
-                let d = a.get::<$i>() - b.get::<$i>();
+                let d = a.get::<$i>().to_measure() - b.get::<$i>().to_measure();
                 let acc = acc + d * d;
                 <Walk<{ $i + 1 }, $n> as SumSquares<{ $i + 1 }, $n>>::step(acc, a, b)
             }

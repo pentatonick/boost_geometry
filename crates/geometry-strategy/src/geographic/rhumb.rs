@@ -16,7 +16,9 @@ use crate::azimuth::AzimuthStrategy;
 use crate::destination::DestinationStrategy;
 use crate::distance::DistanceStrategy;
 use crate::length::LengthStrategy;
-use crate::normalise::{HasAngularUnits, lonlat_radians};
+use crate::normalise::{
+    HasAngularUnits, longitude_distance_signed, lonlat_radians, normalized_longitude,
+};
 
 /// Coordinate-system families for which a loxodrome is defined.
 #[doc(hidden)]
@@ -108,7 +110,7 @@ where
         } else {
             angular_distance * bearing.sin() / q
         };
-        let longitude2 = normalize_longitude(longitude1 + delta_longitude);
+        let longitude2 = normalized_longitude(longitude1 + delta_longitude);
         Point2D::new(
             Units::<P>::from_radians(longitude2),
             Units::<P>::from_radians(latitude2),
@@ -146,8 +148,13 @@ where
     let (longitude1, latitude1) = lonlat_radians(first);
     let (longitude2, latitude2) = lonlat_radians(second);
     let delta_latitude = latitude2 - latitude1;
-    let delta_longitude = normalize_delta(longitude2 - longitude1);
-    let delta_psi = isometric_latitude(latitude2) - isometric_latitude(latitude1);
+    let delta_longitude = longitude_distance_signed(longitude1, longitude2);
+    let mut delta_psi = isometric_latitude(latitude2) - isometric_latitude(latitude1);
+    if delta_psi.is_nan() {
+        // Both points at one pole, where the isometric latitude is
+        // infinite: they coincide.
+        delta_psi = 0.0;
+    }
     let q = meridional_scale(delta_latitude, delta_psi, latitude1);
     let angular_distance = delta_latitude.hypot(q * delta_longitude);
     let azimuth = delta_longitude
@@ -156,7 +163,14 @@ where
     (angular_distance, azimuth)
 }
 
+/// `ψ = ln tan(π/4 + φ/2)`, infinite at either pole. `tan(π/2)` is finite
+/// in floating point, so the north pole is set rather than computed: left
+/// near 37 it bends a loxodrome to the pole off its meridian while the south
+/// pole, `ln tan 0`, reaches `−∞` exactly.
 fn isometric_latitude(latitude: f64) -> f64 {
+    if latitude.abs() >= core::f64::consts::FRAC_PI_2 {
+        return f64::INFINITY.copysign(latitude);
+    }
     (core::f64::consts::FRAC_PI_4 + latitude / 2.0).tan().ln()
 }
 
@@ -166,14 +180,6 @@ fn meridional_scale(delta_latitude: f64, delta_psi: f64, latitude: f64) -> f64 {
     } else {
         latitude.cos()
     }
-}
-
-fn normalize_delta(delta: f64) -> f64 {
-    (delta + core::f64::consts::PI).rem_euclid(core::f64::consts::TAU) - core::f64::consts::PI
-}
-
-fn normalize_longitude(longitude: f64) -> f64 {
-    normalize_delta(longitude)
 }
 
 fn reflect_latitude(latitude: f64) -> f64 {
@@ -236,5 +242,29 @@ mod tests {
         let (lon, lat) = (destination.get::<0>(), destination.get::<1>());
         assert!((lon - lon2).abs() < 1e-7, "lon {lon}");
         assert!((lat - 45.0).abs() < 1e-7, "lat {lat}");
+    }
+
+    /// A loxodrome to a pole runs along the meridian, at either pole: from
+    /// the equator across 180° of longitude it is `π/2` long on the unit
+    /// sphere and heads due north or due south. Two points at one pole
+    /// coincide.
+    #[test]
+    fn both_poles_are_reached_along_the_meridian() {
+        type P = Point2D<f64, Spherical<Degree>>;
+        let start = P::new(0.0, 0.0);
+        for (pole, bearing) in [(90.0, 0.0), (-90.0, core::f64::consts::PI)] {
+            let end = P::new(180.0, pole);
+            let distance = Rhumb::UNIT.distance(&start, &end);
+            assert!(
+                (distance - core::f64::consts::FRAC_PI_2).abs() < 1e-15,
+                "{pole}: {distance}"
+            );
+            let azimuth = Rhumb::UNIT.azimuth(&start, &end);
+            assert!((azimuth - bearing).abs() < 1e-15, "{pole}: {azimuth}");
+
+            let (first, second) = (P::new(5.0, pole), P::new(50.0, pole));
+            assert!(Rhumb::UNIT.distance(&first, &second) < 1e-15);
+            assert!(!Rhumb::UNIT.azimuth(&first, &second).is_nan());
+        }
     }
 }

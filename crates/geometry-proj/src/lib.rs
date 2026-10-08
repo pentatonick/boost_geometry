@@ -1,8 +1,9 @@
 //! Coordinate-reference-system reprojection for the geometry kernel.
 //!
-//! Boost.Geometry defers projections to its unsupported
-//! `extensions/gis/projections/`; this crate fills the gap with the
-//! pure-Rust [`proj4rs`] engine (no C dependency). Build a [`Crs`] from
+//! Boost.Geometry keeps its projections in `boost/geometry/srs/`
+//! (`srs::projection`, `srs::transformation`), outside its documented
+//! reference; this crate does not port them and uses the pure-Rust
+//! [`proj4rs`] engine (no C dependency) instead. Build a [`Crs`] from
 //! a proj4 string, an EPSG code, or a WKT definition, then
 //! [`reproject`](reproject()) a geometry from one CRS to another in
 //! place.
